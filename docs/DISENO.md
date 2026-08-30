@@ -1,6 +1,8 @@
 # Kernel agente-céntrico — Documento de diseño
 
-**Estado:** en discusión. Sin código todavía.
+**Estado:** Hito 1 en verde. Las dos arquitecturas arrancan por UEFI y hablan por el
+cordón umbilical. El diseño de los verbos sigue siendo especificación: `describe`,
+`mem.claim` y `exec` no existen todavía.
 **Última actualización:** 2026-08-30
 
 ---
@@ -115,23 +117,67 @@ mapeados en memoria. `describe` tiene que cubrir los dos modelos de descubrimien
 
 ---
 
-## 7. Preguntas abiertas
+## 7. Estado del código
 
-1. **Dónde vive el código.** Todavía sin definir. Repo aparte, no en empujoneducativo.
+**Cuidado al leer este documento:** las secciones 4 y 6 son *especificación*, no descripción.
+De los diez verbos de la sección 4 no hay ninguno implementado todavía.
+
+Lo que sí existe (Hito 1):
+
+| Pieza | Estado |
+|---|---|
+| Arranque UEFI en x86_64 y aarch64 | Andando. ~4 KB por kernel. |
+| Cordón umbilical (UART) — **solo salida** | 16550 por puertos de E/S en x86, PL011 por MMIO en ARM. No hay lectura del UART todavía. |
+| El trait `Platform` (la frontera de D23) | Tres miembros: `ARCH`, `uart_write_byte`, `park`. Eso es todo lo que cruza hoy. |
+| `scripts/check-frontera.sh` | Verifica D23 mecánicamente. En verde. |
+| Los diez verbos de la sección 4 | Ninguno. |
+
+Dos deudas concretas que bloquean el próximo paso:
+
+1. **`efi_main` descarta el puntero al System Table** (`_systab`), que es la raíz de UEFI y la
+   única vía para llegar al mapa de memoria y a ACPI / device tree. `describe` no puede
+   empezar sin plomería para eso.
+2. **Nadie llama a `ExitBootServices`** — la llamada con la que el kernel le dice al firmware
+   "gracias, me quedo yo con la máquina". Hoy no molesta porque `park()` enmascara
+   interrupciones antes de colgarse, pero el mapa de memoria hay que pedirlo *antes* de esa
+   llamada, así que el orden importa y hay que decidirlo al diseñar `describe`.
 
 ---
 
-## 8. Estado del entorno de desarrollo
+## 8. Preguntas abiertas
 
-Instalado y verificado en esta sesión:
+1. **Dónde se publica el código.** Hay repositorio git local desde el Hito 1 (rama `main`).
+   El alojamiento remoto sigue sin definir: repo aparte, no en empujoneducativo.
+2. **Qué del System Table cruza la frontera.** El mapa de memoria *normalizado* es portable;
+   cómo se obtiene (UEFI vs device tree vs ROM de arranque) no lo es. Se decide con `describe`.
 
-- Rust 1.94.1 con targets bare-metal: `x86_64-unknown-none`, `x86_64-unknown-uefi`,
-  `aarch64-unknown-none`, `aarch64-unknown-uefi`
-- QEMU 8.2.2: `qemu-system-x86_64` y `qemu-system-aarch64`
-- Firmware UEFI: OVMF para x86 (`/usr/share/OVMF/`) y AAVMF para ARM (`/usr/share/AAVMF/`)
-- `gdb`, `ld.lld`
+---
 
-Las dos arquitecturas se pueden bootear y probar acá mismo, sin hardware.
+## 9. Entorno de desarrollo
 
-Sin GPU ni passthrough en este contenedor: los dispositivos reales solo se podrán probar en
-hardware propio.
+Esta sección describe **requisitos**, no una máquina: el proyecto ya se mudó una vez y la lista
+de "lo que está instalado acá" se pudrió sola.
+
+| Necesario para | Qué | Cómo |
+|---|---|---|
+| Compilar ambas | Rust estable + targets `x86_64-unknown-uefi` y `aarch64-unknown-uefi` | `rustup` (no el Rust de Debian: hacen falta `rustup target add`). `rust-toolchain.toml` los declara. |
+| Enlazar | Nada externo: el `rust-lld` que viene con la toolchain alcanza. | — |
+| Correr x86_64 | `qemu-system-x86_64` + OVMF | `apt install qemu-system-x86 ovmf` |
+| Correr aarch64 | `qemu-system-aarch64` + AAVMF | `apt install qemu-system-arm qemu-efi-aarch64` |
+| Depurar ARM desde x86 | `gdb-multiarch` | `apt install gdb-multiarch` |
+
+Los scripts leen las rutas del firmware de las variables `OVMF_CODE`/`OVMF_VARS` y
+`AAVMF_CODE`/`AAVMF_VARS`, así que una distribución que las ubique en otro lado se acomoda sin
+tocar el código.
+
+### Sobre hardware real
+
+El desarrollo hasta acá es todo QEMU, y para los primeros verbos alcanza. Pero conviene tener
+presente qué se puede probar de verdad y qué no:
+
+- **NVIDIA está fuera de alcance** (firmware firmado desde Turing — ver `DESCARTADO.md`). Una
+  iGPU Intel o una AMD sí son terreno viable.
+- **D8 necesita un IOMMU real** (VT-d en Intel, AMD-Vi). QEMU puede emular uno, pero la
+  diferencia entre el emulado y el de silicio es exactamente donde viven los bugs interesantes.
+- Probar en la máquina de desarrollo significa **bootearla con el kernel**: pendrive UEFI y
+  reinicio, no un `cargo run`. No es casual, y conviene un equipo que no sea el de trabajo.
