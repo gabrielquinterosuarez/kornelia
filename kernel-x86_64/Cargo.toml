@@ -1,0 +1,11 @@
+[package]
+name = "kernel-x86_64"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+kernel-core = { path = "../kernel-core" }
+
+[[bin]]
+name = "kernel"
+path = "src/main.rs"

@@ -1,0 +1,6 @@
+# Artefactos de compilacion. Aca adentro tambien viven las imagenes ESP que
+# arman los scripts (target/esp-*) y las copias escribibles de las variables
+# UEFI (target/OVMF_VARS-*.fd, target/AAVMF_VARS-*.fd).
+/target/
+
+# Cargo.lock SI se versiona: esto produce binarios, no una biblioteca.

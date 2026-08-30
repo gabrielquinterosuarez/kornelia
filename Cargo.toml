@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = ["kernel-core", "kernel-x86_64", "kernel-aarch64"]
+
+[profile.release]
+panic = "abort"
+lto = true
+opt-level = "s"
