@@ -3,6 +3,7 @@
 //! Todo lo que una arquitectura debe proveer vive en este trait. El resto del
 //! kernel no sabe sobre qué silicio corre.
 
+use crate::memoria::Maquina;
 use core::fmt::{self, Write};
 
 pub trait Platform {
@@ -15,6 +16,14 @@ pub trait Platform {
 
     /// Detiene este núcleo para siempre, con el menor consumo posible.
     fn park(&mut self) -> !;
+
+    /// Lo que se averiguó de la máquina durante el arranque.
+    ///
+    /// Devuelve `'static` a propósito: el mapa se captura en la única ventana
+    /// que hay para preguntarle al firmware (D25), y desde ahí es un hecho fijo
+    /// de la máquina y no algo atado a esta llamada. El núcleo no sabe si vino
+    /// de UEFI, de un device tree o de una ROM de arranque (D24).
+    fn maquina(&self) -> Maquina;
 }
 
 /// Escritor de texto sobre el cordón umbilical.
@@ -37,6 +46,27 @@ impl<'a, P: Platform> Cordon<'a, P> {
 
     pub fn kv(&mut self, k: &str, v: &str) {
         let _ = write!(self, "{k}: {v}\r\n");
+    }
+
+    /// Un tamaño en la unidad binaria más grande que lo represente **exacto**.
+    ///
+    /// Nunca redondea: un "512 MiB" que en realidad eran 511,9 sería el kernel
+    /// mintiendo sobre la máquina, y todo el proyecto depende de que no lo haga
+    /// (P4). Si no entra exacto en MiB, sale en KiB.
+    pub fn tamano(&mut self, bytes: u64) {
+        const KI: u64 = 1024;
+        const MI: u64 = KI * KI;
+        const GI: u64 = MI * KI;
+
+        let _ = if bytes >= GI && bytes % GI == 0 {
+            write!(self, "{:>6} GiB", bytes / GI)
+        } else if bytes >= MI && bytes % MI == 0 {
+            write!(self, "{:>6} MiB", bytes / MI)
+        } else if bytes % KI == 0 {
+            write!(self, "{:>6} KiB", bytes / KI)
+        } else {
+            write!(self, "{bytes:>6} B  ")
+        };
     }
 }
 

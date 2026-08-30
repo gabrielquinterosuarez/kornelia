@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["kernel-core", "kernel-x86_64", "kernel-aarch64"]
+members = ["kernel-core", "boot-uefi", "kernel-x86_64", "kernel-aarch64"]
 
 [profile.release]
 panic = "abort"

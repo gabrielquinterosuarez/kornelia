@@ -7,9 +7,11 @@ mod uart;
 
 use core::ffi::c_void;
 use core::panic::PanicInfo;
-use kernel_core::Platform;
+use kernel_core::{Maquina, Platform};
 
-struct AArch64;
+struct AArch64 {
+    maquina: Maquina,
+}
 
 impl Platform for AArch64 {
     const ARCH: &'static str = "aarch64";
@@ -23,12 +25,20 @@ impl Platform for AArch64 {
             unsafe { core::arch::asm!("msr daifset, #0xf; wfi", options(nomem, nostack)) }
         }
     }
+
+    fn maquina(&self) -> Maquina {
+        self.maquina
+    }
 }
 
 /// Entrada que llama el firmware UEFI.
 #[no_mangle]
-pub extern "efiapi" fn efi_main(_image: *mut c_void, _systab: *mut c_void) -> usize {
-    kernel_core::main(&mut AArch64)
+pub extern "efiapi" fn efi_main(image: *mut c_void, systab: *mut c_void) -> usize {
+    // La única ventana para preguntarle al firmware, y se cierra sola (D25).
+    // Al volver de acá la máquina es nuestra y los Boot Services ya no existen.
+    let maquina = unsafe { boot_uefi::tomar_la_maquina(image, systab.cast()) };
+
+    kernel_core::main(&mut AArch64 { maquina })
 }
 
 #[panic_handler]

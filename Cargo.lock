@@ -3,9 +3,17 @@
 version = 4
 
 [[package]]
+name = "boot-uefi"
+version = "0.1.0"
+dependencies = [
+ "kernel-core",
+]
+
+[[package]]
 name = "kernel-aarch64"
 version = "0.1.0"
 dependencies = [
+ "boot-uefi",
  "kernel-core",
 ]
 
@@ -17,5 +25,6 @@ version = "0.1.0"
 name = "kernel-x86_64"
 version = "0.1.0"
 dependencies = [
+ "boot-uefi",
  "kernel-core",
 ]

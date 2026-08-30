@@ -124,25 +124,37 @@ mapeados en memoria. `describe` tiene que cubrir los dos modelos de descubrimien
 **Cuidado al leer este documento:** las secciones 4 y 6 son *especificación*, no descripción.
 De los diez verbos de la sección 4 no hay ninguno implementado todavía.
 
-Lo que sí existe (Hito 1):
+Lo que sí existe:
 
 | Pieza | Estado |
 |---|---|
-| Arranque UEFI en x86_64 y aarch64 | Andando. ~4 KB por kernel. |
+| Arranque UEFI en x86_64 y aarch64 | Andando. ~20 KB por kernel. |
 | Cordón umbilical (UART) — **solo salida** | 16550 por puertos de E/S en x86, PL011 por MMIO en ARM. No hay lectura del UART todavía. |
-| El trait `Platform` (la frontera de D23) | Tres miembros: `ARCH`, `uart_write_byte`, `park`. Eso es todo lo que cruza hoy. |
-| `scripts/check-frontera.sh` | Verifica D23 mecánicamente. En verde. |
-| Los diez verbos de la sección 4 | Ninguno. |
+| `ExitBootServices` (D25) | Andando. El kernel toma la máquina en el arranque, con reintento si el mapa se movió. |
+| **Mapa de memoria físico real** | Andando en las dos arquitecturas. Se captura de UEFI y se normaliza al vocabulario de `kernel-core` (D24). |
+| El trait `Platform` | Cuatro miembros: `ARCH`, `uart_write_byte`, `park`, `maquina`. |
+| `scripts/check-frontera.sh` | Verifica los dos ejes de D23/D24. En verde, y probado que falla cuando debe. |
+| Los diez verbos de la sección 4 | Ninguno todavía. El mapa se imprime como texto, no se sirve como `describe`. |
 
-Dos deudas concretas que bloquean el próximo paso:
+Verificado el 2026-08-30 contra dos fuentes independientes: el mapa que imprime el kernel en
+aarch64 coincide con el device tree que genera QEMU (`memory@40000000` → primera región en esa
+dirección; `pl031@9010000` → esa página reportada como MMIO), y el total de RAM libre coincide
+con lo que se le pidió a QEMU en las dos arquitecturas.
 
-1. **`efi_main` descarta el puntero al System Table** (`_systab`), que es la raíz de UEFI y la
-   única vía para llegar al mapa de memoria y a ACPI / device tree. `describe` no puede
-   empezar sin plomería para eso.
-2. **Nadie llama a `ExitBootServices`** — la llamada con la que el kernel le dice al firmware
-   "gracias, me quedo yo con la máquina". Hoy no molesta porque `park()` enmascara
-   interrupciones antes de colgarse, pero el mapa de memoria hay que pedirlo *antes* de esa
-   llamada, así que el orden importa y hay que decidirlo al diseñar `describe`.
+### Deudas anotadas
+
+1. **La pila del kernel está dentro de memoria marcada como libre.** UEFI clasifica la pila
+   que nos dio como `BootServicesData`, que tras `ExitBootServices` pasa a ser RAM libre — y
+   así se informa, porque es lo que la máquina dice (P4). Hoy es inofensivo porque el mapa solo
+   se imprime, pero **`mem.claim` no puede entregar esa región hasta que el kernel se mude a
+   una pila propia.** Es corrupción silenciosa si se olvida.
+2. **La dirección del PL011 sigue horneada** en `kernel-aarch64/src/uart.rs` (`0x0900_0000`, la
+   placa `virt` de QEMU). La fuente legítima es el device tree —o la tabla SPCR de ACPI—, que
+   todavía no leemos. Mientras siga así, el cordón umbilical solo funciona en esa placa.
+3. **La Configuration Table no se captura.** Es donde viven los punteros a ACPI y al device
+   tree. Sin eso no hay núcleos, ni PCIe, ni interrupciones: es lo próximo de `describe`.
+4. **Los atributos de cacheabilidad se descartan.** UEFI los informa por región y D12 los va a
+   necesitar para mapear MMIO no-cacheable. Se normalizan cuando haga falta.
 
 ---
 
