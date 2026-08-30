@@ -30,7 +30,7 @@ líneas. Escribí en español. Los comentarios del código van en español.
 
 ## Decisiones ya tomadas
 
-**23 decisiones (D1–D23) están cerradas en `docs/DISENO.md`, cada una con su
+**25 decisiones (D1–D25) están cerradas en `docs/DISENO.md`, cada una con su
 justificación. No las reabras sin motivo nuevo.** Las más importantes:
 
 - **D1** El agente es externo (cliente), no residente — pero la puerta a residente queda abierta.
@@ -44,6 +44,8 @@ justificación. No las reabras sin motivo nuevo.** Las más importantes:
 - **D15** El kernel es agnóstico sobre quién está del otro lado. Sin identidad ni autenticación.
 - **D20** Separación kernel / distribución: `kernel.efi` (cero drivers) y `blob.bin` (reemplazable).
 - **D22/D23** x86_64 **y** aarch64 en verde desde el primer commit; la frontera la verifica CI.
+- **D24** La frontera son **dos ejes**: arquitectura (`asm!`) y entorno de arranque (UEFI). El código UEFI va en `boot-uefi/`, compartido; los tipos normalizados en `kernel-core/`.
+- **D25** Al firmware se le pide todo (mapa de memoria, ACPI/DT, blob) **antes** de `ExitBootServices`, que se llama una sola vez. Después no hay segunda oportunidad, y solo el firmware sabe leer FAT32.
 
 ## Superficie del kernel
 
@@ -54,9 +56,11 @@ Esto es el kernel entero. No hay más verbos.
 
 ## Reglas de código
 
-1. **`kernel-core/` no puede contener código específico de arquitectura.** Nada de
-   `#[cfg(target_arch)]`, `core::arch` ni `asm!`. Todo pasa por el trait `Platform`.
-   `./scripts/check-frontera.sh` lo verifica y CI debe fallar si se rompe.
+1. **Ni `kernel-core/` ni `boot-uefi/` pueden contener código específico de
+   arquitectura.** Nada de `#[cfg(target_arch)]`, `core::arch` ni `asm!`. Todo pasa
+   por el trait `Platform`. `./scripts/check-frontera.sh` lo verifica y CI debe fallar
+   si se rompe. Además `kernel-core/` no puede nombrar a `boot-uefi` (D24: el núcleo
+   no sabe cómo arrancó).
 2. **Las dos arquitecturas arrancan siempre.** Un cambio que rompe una de las dos no
    se mergea. No es solo portabilidad: x86 tiene modelo de memoria fuerte y esconde
    barreras faltantes que ARM expone.
