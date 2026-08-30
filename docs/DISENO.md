@@ -172,12 +172,20 @@ tocar el código.
 
 ### Sobre hardware real
 
-El desarrollo hasta acá es todo QEMU, y para los primeros verbos alcanza. Pero conviene tener
-presente qué se puede probar de verdad y qué no:
+**Decidido: la máquina de desarrollo no se bootea.** Todo el trabajo va en QEMU. Cuando llegue
+el momento de probar en silicio, se hace en un equipo aparte, dedicado.
+
+El motivo es que bootear el kernel no es un `cargo run`: es pendrive UEFI y reinicio, con la
+máquina entera fuera de servicio mientras dura la prueba — y el kernel no tiene forma de
+devolverte el control salvo apagando. Convertir la máquina de trabajo en el banco de pruebas
+sería pagar ese costo en cada iteración.
+
+Para tener presente cuando llegue ese momento:
 
 - **NVIDIA está fuera de alcance** (firmware firmado desde Turing — ver `DESCARTADO.md`). Una
   iGPU Intel o una AMD sí son terreno viable.
 - **D8 necesita un IOMMU real** (VT-d en Intel, AMD-Vi). QEMU puede emular uno, pero la
   diferencia entre el emulado y el de silicio es exactamente donde viven los bugs interesantes.
-- Probar en la máquina de desarrollo significa **bootearla con el kernel**: pendrive UEFI y
-  reinicio, no un `cargo run`. No es casual, y conviene un equipo que no sea el de trabajo.
+- El equipo dedicado tiene que arrancar por **UEFI** (D18 y D20 dependen de que el firmware
+  cargue el blob) y conviene que tenga **salida serie accesible** — sin cordón umbilical no hay
+  forma de ver qué pasó.
