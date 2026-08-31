@@ -11,6 +11,7 @@
 #![cfg_attr(not(test), no_std)]
 
 pub mod cbor;
+pub mod fault;
 pub mod machine;
 pub mod memory;
 pub mod paging;
@@ -39,6 +40,11 @@ pub fn main<P: Platform>(p: &mut P) -> ! {
     // SAFETY: el firmware ya soltó la máquina (D25).
     let tablas = unsafe { p.install_page_tables(&machine) };
     reportar_tablas(p, tablas, &machine);
+
+    // SAFETY: los handlers son parte de la imagen del kernel, que las tablas de
+    // arriba acaban de mapear.
+    let handlers = unsafe { p.install_fault_handlers() };
+    probar_los_faults(p, handlers);
 
     {
         let mut u = Umbilical::new(p);
@@ -159,5 +165,54 @@ fn verificar_la_pila<P: Platform>(u: &mut Umbilical<'_, P>, m: &Machine) {
         // no existe. Cuando exista, esto sí lo es.
         let _ = write!(u, "pila: {base:#x} FUERA DE LA MEMORIA DEL KERNEL\r\n");
         u.line("  mem.claim podria entregar esta memoria. NO habilitarlo asi.");
+    }
+}
+
+/// Instala la captura de faults y **comprueba que funcione** (P5, D7).
+///
+/// No alcanza con instalar la tabla y darla por buena: si los stubs guardaran
+/// los registros corridos, o el marco no coincidiera con lo que espera el
+/// handler, el síntoma aparecería recién con el primer fault de verdad — que es
+/// exactamente el peor momento para descubrirlo, porque ahí ya no hay forma de
+/// ver nada.
+///
+/// Así que el arranque provoca un breakpoint a propósito y comprueba que haya
+/// vuelto con la causa correcta. Es el mismo criterio que con `CR3`: se relee
+/// en vez de suponer.
+fn probar_los_faults<P: Platform>(p: &mut P, r: Result<(), &'static str>) {
+    use core::fmt::Write;
+
+    if let Err(motivo) = r {
+        let mut u = Umbilical::new(p);
+        u.line("faults: NO SE PUDO INSTALAR LA CAPTURA");
+        u.kv("  motivo", motivo);
+        u.line("  cualquier error va a reiniciar la maquina en silencio.");
+        return;
+    }
+
+    // Si esto no vuelve, no vuelve nada: es la prueba.
+    p.trigger_breakpoint();
+
+    let capturado = p.last_fault();
+    let mut u = Umbilical::new(p);
+
+    match capturado {
+        Some(f) if f.cause == fault::Cause::Breakpoint => {
+            let _ = write!(
+                u,
+                "faults: capturados. autotest ok (breakpoint en {:#x}, {} registros)\r\n",
+                f.pc,
+                f.regs.len()
+            );
+        }
+        Some(f) => {
+            // Volvió de la excepción, pero mal traducida.
+            let _ = write!(u, "faults: el autotest devolvio '{}' en vez de breakpoint\r\n", f.cause.code());
+        }
+        None => {
+            // Volvió del breakpoint sin haber registrado nada: el handler corrió
+            // pero no dejó el dato donde tenía que dejarlo.
+            u.line("faults: el autotest no registro nada");
+        }
     }
 }

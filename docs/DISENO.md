@@ -139,6 +139,7 @@ Lo que sí existe:
 | **El protocolo CBOR** (D6) | Andando. Escrito a mano, sin dependencias; verificado contra los vectores canónicos del RFC 8949. |
 | **`describe`** | Andando: sirve `memory` y `tables`. Sin argumentos devuelve el índice, no un volcado (D16). |
 | **Tablas de páginas propias** (D12) | Andando en las dos. Identity map con páginas de 1 GiB; MMIO no cacheable. La raíz se relee del registro y se verifica contra el mapa. |
+| **Captura de faults** (P5, D7) | Andando en las dos. Causa + crudo + dirección + registros. Autotest de breakpoint en cada arranque. Todavía no viaja por CBOR ni vuelve al agente. |
 | Los otros nueve verbos | Ninguno todavía. |
 
 Verificado el 2026-08-30 contra dos fuentes independientes: el mapa que imprime el kernel en
@@ -177,11 +178,15 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
    región (`UC`, `WC`, `WT`, `WB`) que son más precisos que esa deducción. Mientras el grano del
    mapeo sea 1 GiB casi no cambia nada; cuando haya que mapear MMIO fino con `mem.claim`, sí.
 
-6. **No hay manejo de excepciones.** No hay IDT en x86 ni tabla de vectores en aarch64: hoy un
-   page fault escala a triple fault y la máquina se reinicia sin decir una palabra. **P5 —"los
-   faults son datos, no muerte"— es uno de los seis principios y no está implementado en
-   absoluto.** `exec` sin esto es inservible: el sentido de `exec` es que el agente suba código
-   que puede estar mal.
+6. **~~No hay manejo de excepciones.~~ RESUELTO (P5, D7).** IDT en x86_64, tabla de vectores en
+   aarch64. Un fault devuelve causa normalizada, el número crudo que usó la máquina, la
+   dirección tocada y los registros con **sus** nombres (D3). El arranque provoca un breakpoint
+   a propósito y comprueba que vuelva bien, en vez de suponerlo.
+
+   Lo que falta encima de esto: hoy un fault no recuperable se reporta y detiene el núcleo,
+   porque no hay a dónde volver. Cuando exista `exec`, el handler tiene que volver al bucle del
+   protocolo y devolverle el fault al agente como respuesta — que es el punto entero de P5. Y
+   los faults todavía no viajan por CBOR: salen en texto por el cordón.
 
 ---
 

@@ -6,6 +6,7 @@
 //! — un tamano mal redondeado se lee igual de bien que uno bien.
 
 use crate::cbor::{scan, Reader, Scan, Writer};
+use crate::fault::{report, Cause, Fault};
 use crate::machine::{Machine, Tables};
 use crate::memory::{Kind, Region};
 use crate::paging::{attr_of, span_gib, Attr, Mapping, GIB};
@@ -43,6 +44,18 @@ impl Platform for Fake {
 
     fn machine(&self) -> Machine {
         Machine::mute("plataforma de prueba")
+    }
+
+    const REGISTERS: &'static [&'static str] = &["r0", "r1"];
+
+    unsafe fn install_fault_handlers(&mut self) -> Result<(), &'static str> {
+        Err("la plataforma de prueba no tiene excepciones")
+    }
+
+    fn trigger_breakpoint(&mut self) {}
+
+    fn last_fault(&self) -> Option<Fault> {
+        None
     }
 
     unsafe fn install_page_tables(&mut self, _m: &Machine) -> Result<Mapping, &'static str> {
@@ -552,4 +565,101 @@ fn una_region_a_caballo_afecta_a_las_dos_paginas() {
     let m = con(&CABALLO);
     assert_eq!(attr_of(&m, 0), Attr::Device);
     assert_eq!(attr_of(&m, 1), Attr::Device);
+}
+
+// ---------------------------------------------------------------------------
+// Faults (P5, D7)
+// ---------------------------------------------------------------------------
+
+/// Un breakpoint es un alto pedido: se sigue en la instruccion de al lado.
+/// Cualquier otra cosa volveria a fallar en la misma instruccion, para siempre.
+#[test]
+fn solo_el_breakpoint_se_puede_retomar() {
+    assert!(Cause::Breakpoint.resumable());
+    for c in [
+        Cause::PageFault,
+        Cause::InvalidOpcode,
+        Cause::DivideByZero,
+        Cause::Protection,
+        Cause::Alignment,
+        Cause::Double,
+        Cause::InstructionFetch,
+        Cause::Unknown,
+    ] {
+        assert!(!c.resumable(), "{} no deberia poder retomarse", c.code());
+    }
+}
+
+#[test]
+fn cada_causa_tiene_su_codigo_y_no_se_repiten() {
+    let todas = [
+        Cause::Breakpoint,
+        Cause::DivideByZero,
+        Cause::InvalidOpcode,
+        Cause::PageFault,
+        Cause::InstructionFetch,
+        Cause::Alignment,
+        Cause::Protection,
+        Cause::Double,
+        Cause::Unknown,
+    ];
+    let mut vistos = std::collections::HashSet::new();
+    for c in todas {
+        assert!(!c.code().is_empty());
+        assert!(vistos.insert(c.code()), "codigo repetido: {}", c.code());
+    }
+}
+
+fn texto_del_fault(f: &Fault, nombres: &[&str]) -> String {
+    let mut s = String::new();
+    report(f, nombres, &mut s);
+    s
+}
+
+#[test]
+fn el_reporte_dice_causa_pc_y_registros() {
+    static VALORES: [u64; 2] = [0xdead, 0xbeef];
+    let f = Fault {
+        cause: Cause::PageFault,
+        raw: 14,
+        detail: 0x2,
+        pc: 0x1234,
+        address: Some(0xcafe),
+        regs: &VALORES,
+    };
+    let t = texto_del_fault(&f, &["uno", "dos"]);
+
+    assert!(t.contains("page-fault"), "{t}");
+    // El numero crudo viaja aunque la causa ya este traducida (P4).
+    assert!(t.contains("crudo 14"), "{t}");
+    assert!(t.contains("0x0000000000001234"), "{t}");
+    assert!(t.contains("0x000000000000cafe"), "{t}");
+    assert!(t.contains("uno=000000000000dead"), "{t}");
+    assert!(t.contains("dos=000000000000beef"), "{t}");
+}
+
+/// Sin dirección tocada no se inventa una: un `int3` no tiene ninguna, y poner
+/// un cero se leería como "toco la direccion cero".
+#[test]
+fn sin_direccion_no_se_informa_ninguna() {
+    let f = Fault { cause: Cause::Breakpoint, raw: 3, detail: 0, pc: 0x99, address: None, regs: &[] };
+    let t = texto_del_fault(&f, &[]);
+    assert!(t.contains("breakpoint"), "{t}");
+    assert!(!t.contains("direccion tocada"), "{t}");
+}
+
+/// El reporte lo arma quien tiene los nombres, y este modulo no conoce ninguno
+/// (D3). Si vinieran de más o de menos, no puede quedar leyendo fuera de rango.
+#[test]
+fn nombres_y_valores_descoordinados_no_desbordan() {
+    static TRES: [u64; 3] = [1, 2, 3];
+    let f = Fault { cause: Cause::Unknown, raw: 0, detail: 0, pc: 0, address: None, regs: &TRES };
+
+    // Más nombres que valores.
+    let t = texto_del_fault(&f, &["a", "b", "c", "d", "e"]);
+    assert!(t.contains("c=") && !t.contains("d="), "{t}");
+
+    // Y menos.
+    let t = texto_del_fault(&f, &["a"]);
+    assert!(t.contains("a=") && !t.contains("b="), "{t}");
 }

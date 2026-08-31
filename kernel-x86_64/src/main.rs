@@ -3,11 +3,13 @@
 #![no_std]
 #![no_main]
 
+mod idt;
 mod paging;
 mod uart;
 
 use core::ffi::c_void;
 use core::panic::PanicInfo;
+use kernel_core::fault::Fault;
 use kernel_core::machine::Machine;
 use kernel_core::paging::Mapping;
 use kernel_core::Platform;
@@ -39,6 +41,36 @@ impl Platform for X86_64 {
 
     unsafe fn install_page_tables(&mut self, m: &Machine) -> Result<Mapping, &'static str> {
         paging::install(m)
+    }
+
+    const REGISTERS: &'static [&'static str] = idt::REGISTROS;
+
+    unsafe fn install_fault_handlers(&mut self) -> Result<(), &'static str> {
+        idt::install()
+    }
+
+    fn trigger_breakpoint(&mut self) {
+        idt::breakpoint();
+    }
+
+    fn last_fault(&self) -> Option<Fault> {
+        idt::last()
+    }
+}
+
+/// Escritor sobre el UART pelado, sin pasar por `Platform`.
+///
+/// Lo usa el handler de excepciones: ahí no hay una `Platform` a mano, y
+/// tampoco conviene depender de una estructura que puede ser justo la que se
+/// rompió.
+pub struct Serie;
+
+impl core::fmt::Write for Serie {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        for b in s.as_bytes() {
+            uart::write_byte(*b);
+        }
+        Ok(())
     }
 }
 

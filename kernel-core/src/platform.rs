@@ -3,6 +3,7 @@
 //! Todo lo que una arquitectura debe proveer vive en este trait. El resto del
 //! kernel no sabe sobre qué silicio corre.
 
+use crate::fault::Fault;
 use crate::machine::Machine;
 use crate::paging::Mapping;
 use core::fmt::{self, Write};
@@ -45,6 +46,31 @@ pub trait Platform {
     /// traducción con el firmware todavía vivo le saca el piso a sus propias
     /// estructuras.
     unsafe fn install_page_tables(&mut self, m: &Machine) -> Result<Mapping, &'static str>;
+
+    /// Los nombres de los registros de esta máquina, en el mismo orden en que
+    /// vienen los valores de un `Fault`.
+    ///
+    /// El protocolo nunca lleva nombres de registros horneados (D3): x86_64
+    /// tiene RAX, aarch64 tiene X0–X30, RISC-V tiene x0–x31. La máquina informa
+    /// cuáles tiene (P4).
+    const REGISTERS: &'static [&'static str];
+
+    /// Instala la captura de excepciones (P5, D7).
+    ///
+    /// # Safety
+    ///
+    /// Los handlers tienen que estar mapeados y ejecutables.
+    unsafe fn install_fault_handlers(&mut self) -> Result<(), &'static str>;
+
+    /// Provoca un breakpoint a propósito.
+    ///
+    /// Existe para que el arranque pueda comprobar que la captura funciona en
+    /// vez de suponerlo. Un breakpoint es la única excepción pensada para que
+    /// se pueda seguir después.
+    fn trigger_breakpoint(&mut self);
+
+    /// El último fault capturado, si hubo alguno.
+    fn last_fault(&self) -> Option<Fault>;
 }
 
 /// Escritor de texto sobre el cordón umbilical.

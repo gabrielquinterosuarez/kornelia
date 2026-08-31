@@ -88,16 +88,17 @@ de commitear; CI corre exactamente ese script.
 
 1. `mem.claim`, `mem.read`, `mem.write` y `release`: reclamar memoria física y
    subirle bytes. Ya no hay nada del kernel viviendo en memoria reclamable.
-2. Parsear las tablas de ACPI que ya sabemos encontrar, para que `describe`
+2. `exec`, y con él cerrar P5: hoy los faults se capturan y se reportan en
+   texto, pero un fault no recuperable detiene el núcleo porque no hay a dónde
+   volver. Con `exec` el handler tiene que volver al bucle del protocolo y
+   devolverle el fault al agente por CBOR.
+3. Parsear las tablas de ACPI que ya sabemos encontrar, para que `describe`
    devuelva núcleos, PCIe y el controlador de interrupciones.
-3. `exec` y la captura de faults como datos (D7/D11). **Ese es el hito que
-   importa**: ahí el agente escribe código máquina, lo corre, y recibe el fault
-   como valor de retorno en vez de un SIGSEGV.
 
-Deudas anotadas en `docs/DISENO.md` §7. Las dos que bloqueaban `mem.claim` ya
-están cerradas: el kernel corre sobre **pila propia** y **tablas de páginas
-propias**, las dos en memoria `Kind::Kernel`, y las dos verificadas contra el
-mapa real en cada arranque.
+Deudas anotadas en `docs/DISENO.md` §7. Las que bloqueaban `mem.claim` ya están
+cerradas: el kernel corre sobre **pila propia** y **tablas de páginas propias**,
+las dos verificadas contra el mapa real en cada arranque, y **captura los
+faults** en vez de reiniciarse en silencio.
 
 ## Cómo correrlo
 
