@@ -7,10 +7,10 @@ mod uart;
 
 use core::ffi::c_void;
 use core::panic::PanicInfo;
-use kernel_core::{Maquina, Platform};
+use kernel_core::{Machine, Platform};
 
 struct X86_64 {
-    maquina: Maquina,
+    machine: Machine,
 }
 
 impl Platform for X86_64 {
@@ -26,8 +26,8 @@ impl Platform for X86_64 {
         }
     }
 
-    fn maquina(&self) -> Maquina {
-        self.maquina
+    fn machine(&self) -> Machine {
+        self.machine
     }
 }
 
@@ -39,9 +39,9 @@ pub extern "efiapi" fn efi_main(image: *mut c_void, systab: *mut c_void) -> usiz
 
     // La única ventana para preguntarle al firmware, y se cierra sola (D25).
     // Al volver de acá la máquina es nuestra y los Boot Services ya no existen.
-    let maquina = unsafe { boot_uefi::tomar_la_maquina(image, systab.cast()) };
+    let machine = unsafe { boot_uefi::take_machine(image, systab.cast()) };
 
-    kernel_core::main(&mut X86_64 { maquina })
+    kernel_core::main(&mut X86_64 { machine })
 }
 
 #[panic_handler]

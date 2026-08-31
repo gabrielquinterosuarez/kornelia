@@ -68,6 +68,10 @@ Esto es el kernel entero. No hay más verbos.
    tiene X0–X30, RISC-V tiene x0–x31. La máquina informa qué tiene (P4).
 4. **Salida del UART en ASCII puro.** Manda bytes, no texto: los acentos salen rotos.
 5. Sin dependencias externas salvo que haya una razón fuerte. El kernel es `no_std`.
+6. **El código va en inglés; el español es solo para humanos.** Nombres de
+   archivos, tipos, campos, funciones, constantes y variables: inglés. Comentarios
+   y documentación: español. Los textos que salen por el UART también en español,
+   porque son para leer en una terminal — pero en ASCII puro (regla 4).
 
 ## Estado actual
 

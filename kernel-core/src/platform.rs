@@ -3,7 +3,7 @@
 //! Todo lo que una arquitectura debe proveer vive en este trait. El resto del
 //! kernel no sabe sobre qué silicio corre.
 
-use crate::memoria::Maquina;
+use crate::memory::Machine;
 use core::fmt::{self, Write};
 
 pub trait Platform {
@@ -23,18 +23,18 @@ pub trait Platform {
     /// que hay para preguntarle al firmware (D25), y desde ahí es un hecho fijo
     /// de la máquina y no algo atado a esta llamada. El núcleo no sabe si vino
     /// de UEFI, de un device tree o de una ROM de arranque (D24).
-    fn maquina(&self) -> Maquina;
+    fn machine(&self) -> Machine;
 }
 
 /// Escritor de texto sobre el cordón umbilical.
 ///
 /// Es la única concesión a la legibilidad humana en todo el kernel, y existe
 /// solo para el arranque y la depuración: el canal del agente es CBOR binario.
-pub struct Cordon<'a, P: Platform> {
+pub struct Umbilical<'a, P: Platform> {
     p: &'a mut P,
 }
 
-impl<'a, P: Platform> Cordon<'a, P> {
+impl<'a, P: Platform> Umbilical<'a, P> {
     pub fn new(p: &'a mut P) -> Self {
         Self { p }
     }
@@ -53,7 +53,7 @@ impl<'a, P: Platform> Cordon<'a, P> {
     /// Nunca redondea: un "512 MiB" que en realidad eran 511,9 sería el kernel
     /// mintiendo sobre la máquina, y todo el proyecto depende de que no lo haga
     /// (P4). Si no entra exacto en MiB, sale en KiB.
-    pub fn tamano(&mut self, bytes: u64) {
+    pub fn size(&mut self, bytes: u64) {
         const KI: u64 = 1024;
         const MI: u64 = KI * KI;
         const GI: u64 = MI * KI;
@@ -70,7 +70,7 @@ impl<'a, P: Platform> Cordon<'a, P> {
     }
 }
 
-impl<'a, P: Platform> Write for Cordon<'a, P> {
+impl<'a, P: Platform> Write for Umbilical<'a, P> {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         for b in s.as_bytes() {
             self.p.uart_write_byte(*b);
