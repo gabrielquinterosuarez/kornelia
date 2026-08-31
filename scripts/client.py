@@ -13,6 +13,7 @@ bien" cuando quiza los dos esten mal de la misma manera.
     ./scripts/client.py --what memory            # el mapa de memoria
     ./scripts/client.py --what tables --raw      # mostrando los bytes crudos
     ./scripts/client.py --arch aarch64
+    ./scripts/client.py --memoria                # el lazo: claim, write, read, release
 """
 
 import argparse
@@ -180,6 +181,72 @@ def mostrar(carga):
         print(f"\n  {clave}: {valor}")
 
 
+def prueba_de_memoria(proc, timeout):
+    """El lazo completo: reclamar, escribir, leer de vuelta, soltar.
+
+    Es la primera vez que el agente no solo mira la maquina sino que la usa.
+    """
+    fallas = []
+
+    def pedir_verbo(n, verbo, args):
+        resp, _ = pedir(proc, [n, verbo, args], timeout)
+        _, ok, carga = resp
+        print(f"  {verbo:<10} {'ok ' if ok else 'ERROR'} {carga}")
+        return ok, carga
+
+    # 1. Reclamar 4 KiB alineados a 4 KiB.
+    ok, c = pedir_verbo(1, "mem.claim", {"bytes": 4096, "align": 4096})
+    if not ok:
+        return 1
+    h, start = c["handle"], c["start"]
+    if start % 4096 != 0:
+        fallas.append(f"no respeto la alineacion: {start:#x}")
+    if c["kind"] != "free":
+        fallas.append(f"entrego memoria que no es libre: {c['kind']}")
+
+    # 2. Escribir un patron reconocible.
+    patron = bytes([0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x11, 0x22, 0x33])
+    ok, w = pedir_verbo(2, "mem.write", {"handle": h, "off": 16, "bytes": patron})
+    if not ok or w.get("written") != len(patron):
+        fallas.append("la escritura no informo lo que se escribio")
+
+    # 3. Leerlo de vuelta del mismo lugar.
+    ok, rd = pedir_verbo(3, "mem.read", {"handle": h, "off": 16, "len": len(patron)})
+    if not ok or rd.get("bytes") != patron:
+        fallas.append(f"lo leido no es lo escrito: {rd}")
+
+    # 4. Fuera del reclamo tiene que fallar, no leer memoria ajena.
+    ok, e = pedir_verbo(4, "mem.read", {"handle": h, "off": 4090, "len": 16})
+    if ok or e.get("error") != "out-of-bounds":
+        fallas.append("dejo leer fuera del reclamo")
+
+    # 5. La memoria del kernel no se entrega.
+    ok, e = pedir_verbo(5, "mem.claim", {"at": start, "bytes": 4096})
+    if ok or e.get("error") != "already-claimed":
+        fallas.append("dejo reclamar dos veces lo mismo")
+
+    # 6. Lo reclamado se ve en describe (D14).
+    ok, d = pedir_verbo(6, "describe", {"what": ["claims"]})
+    if not ok or not any(x["handle"] == h for x in d.get("claims", [])):
+        fallas.append("el reclamo no aparece en describe")
+
+    # 7. Soltarlo, y que deje de existir.
+    ok, _ = pedir_verbo(7, "release", {"handle": h})
+    if not ok:
+        fallas.append("no se pudo soltar")
+    ok, e = pedir_verbo(8, "mem.read", {"handle": h, "len": 4})
+    if ok or e.get("error") != "no-such-handle":
+        fallas.append("el handle sigue vivo despues de soltarlo")
+
+    print()
+    if fallas:
+        for f in fallas:
+            print(f"  FALLA: {f}")
+        return 1
+    print("  lazo de memoria completo: ok")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -187,6 +254,8 @@ def main():
     ap.add_argument("--what", help="secciones separadas por coma; sin esto pide el indice")
     ap.add_argument("--raw", action="store_true", help="mostrar los bytes que viajan")
     ap.add_argument("--timeout", type=float, default=90.0)
+    ap.add_argument("--memoria", action="store_true",
+                    help="prueba el lazo completo: claim, write, read, release")
     args = ap.parse_args()
 
     guion = os.path.join(RAIZ, "scripts", f"run-{args.arch}.sh")
@@ -218,6 +287,12 @@ def main():
             print(f"  ERROR: {carga}")
             return 1
         mostrar(carga)
+
+        # El lazo de memoria va en el mismo arranque: cada booteo de QEMU son
+        # quince segundos, y el porton hace esto por arquitectura.
+        if args.memoria:
+            print()
+            return prueba_de_memoria(proc, args.timeout)
         return 0
     finally:
         proc.kill()

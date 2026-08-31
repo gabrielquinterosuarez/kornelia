@@ -48,7 +48,7 @@ elif ! command -v python3 >/dev/null; then
 else
     for arq in x86_64 aarch64; do
         paso "arranca $arq y contesta el protocolo"
-        salida=$(timeout 240 ./scripts/client.py --arch "$arq" --what memory,tables 2>&1 || true)
+        salida=$(timeout 240 ./scripts/client.py --arch "$arq" --what memory,tables --memoria 2>&1 || true)
 
         # Lo que tiene que haber dicho en el banner de texto.
         for esperado in "arquitectura: $arq" "memoria:" "tablas:" \
@@ -60,6 +60,13 @@ else
         # Y lo que tiene que haber contestado por el protocolo.
         grep -qFe "ok=True" <<<"$salida" || mal "$arq no contesto ok por el protocolo"
         grep -qFe "tables:" <<<"$salida" || mal "$arq no devolvio la seccion tables"
+
+        # Y que el lazo de memoria completo haya cerrado: reclamar, escribir,
+        # leer de vuelta lo mismo, y todos los caminos de error.
+        if ! grep -qFe "lazo de memoria completo: ok" <<<"$salida"; then
+            mal "$arq no cerro el lazo de memoria"
+            printf '%s\n' "$salida" | grep -E "FALLA:|mem\." | head -10
+        fi
 
         n=$(grep -cE '^ +0x[0-9a-f]{16} ' <<<"$salida" || true)
         if [ "$n" -lt 5 ]; then

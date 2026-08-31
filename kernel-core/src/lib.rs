@@ -11,6 +11,7 @@
 #![cfg_attr(not(test), no_std)]
 
 pub mod cbor;
+pub mod claims;
 pub mod fault;
 pub mod machine;
 pub mod memory;

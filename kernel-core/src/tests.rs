@@ -663,3 +663,192 @@ fn nombres_y_valores_descoordinados_no_desbordan() {
     let t = texto_del_fault(&f, &["a"]);
     assert!(t.contains("a=") && !t.contains("b="), "{t}");
 }
+
+// ---------------------------------------------------------------------------
+// Reclamos (D14)
+// ---------------------------------------------------------------------------
+
+use crate::claims::{self, Error, Request};
+
+/// La tabla de reclamos es un estatico compartido, y los tests corren en
+/// paralelo. Sin serializarlos se pisarian entre ellos y fallarian por turnos.
+static CANDADO: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn con_tabla_limpia<T>(f: impl FnOnce() -> T) -> T {
+    let _g = CANDADO.lock().unwrap_or_else(|e| e.into_inner());
+    claims::reset();
+    f()
+}
+
+/// 0x0000-0x1000 kernel, 0x1000-0x5000 libre, 0x5000-0x6000 mmio.
+static MAQ: [Region; 3] = [
+    Region { start: 0x0000, bytes: 0x1000, kind: Kind::Kernel },
+    Region { start: 0x1000, bytes: 0x4000, kind: Kind::Free },
+    Region { start: 0x5000, bytes: 0x1000, kind: Kind::Mmio },
+];
+
+fn maq() -> Machine {
+    Machine { regions: &MAQ, tables: Tables::default(), failure: None }
+}
+
+fn pedir(bytes: u64) -> Request {
+    Request { bytes, ..Default::default() }
+}
+
+#[test]
+fn solo_se_reparte_memoria_libre() {
+    con_tabla_limpia(|| {
+        let c = claims::claim(&maq(), pedir(0x100)).unwrap();
+        assert_eq!(c.kind, Kind::Free);
+        // No salio de la region del kernel, que empieza en 0.
+        assert!(c.start >= 0x1000, "{:#x}", c.start);
+        assert!(c.end() <= 0x5000);
+    });
+}
+
+#[test]
+fn dos_reclamos_no_se_pisan() {
+    con_tabla_limpia(|| {
+        let m = maq();
+        let a = claims::claim(&m, pedir(0x1000)).unwrap();
+        let b = claims::claim(&m, pedir(0x1000)).unwrap();
+        assert!(
+            a.end() <= b.start || b.end() <= a.start,
+            "se pisan: {:#x}..{:#x} y {:#x}..{:#x}",
+            a.start, a.end(), b.start, b.end()
+        );
+    });
+}
+
+#[test]
+fn se_respeta_la_alineacion() {
+    con_tabla_limpia(|| {
+        let m = maq();
+        // Primero algo chico para desalinear el hueco siguiente.
+        claims::claim(&m, pedir(1)).unwrap();
+        let c = claims::claim(&m, Request { bytes: 0x100, align: 0x1000, ..Default::default() })
+            .unwrap();
+        assert_eq!(c.start % 0x1000, 0, "{:#x}", c.start);
+    });
+}
+
+#[test]
+fn una_alineacion_que_no_es_potencia_de_dos_se_rechaza() {
+    con_tabla_limpia(|| {
+        let r = Request { bytes: 16, align: 3, ..Default::default() };
+        assert_eq!(claims::claim(&maq(), r), Err(Error::BadAlign));
+    });
+}
+
+/// Existe porque hay dispositivos que solo hacen DMA por debajo de los 4 GiB.
+#[test]
+fn se_respeta_el_tope() {
+    con_tabla_limpia(|| {
+        let r = Request { bytes: 0x100, below: Some(0x2000), ..Default::default() };
+        let c = claims::claim(&maq(), r).unwrap();
+        assert!(c.end() <= 0x2000, "{:#x}", c.end());
+
+        // Y si no entra debajo del tope, se dice que no hay lugar.
+        let r = Request { bytes: 0x100, below: Some(0x1000), ..Default::default() };
+        assert_eq!(claims::claim(&maq(), r), Err(Error::NoRoom));
+    });
+}
+
+#[test]
+fn no_se_entrega_lo_que_no_entra() {
+    con_tabla_limpia(|| {
+        assert_eq!(claims::claim(&maq(), pedir(0x100000)), Err(Error::NoRoom));
+        assert_eq!(claims::claim(&maq(), pedir(0)), Err(Error::Empty));
+    });
+}
+
+/// El MMIO se reclama por direccion exacta: el BAR de un dispositivo esta donde
+/// esta, no donde haya lugar.
+#[test]
+fn el_mmio_se_reclama_por_direccion_exacta() {
+    con_tabla_limpia(|| {
+        let r = Request { bytes: 0x1000, at: Some(0x5000), ..Default::default() };
+        let c = claims::claim(&maq(), r).unwrap();
+        assert_eq!(c.start, 0x5000);
+        assert_eq!(c.kind, Kind::Mmio);
+    });
+}
+
+/// Entregar la memoria donde vive la pila del kernel no seria libertad, seria
+/// incoherencia: el kernel es lo que esta prestando el servicio.
+#[test]
+fn la_memoria_del_kernel_no_se_entrega() {
+    con_tabla_limpia(|| {
+        let r = Request { bytes: 0x100, at: Some(0x0), ..Default::default() };
+        assert_eq!(claims::claim(&maq(), r), Err(Error::IsKernel));
+    });
+}
+
+#[test]
+fn no_se_entrega_lo_que_la_maquina_no_informo() {
+    con_tabla_limpia(|| {
+        let r = Request { bytes: 0x100, at: Some(0x99000), ..Default::default() };
+        assert_eq!(claims::claim(&maq(), r), Err(Error::Unmapped));
+
+        // Ni un rango que empieza bien y se sale de la region.
+        let r = Request { bytes: 0x2000, at: Some(0x5000), ..Default::default() };
+        assert_eq!(claims::claim(&maq(), r), Err(Error::Unmapped));
+    });
+}
+
+#[test]
+fn lo_ya_reclamado_no_se_reclama_de_nuevo() {
+    con_tabla_limpia(|| {
+        let m = maq();
+        let c = claims::claim(&m, pedir(0x100)).unwrap();
+        let r = Request { bytes: 0x10, at: Some(c.start), ..Default::default() };
+        assert_eq!(claims::claim(&m, r), Err(Error::Taken));
+    });
+}
+
+/// Un handle liberado no se reusa: si se reusara, un pedido que llega tarde con
+/// un handle viejo tocaria lo que otro reclamo despues en el mismo lugar.
+#[test]
+fn los_handles_no_se_reusan() {
+    con_tabla_limpia(|| {
+        let m = maq();
+        let a = claims::claim(&m, pedir(0x100)).unwrap();
+        assert!(claims::release(a.handle));
+        let b = claims::claim(&m, pedir(0x100)).unwrap();
+        assert_ne!(a.handle, b.handle);
+        // Y el viejo ya no existe.
+        assert!(claims::get(a.handle).is_none());
+        assert!(!claims::release(a.handle));
+    });
+}
+
+#[test]
+fn no_se_puede_leer_fuera_del_reclamo() {
+    con_tabla_limpia(|| {
+        let c = claims::claim(&maq(), pedir(0x100)).unwrap();
+        assert_eq!(claims::range_of(c.handle, 0, 0x100), Ok(c.start));
+        assert_eq!(claims::range_of(c.handle, 0xFF, 2), Err(Error::OutOfBounds));
+        assert_eq!(claims::range_of(c.handle, 0, 0x101), Err(Error::OutOfBounds));
+        // Ni con un desplazamiento que desborda al sumar.
+        assert_eq!(claims::range_of(c.handle, u64::MAX, 2), Err(Error::OutOfBounds));
+        assert_eq!(claims::range_of(9999, 0, 1), Err(Error::NoSuchHandle));
+    });
+}
+
+/// D14: el estado de la maquina no es una sesion. Lo reclamado se puede listar,
+/// que es como el agente lo recupera al reconectar.
+#[test]
+fn lo_reclamado_se_puede_listar() {
+    con_tabla_limpia(|| {
+        let m = maq();
+        let a = claims::claim(&m, pedir(0x100)).unwrap();
+        let b = claims::claim(&m, pedir(0x100)).unwrap();
+        assert_eq!(claims::count(), 2);
+
+        let handles: Vec<u64> = claims::all().map(|c| c.handle).collect();
+        assert!(handles.contains(&a.handle) && handles.contains(&b.handle));
+
+        claims::release(a.handle);
+        assert_eq!(claims::count(), 1);
+    });
+}

@@ -77,8 +77,13 @@ Esto es el kernel entero. No hay más verbos.
 ## Estado actual
 
 Arranca por UEFI en x86_64 y aarch64, le toma la máquina al firmware y **habla
-CBOR** por el cordón umbilical. `describe` sirve el mapa de memoria físico real y
-dónde están ACPI / device tree / SMBIOS. Los otros nueve verbos no existen.
+CBOR** por el cordón umbilical. Corre sobre pila y tablas de páginas propias, y
+captura los faults en vez de reiniciarse.
+
+**Cinco de los diez verbos andan:** `describe`, `mem.claim`, `mem.read`,
+`mem.write` y `release`. El agente ya puede reclamar memoria física, escribirle
+y leerla de vuelta. Faltan `core.claim`, `exec`, `irq.install`,
+`irq.install_raw` y `dma.allow`.
 
 El portón es `./scripts/check.sh`: frontera + 26 tests + compila las dos + las
 bootea en QEMU y les habla el protocolo con `scripts/client.py`. Corrélo antes
@@ -86,14 +91,14 @@ de commitear; CI corre exactamente ese script.
 
 ## Lo que sigue
 
-1. `mem.claim`, `mem.read`, `mem.write` y `release`: reclamar memoria física y
-   subirle bytes. Ya no hay nada del kernel viviendo en memoria reclamable.
-2. `exec`, y con él cerrar P5: hoy los faults se capturan y se reportan en
-   texto, pero un fault no recuperable detiene el núcleo porque no hay a dónde
-   volver. Con `exec` el handler tiene que volver al bucle del protocolo y
-   devolverle el fault al agente por CBOR.
-3. Parsear las tablas de ACPI que ya sabemos encontrar, para que `describe`
+1. **`exec`, y con él cerrar P5.** Es el hito que decide el experimento: el
+   agente sube código máquina, lo corre, y el fault vuelve como valor de retorno
+   en vez de matar nada. Los cimientos están: se puede subir código con
+   `mem.write` y los faults ya se capturan. Falta que el handler vuelva al bucle
+   del protocolo en vez de detener el núcleo, y que el fault viaje por CBOR.
+2. Parsear las tablas de ACPI que ya sabemos encontrar, para que `describe`
    devuelva núcleos, PCIe y el controlador de interrupciones.
+3. `core.claim`, `irq.install` y `dma.allow`.
 
 Deudas anotadas en `docs/DISENO.md` §7. Las que bloqueaban `mem.claim` ya están
 cerradas: el kernel corre sobre **pila propia** y **tablas de páginas propias**,

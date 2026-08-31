@@ -32,16 +32,23 @@
 //! el kernel mintiendo por omision.
 
 use crate::cbor::{self, Reader, Scan, Writer};
+use crate::claims;
 use crate::machine::Machine;
 use crate::memory::Kind;
 use crate::platform::Platform;
 use crate::tables;
 
-/// Lo mas grande que puede ser un pedido.
-const MAX_REQUEST: usize = 8 * 1024;
+/// Lo mas grande que puede ser un pedido. Lo llena `mem.write` subiendo bytes;
+/// para algo mas grande se sube por partes, que es justo para lo que existe el
+/// `off` de `mem.write`.
+const MAX_REQUEST: usize = 64 * 1024;
 /// Lo mas grande que puede ser una respuesta. El mapa de memoria de una maquina
 /// real con cientos de regiones entra con lugar de sobra.
 const MAX_RESPONSE: usize = 64 * 1024;
+
+/// Tope de una lectura, para que la respuesta entre siempre con lugar de sobra
+/// para el envoltorio.
+const MAX_LECTURA: u64 = 32 * 1024;
 
 static mut INBOX: [u8; MAX_REQUEST] = [0; MAX_REQUEST];
 static mut OUTBOX: [u8; MAX_RESPONSE] = [0; MAX_RESPONSE];
@@ -113,6 +120,10 @@ fn atender<P: Platform>(p: &mut P, req: &[u8], m: &Machine) {
 
     match verbo {
         "describe" => describe(p, id, &mut r, m),
+        "mem.claim" => mem_claim(p, id, &mut r, m),
+        "mem.read" => mem_read(p, id, &mut r),
+        "mem.write" => mem_write(p, id, &mut r),
+        "release" => release(p, id, &mut r),
         _ => responder_error(p, id, "unknown verb"),
     }
 }
@@ -126,6 +137,9 @@ fn atender<P: Platform>(p: &mut P, req: &[u8], m: &Machine) {
 struct Pedido {
     memory: bool,
     tables: bool,
+    /// Lo que el agente tiene reclamado. Es como recupera su estado al
+    /// reconectar (D14).
+    claims: bool,
     /// Si no vino la clave `what`, se devuelve el indice (D16).
     indice: bool,
 }
@@ -156,6 +170,7 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine) {
                 match r.text() {
                     Some("memory") => q.memory = true,
                     Some("tables") => q.tables = true,
+                    Some("claims") => q.claims = true,
                     // Contestar solo con lo que se reconocio, callado, seria
                     // mentir por omision.
                     Some(_) => return responder_error(p, id, "unknown section in what"),
@@ -182,6 +197,9 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine) {
         if q.tables {
             secciones += 1;
         }
+        if q.claims {
+            secciones += 1;
+        }
         w.map(secciones);
         if q.memory {
             w.text("memory");
@@ -190,6 +208,13 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine) {
         if q.tables {
             w.text("tables");
             escribir_tablas(&mut w, m);
+        }
+        if q.claims {
+            w.text("claims");
+            w.array(claims::count());
+            for c in claims::all() {
+                escribir_claim(&mut w, &c);
+            }
         }
     }
 
@@ -203,15 +228,16 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine) {
 
 /// El indice: que hay para pedir, y cuanto de cada cosa.
 fn escribir_indice(w: &mut Writer<'_>, m: &Machine, arch: &str) {
-    w.map(4);
+    w.map(5);
 
     w.text("arch");
     w.text(arch);
 
     w.text("sections");
-    w.array(2);
+    w.array(3);
     w.text("memory");
     w.text("tables");
+    w.text("claims");
 
     w.text("memory");
     w.map(2);
@@ -228,6 +254,10 @@ fn escribir_indice(w: &mut Writer<'_>, m: &Machine, arch: &str) {
     w.bool(m.tables.device_tree.is_some());
     w.text("smbios");
     w.bool(m.tables.smbios.is_some());
+
+    // D14: al reconectar, el agente recupera aca lo que tenia reclamado.
+    w.text("claims");
+    w.uint(claims::count() as u64);
 }
 
 /// El mapa de memoria: un arreglo de `[inicio, bytes, clase]`.
@@ -363,3 +393,202 @@ fn emitir<P: Platform>(p: &mut P, bytes: &[u8]) {
 /// Cuanto ocupa el encabezado de un valor. Reexportado para que quien arme una
 /// respuesta grande pueda estimar antes de escribirla.
 pub use cbor::head_len;
+
+// ---------------------------------------------------------------------------
+// Los verbos de memoria
+// ---------------------------------------------------------------------------
+
+/// Lee los argumentos de un pedido de memoria.
+///
+/// Todo lo que no se reconoce se saltea: agregar una clave nueva no tiene por
+/// que romper a un kernel viejo.
+struct Args<'a> {
+    bytes: Option<u64>,
+    at: Option<u64>,
+    align: Option<u64>,
+    below: Option<u64>,
+    handle: Option<u64>,
+    off: Option<u64>,
+    len: Option<u64>,
+    /// Prestados del buffer de entrada, no copiados: subir codigo maquina no
+    /// puede costar una copia mas. La vida util los ata al pedido, asi que se
+    /// dejan de poder usar cuando llega el siguiente — que es exactamente
+    /// cuando se pisan.
+    datos: Option<&'a [u8]>,
+}
+
+fn leer_args<'a>(r: &mut Reader<'a>) -> Option<Args<'a>> {
+    let mut a = Args {
+        bytes: None,
+        at: None,
+        align: None,
+        below: None,
+        handle: None,
+        off: None,
+        len: None,
+        datos: None,
+    };
+
+    let Some(pares) = r.map() else { return Some(a) };
+    for _ in 0..pares {
+        let clave = r.text()?;
+        match clave {
+            "bytes" => {
+                // En `mem.write` la clave `bytes` trae los datos; en el resto,
+                // un tamano. Se distinguen por el tipo, que CBOR ya lleva.
+                if let Some(d) = r.bytes() {
+                    a.datos = Some(d);
+                } else {
+                    a.bytes = Some(r.uint()?);
+                }
+            }
+            "at" => a.at = Some(r.uint()?),
+            "align" => a.align = Some(r.uint()?),
+            "below" => a.below = Some(r.uint()?),
+            "handle" => a.handle = Some(r.uint()?),
+            "off" => a.off = Some(r.uint()?),
+            "len" => a.len = Some(r.uint()?),
+            _ => r.skip()?,
+        }
+    }
+    Some(a)
+}
+
+fn responder_fallo<P: Platform>(p: &mut P, id: u64, e: claims::Error) {
+    responder_error(p, id, e.code());
+}
+
+fn mem_claim<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine) {
+    let Some(a) = leer_args(r) else {
+        return responder_error(p, id, "malformed arguments");
+    };
+    let Some(bytes) = a.bytes else {
+        return responder_error(p, id, "mem.claim needs bytes");
+    };
+
+    let pedido = claims::Request {
+        bytes,
+        at: a.at,
+        align: a.align.unwrap_or(1),
+        below: a.below,
+    };
+
+    match claims::claim(m, pedido) {
+        Err(e) => responder_fallo(p, id, e),
+        Ok(c) => {
+            let out = unsafe { &mut *core::ptr::addr_of_mut!(OUTBOX) };
+            let mut w = Writer::new(out);
+            w.array(3);
+            w.uint(id);
+            w.bool(true);
+            escribir_claim(&mut w, &c);
+            terminar(p, id, w);
+        }
+    }
+}
+
+fn mem_read<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
+    let Some(a) = leer_args(r) else {
+        return responder_error(p, id, "malformed arguments");
+    };
+    let (Some(handle), Some(len)) = (a.handle, a.len) else {
+        return responder_error(p, id, "mem.read needs handle and len");
+    };
+    let off = a.off.unwrap_or(0);
+
+    // Se acota antes de leer: una lectura que no entra en la respuesta se avisa
+    // en vez de mandar menos de lo pedido sin decirlo.
+    if len > MAX_LECTURA {
+        return responder_error(p, id, "read too large");
+    }
+
+    match claims::range_of(handle, off, len) {
+        Err(e) => responder_fallo(p, id, e),
+        Ok(dir) => {
+            let out = unsafe { &mut *core::ptr::addr_of_mut!(OUTBOX) };
+            let mut w = Writer::new(out);
+            w.array(3);
+            w.uint(id);
+            w.bool(true);
+            w.map(1);
+            w.text("bytes");
+            // De a un byte y volatil: esto puede ser el registro de un
+            // dispositivo, no RAM.
+            w.bytes_by(len as usize, |i| unsafe {
+                core::ptr::read_volatile((dir + i as u64) as *const u8)
+            });
+            terminar(p, id, w);
+        }
+    }
+}
+
+fn mem_write<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
+    let Some(a) = leer_args(r) else {
+        return responder_error(p, id, "malformed arguments");
+    };
+    let (Some(handle), Some(datos)) = (a.handle, a.datos) else {
+        return responder_error(p, id, "mem.write needs handle and bytes");
+    };
+    let off = a.off.unwrap_or(0);
+
+    match claims::range_of(handle, off, datos.len() as u64) {
+        Err(e) => responder_fallo(p, id, e),
+        Ok(dir) => {
+            for (i, b) in datos.iter().enumerate() {
+                unsafe { core::ptr::write_volatile((dir + i as u64) as *mut u8, *b) };
+            }
+            let out = unsafe { &mut *core::ptr::addr_of_mut!(OUTBOX) };
+            let mut w = Writer::new(out);
+            w.array(3);
+            w.uint(id);
+            w.bool(true);
+            w.map(1);
+            w.text("written");
+            w.uint(datos.len() as u64);
+            terminar(p, id, w);
+        }
+    }
+}
+
+fn release<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
+    let Some(a) = leer_args(r) else {
+        return responder_error(p, id, "malformed arguments");
+    };
+    let Some(handle) = a.handle else {
+        return responder_error(p, id, "release needs handle");
+    };
+
+    if !claims::release(handle) {
+        return responder_fallo(p, id, claims::Error::NoSuchHandle);
+    }
+
+    let out = unsafe { &mut *core::ptr::addr_of_mut!(OUTBOX) };
+    let mut w = Writer::new(out);
+    w.array(3);
+    w.uint(id);
+    w.bool(true);
+    w.map(1);
+    w.text("released");
+    w.uint(handle);
+    terminar(p, id, w);
+}
+
+fn escribir_claim(w: &mut Writer<'_>, c: &claims::Claim) {
+    w.map(4);
+    w.text("handle");
+    w.uint(c.handle);
+    w.text("start");
+    w.uint(c.start);
+    w.text("bytes");
+    w.uint(c.bytes);
+    // De que clase era la region: el agente decide con el dato a la vista.
+    w.text("kind");
+    w.text(c.kind.code());
+}
+
+fn terminar<P: Platform>(p: &mut P, id: u64, w: Writer<'_>) {
+    match w.finish() {
+        Some(bytes) => emitir(p, bytes),
+        None => responder_error(p, id, "response too large"),
+    }
+}

@@ -110,6 +110,18 @@ impl<'a> Writer<'a> {
         }
     }
 
+    /// Una cadena de bytes que se leen de a uno.
+    ///
+    /// Existe aparte de `bytes` porque leer MMIO con una copia de slice deja
+    /// que el compilador reordene o agrupe los accesos, y a un registro de
+    /// dispositivo eso lo rompe. Aca cada byte se pide explicitamente.
+    pub fn bytes_by(&mut self, len: usize, mut f: impl FnMut(usize) -> u8) {
+        self.head(2, len as u64);
+        for i in 0..len {
+            self.raw(f(i));
+        }
+    }
+
     pub fn text(&mut self, s: &str) {
         self.head(3, s.len() as u64);
         for x in s.as_bytes() {
@@ -295,6 +307,24 @@ impl<'a> Reader<'a> {
             Some(s) => {
                 self.pos = fin;
                 Some(s)
+            }
+            None => {
+                self.pos = guardado;
+                None
+            }
+        }
+    }
+
+    /// Una cadena de bytes cruda: es lo que trae el codigo maquina que sube el
+    /// agente.
+    pub fn bytes(&mut self) -> Option<&'a [u8]> {
+        let guardado = self.pos;
+        let n = self.expect(2)? as usize;
+        let fin = self.pos.checked_add(n)?;
+        match self.b.get(self.pos..fin) {
+            Some(x) => {
+                self.pos = fin;
+                Some(x)
             }
             None => {
                 self.pos = guardado;

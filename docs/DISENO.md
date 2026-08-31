@@ -123,7 +123,7 @@ mapeados en memoria. `describe` tiene que cubrir los dos modelos de descubrimien
 ## 7. Estado del código
 
 **Cuidado al leer este documento:** las secciones 4 y 6 son *especificación*, no descripción.
-De los diez verbos de la sección 4 no hay ninguno implementado todavía.
+De los diez verbos de la sección 4 hay **cinco** implementados; los otros cinco todavía no.
 
 Lo que sí existe:
 
@@ -137,10 +137,11 @@ Lo que sí existe:
 | `scripts/check.sh` | El portón: frontera + 15 tests + compila las dos + **las bootea en QEMU** y verifica lo que dicen. Probado que falla cuando debe. |
 | CI (`.github/workflows/ci.yml`) | Llama al mismo portón, para que no haya chequeos que solo existan en una de las dos partes. |
 | **El protocolo CBOR** (D6) | Andando. Escrito a mano, sin dependencias; verificado contra los vectores canónicos del RFC 8949. |
-| **`describe`** | Andando: sirve `memory` y `tables`. Sin argumentos devuelve el índice, no un volcado (D16). |
+| **`describe`** | Andando: sirve `memory`, `tables` y `claims`. Sin argumentos devuelve el índice, no un volcado (D16). |
+| **`mem.claim` · `mem.read` · `mem.write` · `release`** | Andando. Reclamos por tamaño o por dirección exacta (así se pide MMIO), con alineación y tope. Los handles son de la máquina y no se reusan (D14). |
 | **Tablas de páginas propias** (D12) | Andando en las dos. Identity map con páginas de 1 GiB; MMIO no cacheable. La raíz se relee del registro y se verifica contra el mapa. |
 | **Captura de faults** (P5, D7) | Andando en las dos. Causa + crudo + dirección + registros. Autotest de breakpoint en cada arranque. Todavía no viaja por CBOR ni vuelve al agente. |
-| Los otros nueve verbos | Ninguno todavía. |
+| Los otros cinco verbos | `core.claim`, `exec`, `irq.install`, `irq.install_raw`, `dma.allow`. |
 
 Verificado el 2026-08-30 contra dos fuentes independientes: el mapa que imprime el kernel en
 aarch64 coincide con el device tree que genera QEMU (`memory@40000000` → primera región en esa
