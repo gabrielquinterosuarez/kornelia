@@ -4,6 +4,7 @@
 #![no_main]
 
 mod exec;
+mod irq;
 mod vectors;
 mod paging;
 mod percpu;
@@ -58,6 +59,17 @@ impl Platform for AArch64 {
 
     fn last_fault(&self) -> Option<Fault> {
         vectors::last()
+    }
+
+    unsafe fn install_serial_interrupt(
+        &mut self,
+        hw: &kernel_core::acpi::Hardware,
+    ) -> Result<u8, &'static str> {
+        irq::install(hw)
+    }
+
+    fn sleep(&mut self) {
+        irq::sleep();
     }
 
     fn uart_address(&self) -> Option<u64> {

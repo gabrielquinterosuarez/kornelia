@@ -334,6 +334,33 @@ pub unsafe fn install(ranura: usize) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// Pone una entrada de la tabla para un aparato.
+///
+/// Los vectores del 0 al 31 son las excepciones del CPU y los pone `install`;
+/// del 32 para arriba quedan libres para los timbres de los aparatos.
+///
+/// # Safety
+///
+/// `handler` tiene que apuntar a codigo que termine en `iretq`.
+pub unsafe fn set_gate(vector: usize, handler: u64) -> Result<(), &'static str> {
+    if vector < EXCEPCIONES || vector >= 256 {
+        return Err("vector fuera del rango de los aparatos");
+    }
+    let idt = &mut *core::ptr::addr_of_mut!(IDT);
+    idt.0[vector] = Entrada {
+        off_baja: handler as u16,
+        selector: crate::gdt::CODIGO,
+        // Sin IST: un timbre de aparato no es un fault, y llega con la pila del
+        // codigo interrumpido en buen estado.
+        ist: 0,
+        tipo: 0x8E,
+        off_media: (handler >> 16) as u16,
+        off_alta: (handler >> 32) as u32,
+        cero: 0,
+    };
+    Ok(())
+}
+
 /// Provoca un breakpoint a proposito, para probar que todo esto anda.
 pub fn breakpoint() {
     unsafe { core::arch::asm!("int3", options(nomem, nostack)) }

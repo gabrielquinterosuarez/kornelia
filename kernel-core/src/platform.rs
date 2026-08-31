@@ -95,6 +95,24 @@ pub trait Platform {
     /// x86_64 el hardware lo hace solo; en aarch64 hay que pedirlo.
     unsafe fn exec(&mut self, entry: u64, region: (u64, u64)) -> Outcome;
 
+    /// Programa el timbre del cable serie y lo enciende (D5, D17).
+    ///
+    /// Mientras esto no exista, el kernel tiene que preguntarle al UART byte por
+    /// byte, y eso quema un núcleo entero. Devuelve el número de timbre que
+    /// quedó asignado, para poder informarlo.
+    ///
+    /// # Safety
+    ///
+    /// Las tablas de páginas y la captura de excepciones tienen que estar
+    /// puestas: el timbre puede sonar apenas se enciende.
+    unsafe fn install_serial_interrupt(&mut self, hw: &Hardware) -> Result<u8, &'static str>;
+
+    /// Duerme este núcleo hasta que suene algún timbre.
+    ///
+    /// Es lo que convierte un núcleo quemado en un núcleo reservado: mientras
+    /// nadie hable, no consume nada.
+    fn sleep(&mut self);
+
     /// Dónde tiene esta arquitectura los registros del UART, o `None` si no
     /// están en memoria.
     ///

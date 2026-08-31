@@ -38,6 +38,7 @@ use crate::cores;
 use crate::machine::Machine;
 use crate::memory::Kind;
 use crate::platform::Platform;
+use crate::serial;
 use crate::tables;
 
 /// Lo mas grande que puede ser un pedido. Lo llena `mem.write` subiendo bytes;
@@ -62,13 +63,30 @@ static mut OUTBOX: [u8; MAX_RESPONSE] = [0; MAX_RESPONSE];
 pub const MARCA: &str = "-- CBOR --";
 
 /// Atiende el cordon umbilical para siempre.
-pub fn serve<P: Platform>(p: &mut P, m: &Machine, hw: &Hardware) -> ! {
+pub fn serve<P: Platform>(p: &mut P, m: &Machine, hw: &Hardware, con_timbre: bool) -> ! {
     let inbox = unsafe { &mut *core::ptr::addr_of_mut!(INBOX) };
     let mut n = 0usize;
 
     loop {
-        let Some(b) = p.uart_read_byte() else {
-            core::hint::spin_loop();
+        // Con timbre, los bytes los dejó quien atendió el timbre y acá solo se
+        // sacan; sin timbre hay que preguntarle al UART, que es lo que quema un
+        // núcleo entero y por lo que existe todo esto.
+        let llegado = if con_timbre {
+            // SAFETY: el bucle corre con el timbre apagado salvo mientras
+            // duerme, así que nadie más está en el anillo ahora.
+            unsafe { serial::pop() }
+        } else {
+            p.uart_read_byte()
+        };
+
+        let Some(b) = llegado else {
+            if con_timbre {
+                // Nada que hacer: dormir hasta que alguien hable. Es lo que
+                // convierte un núcleo quemado en un núcleo reservado.
+                p.sleep();
+            } else {
+                core::hint::spin_loop();
+            }
             continue;
         };
 

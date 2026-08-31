@@ -19,6 +19,12 @@ const PL011_BASE: usize = BASE as usize;
 const UARTDR: usize = PL011_BASE + 0x00; // dato
 const UARTFR: usize = PL011_BASE + 0x18; // banderas
 
+const UARTIMSC: usize = PL011_BASE + 0x38; // que interrupciones estan permitidas
+const UARTICR: usize = PL011_BASE + 0x44; // limpiar interrupciones
+
+const IMSC_RXIM: u32 = 1 << 4; // llego un byte
+const IMSC_RTIM: u32 = 1 << 6; // llego algo y dejo de llegar (cola a medias)
+
 const FR_RXFE: u32 = 1 << 4; // cola de recepción vacía
 const FR_TXFF: u32 = 1 << 5; // cola de transmisión llena
 
@@ -29,6 +35,21 @@ pub fn write_byte(b: u8) {
         }
         core::ptr::write_volatile(UARTDR as *mut u32, b as u32);
     }
+}
+
+/// Le dice al UART que levante la mano cuando llegue un byte.
+///
+/// Se piden las dos: "llego un byte" y "llego algo y dejo de llegar". La segunda
+/// hace falta porque el UART junta bytes en una cola y avisa cuando se llena;
+/// sin ella, un pedido que no llene la cola se quedaria esperando a un byte que
+/// no va a venir.
+pub fn enable_rx_interrupt() {
+    unsafe { core::ptr::write_volatile(UARTIMSC as *mut u32, IMSC_RXIM | IMSC_RTIM) };
+}
+
+/// Baja la mano del UART. Se llama antes de vaciar la cola.
+pub fn clear_rx_interrupt() {
+    unsafe { core::ptr::write_volatile(UARTICR as *mut u32, IMSC_RXIM | IMSC_RTIM) };
 }
 
 /// Levanta un byte si hay alguno esperando. No bloquea.

@@ -79,7 +79,9 @@ Esto es el kernel entero. No hay más verbos.
 
 Arranca por UEFI en x86_64 y aarch64, le toma la máquina al firmware y **habla
 CBOR** por el cordón umbilical. Corre sobre pila y tablas de páginas propias, y
-captura los faults en vez de reiniciarse.
+captura los faults en vez de reiniciarse. **El núcleo que atiende duerme entre
+pedidos**: el cable serie tiene timbre (interrupción), así que ya no gira
+preguntando.
 
 **Siete de los diez verbos andan:** `describe`, `mem.claim`, `mem.read`,
 `mem.write`, `release`, **`exec`** y **`core.claim`**. El agente sube código máquina, lo corre, y

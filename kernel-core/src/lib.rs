@@ -20,6 +20,7 @@ pub mod memory;
 pub mod paging;
 pub mod platform;
 pub mod protocol;
+pub mod serial;
 pub mod stack;
 pub mod tables;
 
@@ -53,13 +54,43 @@ pub fn main<P: Platform>(p: &mut P) -> ! {
     // memoria física por todos lados.
     let hw = leer_hardware(p, &machine);
 
+    // El timbre del cable, para que el núcleo pueda dormir en vez de girar.
+    // SAFETY: las tablas de páginas y la captura de excepciones ya están.
+    let timbre = unsafe { p.install_serial_interrupt(&hw) };
+    let con_timbre = reportar_timbre(p, timbre);
+
+    // La marca va última: de acá en adelante lo que sale es binario, así que
+    // cualquier texto después la convierte en basura para el cliente.
     {
         let mut u = Umbilical::new(p);
         u.line(protocol::MARCA);
     }
 
     // Desde acá manda el protocolo: lo que sale es binario (D6).
-    protocol::serve(p, &machine, &hw)
+    protocol::serve(p, &machine, &hw, con_timbre)
+}
+
+/// Cuenta si el cable serie quedó con timbre (D5, D17).
+///
+/// Que no se pueda instalar no es fatal: se vuelve a preguntarle al UART byte
+/// por byte, que es lo que se hacía hasta ahora. Anda igual, pero quema un
+/// núcleo entero — así que se dice.
+fn reportar_timbre<P: Platform>(p: &mut P, r: Result<u8, &'static str>) -> bool {
+    use core::fmt::Write;
+    let mut u = Umbilical::new(p);
+
+    match r {
+        Ok(v) => {
+            let _ = write!(u, "serie: timbre {v}, el nucleo duerme entre pedidos\r\n");
+            true
+        }
+        Err(motivo) => {
+            u.line("serie: SIN TIMBRE, se sigue preguntando byte por byte");
+            u.kv("  motivo", motivo);
+            u.line("  esto quema un nucleo entero.");
+            false
+        }
+    }
 }
 
 /// La señal de vida, en texto, antes de que empiece el protocolo.

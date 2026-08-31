@@ -62,6 +62,15 @@ impl Platform for Fake {
         crate::fault::Outcome { faulted: false, regs: &[], fault: None }
     }
 
+    unsafe fn install_serial_interrupt(
+        &mut self,
+        _hw: &crate::acpi::Hardware,
+    ) -> Result<u8, &'static str> {
+        Err("la plataforma de prueba no tiene timbre")
+    }
+
+    fn sleep(&mut self) {}
+
     fn uart_address(&self) -> Option<u64> {
         None
     }

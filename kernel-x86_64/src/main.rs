@@ -6,6 +6,7 @@
 mod exec;
 mod gdt;
 mod idt;
+mod irq;
 mod paging;
 mod percpu;
 mod smp;
@@ -59,6 +60,17 @@ impl Platform for X86_64 {
 
     fn last_fault(&self) -> Option<Fault> {
         idt::last()
+    }
+
+    unsafe fn install_serial_interrupt(
+        &mut self,
+        hw: &kernel_core::acpi::Hardware,
+    ) -> Result<u8, &'static str> {
+        irq::install(hw)
+    }
+
+    fn sleep(&mut self) {
+        irq::sleep();
     }
 
     fn uart_address(&self) -> Option<u64> {

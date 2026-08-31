@@ -46,6 +46,14 @@ pub fn write_byte(b: u8) {
     }
 }
 
+/// Le dice al UART que levante la mano cuando llegue un byte.
+///
+/// Hasta que no se llama esto, el UART recibe en silencio y hay que preguntarle.
+pub fn enable_rx_interrupt() {
+    // Bit 0 del registro de habilitacion: avisar cuando haya dato disponible.
+    unsafe { outb(IER, 0x01) };
+}
+
 /// Levanta un byte si hay alguno esperando. No bloquea.
 pub fn read_byte() -> Option<u8> {
     unsafe {
