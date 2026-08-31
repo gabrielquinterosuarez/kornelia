@@ -256,6 +256,13 @@ PROGRAMAS = {
         # mov rax, 0x0000400000000000 ; mov [rax], rax ; ret
         "falla": bytes([0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00,
                         0x48, 0x89, 0x00, 0xC3]),
+        # mov rsp, 0x400000000000 ; mov rax, 0x400000000000 ; mov [rax], rax ; ret
+        # Deja el puntero de pila apuntando a memoria que no existe y despues
+        # falla. Sin la IST, el CPU apilaria el marco de excepcion ahi y eso
+        # escalaria a triple fault.
+        "pila_rota": bytes([0x48, 0xBC, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00,
+                            0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00,
+                            0x48, 0x89, 0x00, 0xC3]),
         "registro": "rax",
     },
     "aarch64": {
@@ -265,6 +272,12 @@ PROGRAMAS = {
         # movz x9, #0x4000, lsl #32 ; str x9, [x9] ; ret
         "falla": bytes([0x09, 0x00, 0xC8, 0xD2, 0x29, 0x01, 0x00, 0xF9,
                         0xC0, 0x03, 0x5F, 0xD6]),
+        # movz x9, #0x4000, lsl #32 ; mov sp, x9 ; str x9, [x9] ; ret
+        # Deja el puntero de pila apuntando a memoria que no existe y despues
+        # falla. Sin SP_EL0 aparte, la excepcion se apilaria ahi y no habria
+        # nada que capturar.
+        "pila_rota": bytes([0x09, 0x00, 0xC8, 0xD2, 0x3F, 0x01, 0x00, 0x91,
+                            0x29, 0x01, 0x00, 0xF9, 0xC0, 0x03, 0x5F, 0xD6]),
         "registro": "x0",
     },
 }
@@ -287,6 +300,7 @@ def prueba_de_exec(proc, timeout, arch):
     for nombre, codigo, espera_fault in (
         ("un programa que anda", prog["ok"], False),
         ("un programa que falla", prog["falla"], True),
+        ("un programa que rompe la pila y falla", prog["pila_rota"], True),
     ):
         ok, c = pedir_verbo(10, "mem.claim", {"bytes": 4096, "align": 4096})
         if not ok:

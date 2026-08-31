@@ -181,6 +181,10 @@ extern "C" fn fault_rust(m: &mut Marco) {
     // kernel.
     if unsafe { crate::exec::EXEC_ARMADO } != 0 {
         m.elr = unsafe { crate::exec::EXEC_RIP };
+        // El codigo del agente corria sobre SP_EL0, asi que el SPSR guardado
+        // dice que hay que volver ahi. Se le prende el bit para volver a
+        // SP_EL1: la pila del agente puede ser justo lo que se rompio.
+        m.spsr |= 1;
         return;
     }
 

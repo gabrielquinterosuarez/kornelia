@@ -4,6 +4,7 @@
 #![no_main]
 
 mod exec;
+mod gdt;
 mod idt;
 mod paging;
 mod uart;

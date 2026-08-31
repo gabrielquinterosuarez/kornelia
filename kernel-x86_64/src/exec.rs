@@ -45,6 +45,22 @@ static mut EXEC_RSP: u64 = 0;
 #[no_mangle]
 static mut EXEC_REGS: [u64; 18] = [0; 18];
 
+/// 64 KiB de pila para el codigo del agente.
+///
+/// Aparte de la del kernel a proposito: el agente puede desbordarla o dejarla
+/// en cualquier lado sin llevarse puesto nada nuestro. Y como las excepciones
+/// entran por la IST, romperla tampoco impide capturar el fault.
+const TAM_PILA_AGENTE: usize = 64 * 1024;
+
+#[repr(C, align(16))]
+struct PilaAgente([u8; TAM_PILA_AGENTE]);
+
+static mut PILA_AGENTE: PilaAgente = PilaAgente([0; TAM_PILA_AGENTE]);
+
+/// La cima de esa pila, que es por donde se empieza.
+#[no_mangle]
+static mut EXEC_PILA: u64 = 0;
+
 core::arch::global_asm!(
     r#"
 .section .text
@@ -73,10 +89,13 @@ exec_trampolin:
     // El codigo recibe en rdi su propia direccion, para poder encontrar sus
     // datos sin depender de donde lo hayan cargado.
     mov rax, rdi
+    // Y corre en su propia pila: si la rompe, la del kernel queda entera.
+    mov rsp, qword ptr [rip + EXEC_PILA]
     call rax
 
-    // Volvio solo. Se fotografian los registros tal como quedaron.
-    mov qword ptr [rip + EXEC_ARMADO], 0
+    // Volvio solo. El punto de recuperacion sigue armado mientras se toma la
+    // foto, porque la foto tambien apila: si la pila del agente quedo rota,
+    // este push falla y se captura como cualquier otro fault.
     push rax
     lea rax, [rip + EXEC_REGS]
     mov [rax + 8],   rbx
@@ -96,12 +115,17 @@ exec_trampolin:
     // rcx ya quedo guardado, asi que sirve de andamio para el rax de verdad.
     pop rcx
     mov [rax + 0],   rcx
+    // El rsp con el que quedo el agente, no el nuestro.
     mov [rax + 56],  rsp
     // El codigo ya volvio: no hay un "donde estaba ejecutando" que informar.
     mov qword ptr [rax + 128], 0
     pushfq
     pop rdx
     mov [rax + 136], rdx
+
+    // Recien ahora se vuelve a la pila del kernel y se desarma.
+    mov rsp, qword ptr [rip + EXEC_RSP]
+    mov qword ptr [rip + EXEC_ARMADO], 0
     xor eax, eax
     jmp exec_salida
 
@@ -133,6 +157,8 @@ extern "sysv64" {
 ///
 /// `entry` tiene que apuntar a memoria mapeada y ejecutable.
 pub unsafe fn run(entry: u64) -> Outcome {
+    EXEC_PILA = core::ptr::addr_of!(PILA_AGENTE) as u64 + TAM_PILA_AGENTE as u64;
+
     let hubo_fault = exec_trampolin(entry) != 0;
 
     if hubo_fault {

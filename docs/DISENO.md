@@ -139,7 +139,7 @@ Lo que sí existe:
 | **El protocolo CBOR** (D6) | Andando. Escrito a mano, sin dependencias; verificado contra los vectores canónicos del RFC 8949. |
 | **`describe`** | Andando: sirve `memory`, `tables` y `claims`. Sin argumentos devuelve el índice, no un volcado (D16). |
 | **`mem.claim` · `mem.read` · `mem.write` · `release`** | Andando. Reclamos por tamaño o por dirección exacta (así se pide MMIO), con alineación y tope. Los handles son de la máquina y no se reusan (D14). |
-| **`exec`** | Andando en las dos. **El fault vuelve como respuesta, no como muerte** (P5): el handler desvía el regreso al punto de recuperación en vez de detener el núcleo. Verificado con código máquina real que anda y código que falla. |
+| **`exec`** | Andando en las dos. **El fault vuelve como respuesta, no como muerte** (P5): el handler desvía el regreso al punto de recuperación en vez de detener el núcleo. El agente corre en pila propia y las excepciones en otra, así que ni destruyendo el puntero de pila se lleva la máquina. |
 | **Tablas de páginas propias** (D12) | Andando en las dos. Identity map con páginas de 1 GiB; MMIO no cacheable. La raíz se relee del registro y se verifica contra el mapa. |
 | **Captura de faults** (P5, D7) | Andando en las dos. Causa + crudo + dirección + registros. Autotest de breakpoint en cada arranque. Todavía no viaja por CBOR ni vuelve al agente. |
 | Los otros cuatro verbos | `core.claim`, `irq.install`, `irq.install_raw`, `dma.allow`. |
@@ -175,13 +175,12 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
    Con esto quedan cerradas las dos cosas nuestras que vivían en memoria reclamable, que era
    lo que bloqueaba `mem.claim`.
 
-5. **Una pila rota durante `exec` todavía mata la máquina.** Si el código del agente destruye
-   el puntero de pila y después falla, el CPU intenta apilar el marco de excepción sobre una
-   pila inválida, y eso escala a doble y triple fault: la máquina se reinicia y no hay nada que
-   capturar. Es el agujero que queda en P5. Se arregla con una pila de excepción aparte: en
-   x86_64 con IST, que necesita GDT y TSS propios; en aarch64 corriendo el código del agente
-   con `SP_EL0` y tomando las excepciones con `SP_EL1`, que la arquitectura tiene bancados
-   justo para esto.
+5. **~~Una pila rota durante `exec` mata la máquina.~~ RESUELTO (P5).** El código del agente
+   corre en **su propia pila**, y las excepciones entran en **otra**: en x86_64 con GDT y TSS
+   propios más la IST; en aarch64 con `SP_EL0` para el agente y `SP_EL1` para el kernel, que la
+   arquitectura ya trae bancados. Verificado con código máquina que destruye el puntero de pila
+   y después falla: vuelve como fault capturado en las dos. Y comprobado al revés — sacándole
+   la IST a x86_64, el mismo programa reinicia la máquina.
 
 6. **`exec` no recibe un estado inicial de registros**, aunque la sección 4 lo especifica. El
    código recibe en el primer registro de argumento su propia dirección, y nada más. Y no se

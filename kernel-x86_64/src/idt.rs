@@ -293,9 +293,9 @@ struct Descriptor {
 /// Los stubs tienen que estar mapeados y ejecutables, que lo estan porque son
 /// parte de la imagen del kernel.
 pub unsafe fn install() -> Result<(), &'static str> {
-    // El selector de codigo actual, el que dejo UEFI. No se hornea: se pregunta.
-    let cs: u16;
-    core::arch::asm!("mov {0:x}, cs", out(reg) cs, options(nomem, nostack));
+    // Primero la GDT: sin un TSS ahi adentro no existe la pila de excepcion, y
+    // las entradas de abajo la piden.
+    crate::gdt::install()?;
 
     let idt = &mut *core::ptr::addr_of_mut!(IDT);
 
@@ -303,8 +303,10 @@ pub unsafe fn install() -> Result<(), &'static str> {
         let dir = STUBS[v];
         idt.0[v] = Entrada {
             off_baja: dir as u16,
-            selector: cs,
-            ist: 0,
+            selector: crate::gdt::CODIGO,
+            // La pila propia: el CPU cambia a ella ANTES de apilar el marco,
+            // asi que da igual que el codigo del agente haya roto RSP (P5).
+            ist: crate::gdt::IST_FAULTS,
             // 0x8E: presente, privilegio 0, compuerta de interrupcion de 64 bits.
             tipo: 0x8E,
             off_media: (dir >> 16) as u16,

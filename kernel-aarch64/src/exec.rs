@@ -10,12 +10,20 @@
 //! de recuperacion se recupera la pila el mismo, con lo cual las dos
 //! arquitecturas terminan haciendo lo mismo.
 //!
-//! # Limite conocido
+//! # La pila del agente esta aparte (P5)
 //!
-//! Igual que en x86: si el codigo del agente rompe SP y despues falla, el
-//! handler apila sobre una pila invalida y no hay nada que capturar. La solucion
-//! aca es correr el codigo del agente con SP_EL0 y tomar las excepciones con
-//! SP_EL1, que ARM tiene bancados justo para esto. Queda anotado como deuda.
+//! ARM tiene dos punteros de pila bancados en EL1: `SP_EL0` y `SP_EL1`, y
+//! `SPSel` elige cual se usa como `sp`.
+//!
+//! El codigo del agente corre con `SPSel=0`, o sea sobre `SP_EL0`, y el kernel
+//! vive en `SP_EL1`. Al tomar una excepcion **el hardware pone `SPSel=1` solo**:
+//! el handler entra siempre sobre la pila del kernel, aunque el agente haya
+//! dejado la suya en cualquier lado. Es lo mismo que consigue la IST en x86_64,
+//! pero sin armar nada — la arquitectura ya lo trae.
+//!
+//! El unico cuidado es al volver: `eret` saca de `SPSR` con que `SPSel` seguir,
+//! y ahi todavia dice `SP_EL0`. Por eso el handler, cuando desvia, tambien le
+//! prende ese bit; si no, volveria justo a la pila rota.
 
 use kernel_core::fault::Outcome;
 
@@ -31,6 +39,18 @@ static mut EXEC_SP: u64 = 0;
 /// En el orden de `vectors::REGISTROS`: x0..x30, pc, pstate.
 #[no_mangle]
 static mut EXEC_REGS: [u64; 33] = [0; 33];
+
+/// 64 KiB de pila para el codigo del agente, aparte de la del kernel.
+const TAM_PILA_AGENTE: usize = 64 * 1024;
+
+#[repr(C, align(16))]
+struct PilaAgente([u8; TAM_PILA_AGENTE]);
+
+static mut PILA_AGENTE: PilaAgente = PilaAgente([0; TAM_PILA_AGENTE]);
+
+/// La cima de esa pila.
+#[no_mangle]
+static mut EXEC_PILA: u64 = 0;
 
 core::arch::global_asm!(
     r#"
@@ -60,14 +80,18 @@ exec_trampolin:
     adrp x10, EXEC_ARMADO
     str  x9,  [x10, :lo12:EXEC_ARMADO]
 
+    // La pila del agente, en SP_EL0. Desde el `msr spsel, #0` hasta el de
+    // vuelta, `sp` es la suya; la nuestra queda intacta en SP_EL1.
+    adrp x11, EXEC_PILA
+    ldr  x11, [x11, :lo12:EXEC_PILA]
+    msr  sp_el0, x11
+    msr  spsel, #0
+
     // El codigo recibe en x0 su propia direccion.
     mov  x9,  x0
     blr  x9
 
-    // Volvio solo. Se desarma y se fotografian los registros.
-    adrp x10, EXEC_ARMADO
-    str  xzr, [x10, :lo12:EXEC_ARMADO]
-
+    // Volvio solo. Se fotografian los registros; nada de esto usa la pila.
     adrp x10, EXEC_REGS
     add  x10, x10, :lo12:EXEC_REGS
     stp  x0,  x1,  [x10, #(0 * 8)]
@@ -88,16 +112,21 @@ exec_trampolin:
     stp  x27, x28, [x10, #(27 * 8)]
     stp  x29, x30, [x10, #(29 * 8)]
     mov  x9,  sp
-    str  x9,       [x10, #(31 * 8)]   // pc: ya volvio, se informa el sp
+    str  x9,       [x10, #(31 * 8)]   // el sp del agente, que es SP_EL0
     mrs  x9,  nzcv
     str  x9,       [x10, #(32 * 8)]
+
+    // Recien ahora se vuelve a la pila del kernel y se desarma.
+    msr  spsel, #1
+    adrp x10, EXEC_ARMADO
+    str  xzr, [x10, :lo12:EXEC_ARMADO]
 
     mov  x0,  #0
     b    exec_salida
 
 exec_recuperacion:
-    // Aca aterriza el `eret` del handler cuando hubo fault. La pila del agente
-    // puede estar rota, asi que lo primero es recuperar la nuestra.
+    // Aca aterriza el `eret` del handler cuando hubo fault. Ya llega con
+    // SPSel=1 porque el handler se lo prendio al SPSR; falta ponerle el valor.
     adrp x9,  EXEC_SP
     ldr  x9,  [x9, :lo12:EXEC_SP]
     mov  sp,  x9
@@ -126,6 +155,8 @@ extern "C" {
 ///
 /// `entry` tiene que apuntar a memoria mapeada y ejecutable.
 pub unsafe fn run(entry: u64) -> Outcome {
+    EXEC_PILA = core::ptr::addr_of!(PILA_AGENTE) as u64 + TAM_PILA_AGENTE as u64;
+
     let hubo_fault = exec_trampolin(entry) != 0;
 
     if hubo_fault {
