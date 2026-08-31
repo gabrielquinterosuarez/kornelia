@@ -48,7 +48,7 @@ elif ! command -v python3 >/dev/null; then
 else
     for arq in x86_64 aarch64; do
         paso "arranca $arq y contesta el protocolo"
-        salida=$(timeout 240 ./scripts/client.py --arch "$arq" --what memory,tables --memoria --exec 2>&1 || true)
+        salida=$(timeout 240 ./scripts/client.py --arch "$arq" --smp 4 --what memory,tables --memoria --exec --nucleos 2>&1 || true)
 
         # Lo que tiene que haber dicho en el banner de texto.
         for esperado in "arquitectura: $arq" "memoria:" "tablas:" \
@@ -74,6 +74,13 @@ else
         if ! grep -qFe "exec: ok" <<<"$salida"; then
             mal "$arq no paso la prueba de exec"
             printf '%s\n' "$salida" | grep -E "FALLA:|faulted|fault:" | head -10
+        fi
+
+        # Y que haya arrancado los otros nucleos: con -smp 4 tienen que quedar
+        # tres andando, porque el cuarto es el que esta contestando.
+        if ! grep -qFe "nucleos: ok (3 arrancados)" <<<"$salida"; then
+            mal "$arq no arranco los otros nucleos"
+            printf '%s\n' "$salida" | grep -E "FALLA:|id=" | head -10
         fi
 
         n=$(grep -cE '^ +0x[0-9a-f]{16} ' <<<"$salida" || true)

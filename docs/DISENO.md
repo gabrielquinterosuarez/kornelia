@@ -1,9 +1,11 @@
 # Kernel agente-céntrico — Documento de diseño
 
 **Estado:** las dos arquitecturas arrancan por UEFI, le toman la máquina al firmware y
-**hablan el protocolo CBOR** por el cordón umbilical. `describe` ya sirve el mapa de memoria
-y las tablas. Los otros nueve verbos siguen siendo especificación.
-**Última actualización:** 2026-08-30
+**hablan el protocolo CBOR** por el cordón umbilical. Corren sobre pila y tablas de páginas
+propias, capturan los faults como datos, y **siete de los diez verbos andan**: el agente
+reclama memoria, sube código máquina, lo corre, y arranca los otros núcleos.
+Faltan `irq.install`, `irq.install_raw` y `dma.allow`.
+**Última actualización:** 2026-08-31
 
 ---
 
@@ -123,7 +125,7 @@ mapeados en memoria. `describe` tiene que cubrir los dos modelos de descubrimien
 ## 7. Estado del código
 
 **Cuidado al leer este documento:** las secciones 4 y 6 son *especificación*, no descripción.
-De los diez verbos de la sección 4 hay **seis** implementados; los otros cuatro todavía no.
+De los diez verbos de la sección 4 hay **siete** implementados; los otros tres todavía no.
 
 Lo que sí existe:
 
@@ -140,10 +142,11 @@ Lo que sí existe:
 | **`describe`** | Andando: sirve `memory`, `tables`, `claims`, `cpus`, `interrupts` y `pcie`. Sin argumentos devuelve el índice, no un volcado (D16). |
 | **Lectura de ACPI** | Andando en las dos. MADT (núcleos y controlador de interrupciones) y MCFG (PCIe), con el checksum verificado tabla por tabla. |
 | **`mem.claim` · `mem.read` · `mem.write` · `release`** | Andando. Reclamos por tamaño o por dirección exacta (así se pide MMIO), con alineación y tope. Los handles son de la máquina y no se reusan (D14). |
+| **`core.claim`** | Andando en las dos. PSCI en aarch64; INIT/SIPI más un trampolín de 16→32→64 bits en x86_64. El núcleo nuevo copia las tablas de páginas y la captura de faults, y avisa por un atómico. |
 | **`exec`** | Andando en las dos. **El fault vuelve como respuesta, no como muerte** (P5): el handler desvía el regreso al punto de recuperación en vez de detener el núcleo. El agente corre en pila propia y las excepciones en otra, así que ni destruyendo el puntero de pila se lleva la máquina. |
 | **Tablas de páginas propias** (D12) | Andando en las dos. Identity map con páginas de 1 GiB; MMIO no cacheable. La raíz se relee del registro y se verifica contra el mapa. |
 | **Captura de faults** (P5, D7) | Andando en las dos. Causa + crudo + dirección + registros. Autotest de breakpoint en cada arranque. Todavía no viaja por CBOR ni vuelve al agente. |
-| Los otros cuatro verbos | `core.claim`, `irq.install`, `irq.install_raw`, `dma.allow`. |
+| Los otros tres verbos | `irq.install`, `irq.install_raw`, `dma.allow`. |
 
 Verificado el 2026-08-30 contra dos fuentes independientes: el mapa que imprime el kernel en
 aarch64 coincide con el device tree que genera QEMU (`memory@40000000` → primera región en esa
@@ -192,7 +195,17 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
    código recibe en el primer registro de argumento su propia dirección, y nada más. Y no se
    puede elegir núcleo, porque `core.claim` no existe.
 
-7. **Los atributos de cacheabilidad que informa UEFI se descartan.** D12 anda igual porque la
+7. **Un núcleo reclamado todavía no puede recibir trabajo.** Arranca, se configura solo y queda
+   esperando, pero `exec` corre siempre en el núcleo que atiende el protocolo: falta un buzón por
+   núcleo y que `exec` acepte a cuál mandarle el trabajo, que es lo que la sección 4 especifica
+   (`exec(core, handle, off, regs)`).
+
+8. **Un test falló una vez y no reprodujo.** Ocurrió una sola vez en la suite de `kernel-core` y
+   no se repitió en veinte corridas seguidas. Se auditó lo único que puede causarlo —los tests
+   que tocan las tablas globales de reclamos y de núcleos— y todos toman el mismo candado. **No
+   está diagnosticado**; queda anotado para no darlo por inexistente si vuelve a pasar.
+
+9. **Los atributos de cacheabilidad que informa UEFI se descartan.** D12 anda igual porque la
    cacheabilidad se deduce de la *clase* de cada región, pero UEFI informa además atributos por
    región (`UC`, `WC`, `WT`, `WB`) que son más precisos que esa deducción. Mientras el grano del
    mapeo sea 1 GiB casi no cambia nada; cuando haya que mapear MMIO fino con `mem.claim`, sí.

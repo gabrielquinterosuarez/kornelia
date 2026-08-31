@@ -3,6 +3,8 @@
 //! Todo lo que una arquitectura debe proveer vive en este trait. El resto del
 //! kernel no sabe sobre qué silicio corre.
 
+use crate::acpi::Hardware;
+use crate::cores;
 use crate::fault::{Fault, Outcome};
 use crate::machine::Machine;
 use crate::paging::Mapping;
@@ -92,6 +94,30 @@ pub trait Platform {
     /// desde el camino de instrucciones hasta que alguien las sincroniza. En
     /// x86_64 el hardware lo hace solo; en aarch64 hay que pedirlo.
     unsafe fn exec(&mut self, entry: u64, region: (u64, u64)) -> Outcome;
+
+    /// El identificador del núcleo sobre el que corre el kernel.
+    ///
+    /// Es el que atiende el protocolo, y por eso es el único que no se puede
+    /// reclamar: sería quitarle el piso a quien está contestando el pedido.
+    fn this_core(&self) -> u64;
+
+    /// Le pide a la máquina que arranque un núcleo, y le dice qué ranura es la
+    /// suya para que pueda avisar cuando llegue.
+    ///
+    /// Devolver `Ok` significa que el pedido se hizo, no que el núcleo ya esté
+    /// vivo: eso lo dice `cores::has_arrived`. Son dos CPUs distintas y una no
+    /// puede afirmar por la otra.
+    ///
+    /// # Safety
+    ///
+    /// Solo después de que las tablas de páginas y la captura de faults estén
+    /// puestas: el núcleo nuevo copia esa configuración.
+    unsafe fn start_core(
+        &mut self,
+        hw: &Hardware,
+        id: u64,
+        slot: usize,
+    ) -> Result<(), cores::Error>;
 }
 
 /// Escritor de texto sobre el cordón umbilical.

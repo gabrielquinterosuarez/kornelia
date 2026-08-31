@@ -7,6 +7,7 @@ mod exec;
 mod gdt;
 mod idt;
 mod paging;
+mod smp;
 mod uart;
 
 use core::ffi::c_void;
@@ -57,6 +58,19 @@ impl Platform for X86_64 {
 
     fn last_fault(&self) -> Option<Fault> {
         idt::last()
+    }
+
+    fn this_core(&self) -> u64 {
+        smp::this_core()
+    }
+
+    unsafe fn start_core(
+        &mut self,
+        hw: &kernel_core::acpi::Hardware,
+        id: u64,
+        slot: usize,
+    ) -> Result<(), kernel_core::cores::Error> {
+        smp::start(hw, id, slot)
     }
 
     unsafe fn exec(&mut self, entry: u64, _region: (u64, u64)) -> Outcome {

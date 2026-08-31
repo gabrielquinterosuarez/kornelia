@@ -56,6 +56,17 @@ pub struct Interrupts {
     pub version: u32,
 }
 
+/// Como se le pide al firmware que arranque un nucleo, en aarch64.
+///
+/// PSCI es la interfaz estandar de ARM para eso, y se invoca con una
+/// instruccion de llamada al nivel de abajo. **Cual de las dos es depende de la
+/// maquina**, y la maquina lo dice en la FADT: no se adivina (P4).
+#[derive(Clone, Copy)]
+pub struct Psci {
+    /// `true` para `hvc` (hay un hipervisor abajo), `false` para `smc`.
+    pub use_hvc: bool,
+}
+
 /// Donde se configura PCIe.
 ///
 /// El espacio de configuracion esta mapeado en memoria: escribirle a la
@@ -75,6 +86,8 @@ pub struct Hardware {
     pub cpus: &'static [Cpu],
     pub interrupts: Option<Interrupts>,
     pub pcie: Option<Pcie>,
+    /// Como arrancar los otros nucleos, si la maquina lo informa.
+    pub psci: Option<Psci>,
     /// Las firmas de todas las tablas que hay, se interpreten o no. Informar
     /// que existe algo que este kernel todavia no lee es mas util que callarlo
     /// (P4).
@@ -83,7 +96,7 @@ pub struct Hardware {
 
 impl Hardware {
     pub const fn vacio() -> Self {
-        Self { cpus: &[], interrupts: None, pcie: None, signatures: &[] }
+        Self { cpus: &[], interrupts: None, pcie: None, psci: None, signatures: &[] }
     }
 
     /// Cuantos nucleos ofrece la maquina para usar.
@@ -195,6 +208,7 @@ pub unsafe fn read(rsdp: &Rsdp) -> Hardware {
         match &firma {
             b"APIC" => leer_madt(tabla, largo, &mut hw, &mut n_cpus),
             b"MCFG" => hw.pcie = leer_mcfg(tabla, largo),
+            b"FACP" => hw.psci = leer_fadt(tabla, largo),
             _ => {}
         }
     }
@@ -291,6 +305,27 @@ unsafe fn leer_madt(tabla: u64, largo: usize, hw: &mut Hardware, n_cpus: &mut us
         }
         off += len;
     }
+}
+
+/// La FADT: de aca sale como arrancar los otros nucleos en aarch64.
+///
+/// El campo son dos banderas en el offset 129: si la maquina cumple PSCI, y con
+/// cual de las dos instrucciones hay que llamarlo.
+///
+/// # Safety
+///
+/// `tabla` tiene que apuntar a una FADT ya verificada.
+unsafe fn leer_fadt(tabla: u64, largo: usize) -> Option<Psci> {
+    // Las FADT viejas son mas cortas y no llegan a tener este campo.
+    if largo < 131 {
+        return None;
+    }
+    let banderas = u16_en(tabla, 129);
+    if banderas & 0b1 == 0 {
+        // La maquina no dice cumplir PSCI: no se inventa que si.
+        return None;
+    }
+    Some(Psci { use_hvc: banderas & 0b10 != 0 })
 }
 
 /// La MCFG: donde esta el espacio de configuracion de PCIe.

@@ -355,6 +355,71 @@ def prueba_de_exec(proc, timeout, arch):
     return 0
 
 
+def prueba_de_nucleos(proc, timeout):
+    """Reclama todos los nucleos menos el que atiende, y los arranca."""
+    fallas = []
+
+    def pedir_verbo(n, verbo, args):
+        resp, _ = pedir(proc, [n, verbo, args], timeout)
+        _, ok, carga = resp
+        return ok, carga
+
+    ok, d = pedir_verbo(20, "describe", {"what": ["cpus"]})
+    if not ok:
+        print("  no se pudo listar los nucleos")
+        return 1
+    cpus = d["cpus"]
+    print(f"  la maquina informa {len(cpus)} nucleos: {[c['id'] for c in cpus]}")
+
+    arrancados = []
+    for c in cpus:
+        ok, r = pedir_verbo(21, "core.claim", {"id": c["id"]})
+        if ok:
+            print(f"    id={c['id']} -> handle {r['handle']}, {r['state']}")
+            arrancados.append(c["id"])
+            if r["state"] != "idle":
+                fallas.append(f"el nucleo {c['id']} quedo en {r['state']}")
+        else:
+            # Uno tiene que fallar: el que esta contestando.
+            print(f"    id={c['id']} -> {r['error']}")
+            if r["error"] not in ("is-boot-core", "core-not-usable"):
+                fallas.append(f"el nucleo {c['id']} fallo con {r['error']}")
+
+    if not arrancados and len(cpus) > 1:
+        fallas.append("no se pudo arrancar ni un nucleo")
+
+    # Reclamarlo dos veces tiene que fallar.
+    if arrancados:
+        ok, e = pedir_verbo(22, "core.claim", {"id": arrancados[0]})
+        if ok or e.get("error") != "already-claimed":
+            fallas.append("dejo reclamar dos veces el mismo nucleo")
+
+    # Y uno que no existe, tambien.
+    ok, e = pedir_verbo(23, "core.claim", {"id": 9999})
+    if ok or e.get("error") != "no-such-core":
+        fallas.append("dejo reclamar un nucleo inexistente")
+
+    # Los reclamados se ven en describe.
+    ok, d = pedir_verbo(24, "describe", {"what": ["cores"]})
+    if not ok or len(d.get("cores", [])) != len(arrancados):
+        fallas.append(f"describe no informa los nucleos reclamados: {d}")
+    else:
+        print(f"  describe informa {len(d['cores'])} reclamados")
+
+    # Y la maquina sigue contestando con los otros nucleos corriendo.
+    ok, _ = pedir_verbo(25, "describe", {})
+    if not ok:
+        fallas.append("la maquina dejo de contestar")
+
+    print()
+    if fallas:
+        for f in fallas:
+            print(f"  FALLA: {f}")
+        return 1
+    print(f"  nucleos: ok ({len(arrancados)} arrancados)")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -362,8 +427,12 @@ def main():
     ap.add_argument("--what", help="secciones separadas por coma; sin esto pide el indice")
     ap.add_argument("--raw", action="store_true", help="mostrar los bytes que viajan")
     ap.add_argument("--timeout", type=float, default=90.0)
+    ap.add_argument("--smp", type=int, default=1,
+                    help="cuantos nucleos darle a QEMU")
     ap.add_argument("--exec", action="store_true", dest="ejecutar",
                     help="sube codigo maquina de verdad y lo corre")
+    ap.add_argument("--nucleos", action="store_true",
+                    help="reclama los otros nucleos y los arranca")
     ap.add_argument("--memoria", action="store_true",
                     help="prueba el lazo completo: claim, write, read, release")
     args = ap.parse_args()
@@ -373,7 +442,11 @@ def main():
     # su buffer interno y despues `select` sobre el descriptor dice "no hay
     # nada" mientras los bytes ya estan leidos. El cliente se cuelga esperando
     # datos que ya tiene.
-    proc = subprocess.Popen([guion], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+    cmd = [guion]
+    if args.smp > 1:
+        # Los scripts le pasan a QEMU cualquier argumento extra.
+        cmd += ["-smp", str(args.smp)]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.DEVNULL, cwd=RAIZ, bufsize=0)
     try:
         print(f"arrancando {args.arch} en QEMU...")
@@ -407,6 +480,9 @@ def main():
         if args.ejecutar:
             print()
             rc |= prueba_de_exec(proc, args.timeout, args.arch)
+        if args.nucleos:
+            print()
+            rc |= prueba_de_nucleos(proc, args.timeout)
         return rc
     finally:
         proc.kill()

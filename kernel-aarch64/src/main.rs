@@ -6,6 +6,7 @@
 mod exec;
 mod vectors;
 mod paging;
+mod smp;
 mod uart;
 
 use core::ffi::c_void;
@@ -56,6 +57,22 @@ impl Platform for AArch64 {
 
     fn last_fault(&self) -> Option<Fault> {
         vectors::last()
+    }
+
+    fn this_core(&self) -> u64 {
+        smp::this_core()
+    }
+
+    unsafe fn start_core(
+        &mut self,
+        hw: &kernel_core::acpi::Hardware,
+        id: u64,
+        slot: usize,
+    ) -> Result<(), kernel_core::cores::Error> {
+        // Idempotente y barato: deja anotada la configuracion que va a copiar
+        // el nucleo nuevo.
+        smp::prepare();
+        smp::start(hw.psci, id, slot)
     }
 
     unsafe fn exec(&mut self, entry: u64, region: (u64, u64)) -> Outcome {

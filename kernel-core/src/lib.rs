@@ -13,6 +13,7 @@
 pub mod acpi;
 pub mod cbor;
 pub mod claims;
+pub mod cores;
 pub mod fault;
 pub mod machine;
 pub mod memory;

@@ -62,6 +62,19 @@ impl Platform for Fake {
         crate::fault::Outcome { faulted: false, regs: &[], fault: None }
     }
 
+    fn this_core(&self) -> u64 {
+        0
+    }
+
+    unsafe fn start_core(
+        &mut self,
+        _hw: &crate::acpi::Hardware,
+        _id: u64,
+        _slot: usize,
+    ) -> Result<(), crate::cores::Error> {
+        Err(crate::cores::Error::NotSupported)
+    }
+
     unsafe fn install_page_tables(&mut self, _m: &Machine) -> Result<Mapping, &'static str> {
         // Una plataforma de mentira no tiene MMU que configurar. Lo que si se
         // testea es el PLAN de mapeo, que es la parte portable.
@@ -1020,4 +1033,84 @@ fn sin_raiz_no_se_inventa_nada() {
     let hw = unsafe { acpi::read(&rsdp) };
     assert!(hw.cpus.is_empty() && hw.signatures.is_empty());
     assert!(hw.interrupts.is_none() && hw.pcie.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Nucleos (D13)
+// ---------------------------------------------------------------------------
+
+use crate::cores;
+
+fn con_nucleos_limpios<T>(f: impl FnOnce() -> T) -> T {
+    let _g = CANDADO.lock().unwrap_or_else(|e| e.into_inner());
+    cores::reset();
+    f()
+}
+
+#[test]
+fn un_nucleo_no_esta_vivo_hasta_que_avisa() {
+    con_nucleos_limpios(|| {
+        let (slot, _) = cores::reserve(7).unwrap();
+        // Reservar no es arrancar: son dos CPUs y una no puede afirmar por la
+        // otra.
+        assert!(!cores::has_arrived(slot));
+        cores::arrived(slot, 7);
+        assert!(cores::has_arrived(slot));
+    });
+}
+
+/// El identificador cero es legitimo, asi que "llego" no se puede representar
+/// guardando el identificador a secas.
+#[test]
+fn el_nucleo_cero_tambien_puede_avisar() {
+    con_nucleos_limpios(|| {
+        let (slot, _) = cores::reserve(0).unwrap();
+        assert!(!cores::has_arrived(slot));
+        cores::arrived(slot, 0);
+        assert!(cores::has_arrived(slot), "el nucleo 0 no pudo avisar");
+    });
+}
+
+#[test]
+fn cada_nucleo_tiene_su_ranura_y_su_handle() {
+    con_nucleos_limpios(|| {
+        let (s1, h1) = cores::reserve(1).unwrap();
+        let (s2, h2) = cores::reserve(2).unwrap();
+        assert_ne!(s1, s2);
+        assert_ne!(h1, h2);
+
+        cores::arrived(s2, 2);
+        assert!(cores::has_arrived(s2));
+        assert!(!cores::has_arrived(s1), "aviso por la ranura equivocada");
+    });
+}
+
+#[test]
+fn lo_reclamado_se_puede_listar_y_no_se_repite() {
+    con_nucleos_limpios(|| {
+        cores::reserve(3).unwrap();
+        assert!(cores::is_claimed(3));
+        assert!(!cores::is_claimed(4));
+        assert_eq!(cores::count(), 1);
+    });
+}
+
+#[test]
+fn la_tabla_de_nucleos_tiene_techo() {
+    con_nucleos_limpios(|| {
+        for i in 0..cores::MAX {
+            cores::reserve(i as u64).unwrap();
+        }
+        assert_eq!(cores::reserve(999), Err(cores::Error::TableFull));
+    });
+}
+
+#[test]
+fn el_estado_de_un_nucleo_se_puede_corregir() {
+    con_nucleos_limpios(|| {
+        let (slot, _) = cores::reserve(5).unwrap();
+        assert_eq!(cores::all().next().unwrap().state, cores::State::Starting);
+        cores::settle(slot, cores::State::Failed);
+        assert_eq!(cores::all().next().unwrap().state, cores::State::Failed);
+    });
 }

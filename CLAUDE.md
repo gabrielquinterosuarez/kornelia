@@ -80,8 +80,8 @@ Arranca por UEFI en x86_64 y aarch64, le toma la máquina al firmware y **habla
 CBOR** por el cordón umbilical. Corre sobre pila y tablas de páginas propias, y
 captura los faults en vez de reiniciarse.
 
-**Seis de los diez verbos andan:** `describe`, `mem.claim`, `mem.read`,
-`mem.write`, `release` y **`exec`**. El agente sube código máquina, lo corre, y
+**Siete de los diez verbos andan:** `describe`, `mem.claim`, `mem.read`,
+`mem.write`, `release`, **`exec`** y **`core.claim`**. El agente sube código máquina, lo corre, y
 si falla **el fault vuelve como respuesta en vez de matar la máquina** (P5) —
 ni siquiera destruyendo el puntero de pila, porque las excepciones entran en una
 pila aparte (IST en x86_64, `SP_EL1` en aarch64).
@@ -89,9 +89,12 @@ pila aparte (IST en x86_64, `SP_EL1` en aarch64).
 `describe` sirve mapa de memoria, tablas, reclamos, núcleos, controlador de
 interrupciones y PCIe, leídos de ACPI.
 
-Faltan `core.claim`, `irq.install`, `irq.install_raw` y `dma.allow`.
+`core.claim` arranca los otros núcleos: PSCI en aarch64, INIT/SIPI más un
+trampolín de 16→32→64 bits en x86_64.
 
-El portón es `./scripts/check.sh`: frontera + 26 tests + compila las dos + las
+Faltan `irq.install`, `irq.install_raw` y `dma.allow`.
+
+El portón es `./scripts/check.sh`: frontera + 69 tests + compila las dos + las
 bootea en QEMU y les habla el protocolo con `scripts/client.py`. Corrélo antes
 de commitear; CI corre exactamente ese script.
 
@@ -101,17 +104,17 @@ de commitear; CI corre exactamente ese script.
 argumentos en `docs/DISENO.md` §8. Los tres verbos que faltan son grandes y
 ninguno bloquea a los otros:
 
-1. `core.claim` — arrancar los otros núcleos. PSCI en aarch64 (corto), INIT/SIPI
-   por el APIC en x86_64 (largo). Ya sabemos cuántos hay y cómo se llaman.
+1. **Darle trabajo a los núcleos reclamados.** Hoy arrancan y quedan esperando,
+   pero `exec` corre siempre en el que atiende el protocolo. Falta un buzón por
+   núcleo y que `exec` acepte a cuál mandárselo (sección 4: `exec(core, ...)`).
 2. `irq.install` — handlers del agente (D9). Falta sacar de la MADT las rutas de
    interrupción.
 3. `dma.allow` — el IOMMU. El más grande del proyecto y el más específico de
    cada fabricante; es lo que más gana con silicio real.
 
-Deudas anotadas en `docs/DISENO.md` §7. Las que bloqueaban `mem.claim` ya están
-cerradas: el kernel corre sobre **pila propia** y **tablas de páginas propias**,
-las dos verificadas contra el mapa real en cada arranque, y **captura los
-faults** en vez de reiniciarse en silencio.
+Deudas anotadas en `docs/DISENO.md` §7. La más viva: **un núcleo reclamado
+todavía no puede recibir trabajo** — arranca, se configura solo y queda
+esperando, pero `exec` corre siempre en el que atiende el protocolo.
 
 ## Cómo correrlo
 

@@ -34,6 +34,7 @@
 use crate::cbor::{self, Reader, Scan, Writer};
 use crate::acpi::Hardware;
 use crate::claims;
+use crate::cores;
 use crate::machine::Machine;
 use crate::memory::Kind;
 use crate::platform::Platform;
@@ -126,6 +127,7 @@ fn atender<P: Platform>(p: &mut P, req: &[u8], m: &Machine, hw: &Hardware) {
         "mem.write" => mem_write(p, id, &mut r),
         "release" => release(p, id, &mut r),
         "exec" => exec(p, id, &mut r),
+        "core.claim" => core_claim(p, id, &mut r, hw),
         _ => responder_error(p, id, "unknown verb"),
     }
 }
@@ -145,6 +147,8 @@ struct Pedido {
     cpus: bool,
     interrupts: bool,
     pcie: bool,
+    /// Los nucleos que el agente tiene reclamados y andando (D13).
+    cores: bool,
     /// Si no vino la clave `what`, se devuelve el indice (D16).
     indice: bool,
 }
@@ -179,6 +183,7 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
                     Some("cpus") => q.cpus = true,
                     Some("interrupts") => q.interrupts = true,
                     Some("pcie") => q.pcie = true,
+                    Some("cores") => q.cores = true,
                     // Contestar solo con lo que se reconocio, callado, seria
                     // mentir por omision.
                     Some(_) => return responder_error(p, id, "unknown section in what"),
@@ -208,7 +213,7 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
         if q.claims {
             secciones += 1;
         }
-        for extra in [q.cpus, q.interrupts, q.pcie] {
+        for extra in [q.cpus, q.interrupts, q.pcie, q.cores] {
             if extra {
                 secciones += 1;
             }
@@ -257,6 +262,13 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
                 }
             }
         }
+        if q.cores {
+            w.text("cores");
+            w.array(cores::count());
+            for c in cores::all() {
+                escribir_core(&mut w, &c);
+            }
+        }
         if q.pcie {
             w.text("pcie");
             match hw.pcie {
@@ -286,19 +298,20 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
 
 /// El indice: que hay para pedir, y cuanto de cada cosa.
 fn escribir_indice(w: &mut Writer<'_>, m: &Machine, hw: &Hardware, arch: &str) {
-    w.map(8);
+    w.map(9);
 
     w.text("arch");
     w.text(arch);
 
     w.text("sections");
-    w.array(6);
+    w.array(7);
     w.text("memory");
     w.text("tables");
     w.text("claims");
     w.text("cpus");
     w.text("interrupts");
     w.text("pcie");
+    w.text("cores");
 
     w.text("memory");
     w.map(2);
@@ -332,6 +345,9 @@ fn escribir_indice(w: &mut Writer<'_>, m: &Machine, hw: &Hardware, arch: &str) {
 
     w.text("pcie");
     w.bool(hw.pcie.is_some());
+
+    w.text("cores");
+    w.uint(cores::count() as u64);
 }
 
 /// El mapa de memoria: un arreglo de `[inicio, bytes, clase]`.
@@ -484,6 +500,8 @@ struct Args<'a> {
     handle: Option<u64>,
     off: Option<u64>,
     len: Option<u64>,
+    /// El identificador de un nucleo, para `core.claim`.
+    core_id: Option<u64>,
     /// Prestados del buffer de entrada, no copiados: subir codigo maquina no
     /// puede costar una copia mas. La vida util los ata al pedido, asi que se
     /// dejan de poder usar cuando llega el siguiente — que es exactamente
@@ -500,6 +518,7 @@ fn leer_args<'a>(r: &mut Reader<'a>) -> Option<Args<'a>> {
         handle: None,
         off: None,
         len: None,
+        core_id: None,
         datos: None,
     };
 
@@ -522,6 +541,7 @@ fn leer_args<'a>(r: &mut Reader<'a>) -> Option<Args<'a>> {
             "handle" => a.handle = Some(r.uint()?),
             "off" => a.off = Some(r.uint()?),
             "len" => a.len = Some(r.uint()?),
+            "id" => a.core_id = Some(r.uint()?),
             _ => r.skip()?,
         }
     }
@@ -753,4 +773,92 @@ fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
     }
 
     terminar(p, id, w);
+}
+
+// ---------------------------------------------------------------------------
+// core.claim
+// ---------------------------------------------------------------------------
+
+/// Cuanto se espera a que un nucleo avise que llego, en vueltas de espera.
+///
+/// No hay reloj todavia, asi que se cuenta en iteraciones. El numero es
+/// generoso: arrancar un nucleo tarda microsegundos, y esperar de mas solo
+/// cuesta tiempo la unica vez que el nucleo no arranca.
+const ESPERA: u64 = 200_000_000;
+
+/// Arranca un nucleo y lo deja esperando trabajo (D13).
+///
+/// El agente no necesita que el kernel sea plural para serlo el: si quiere
+/// cinco cosas a la vez, reclama cinco nucleos (P2).
+fn core_claim<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, hw: &Hardware) {
+    let Some(a) = leer_args(r) else {
+        return responder_error(p, id, "malformed arguments");
+    };
+    let Some(pedido) = a.core_id else {
+        return responder_error(p, id, "core.claim needs id");
+    };
+
+    // Tiene que ser un nucleo que la maquina informe, y que informe como
+    // usable: inventarle uno seria mandar una interrupcion al vacio.
+    let Some(cpu) = hw.cpus.iter().find(|c| c.id == pedido) else {
+        return responder_fallo_core(p, id, cores::Error::NoSuchCore);
+    };
+    if !cpu.enabled {
+        return responder_fallo_core(p, id, cores::Error::NotUsable);
+    }
+    if pedido == p.this_core() {
+        // Es el que esta contestando este pedido.
+        return responder_fallo_core(p, id, cores::Error::IsBootCore);
+    }
+    if cores::is_claimed(pedido) {
+        return responder_fallo_core(p, id, cores::Error::Taken);
+    }
+
+    let (slot, handle) = match cores::reserve(pedido) {
+        Err(e) => return responder_fallo_core(p, id, e),
+        Ok(x) => x,
+    };
+
+    // SAFETY: las tablas de paginas y la captura de faults ya estan puestas;
+    // el nucleo nuevo copia esa configuracion.
+    if let Err(e) = unsafe { p.start_core(hw, pedido, slot) } {
+        cores::settle(slot, cores::State::Failed);
+        return responder_fallo_core(p, id, e);
+    }
+
+    // Que el pedido se haya hecho no significa que el nucleo este vivo: son dos
+    // CPUs distintas y una no puede afirmar por la otra. Se espera a que avise.
+    let mut vueltas = 0u64;
+    while !cores::has_arrived(slot) && vueltas < ESPERA {
+        core::hint::spin_loop();
+        vueltas += 1;
+    }
+
+    if !cores::has_arrived(slot) {
+        cores::settle(slot, cores::State::Failed);
+        return responder_fallo_core(p, id, cores::Error::NeverArrived);
+    }
+    cores::settle(slot, cores::State::Idle);
+
+    let out = unsafe { &mut *core::ptr::addr_of_mut!(OUTBOX) };
+    let mut w = Writer::new(out);
+    w.array(3);
+    w.uint(id);
+    w.bool(true);
+    escribir_core(&mut w, &cores::Core { handle, id: pedido, state: cores::State::Idle });
+    terminar(p, id, w);
+}
+
+fn escribir_core(w: &mut Writer<'_>, c: &cores::Core) {
+    w.map(3);
+    w.text("handle");
+    w.uint(c.handle);
+    w.text("id");
+    w.uint(c.id);
+    w.text("state");
+    w.text(c.state.code());
+}
+
+fn responder_fallo_core<P: Platform>(p: &mut P, id: u64, e: cores::Error) {
+    responder_error(p, id, e.code());
 }

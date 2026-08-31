@@ -18,14 +18,14 @@ Arranca por UEFI en **x86_64 y aarch64**, le toma la máquina al firmware
 (`ExitBootServices`) y **habla CBOR por el cordón umbilical** (D6). Corre sobre
 pila y tablas de páginas propias, y captura los faults en vez de reiniciarse.
 
-**Seis de los diez verbos andan:** `describe`, `mem.claim`, `mem.read`,
-`mem.write`, `release` y **`exec`**. Un agente ya puede preguntarle a la máquina
+**Siete de los diez verbos andan:** `describe`, `mem.claim`, `mem.read`,
+`mem.write`, `release`, **`exec`** y **`core.claim`**. Un agente ya puede preguntarle a la máquina
 qué es —memoria, núcleos, controlador de interrupciones, PCIe—, reclamar memoria
 física, subirle código máquina y **correrlo**. Y si ese código falla, el fault
 vuelve como respuesta en vez de matar la máquina: ni siquiera destruyendo el
 puntero de pila, porque las excepciones entran en una pila aparte.
 
-Faltan `core.claim`, `irq.install`, `irq.install_raw` y `dma.allow`.
+Faltan `irq.install`, `irq.install_raw` y `dma.allow`.
 
 ## Requisitos
 
@@ -78,6 +78,7 @@ un agente: arranca QEMU, espera la marca `-- CBOR --` y habla el protocolo.
 ./scripts/client.py --arch aarch64
 ./scripts/client.py --memoria             # el lazo: claim, write, read, release
 ./scripts/client.py --exec                # sube codigo maquina y lo corre
+./scripts/client.py --smp 4 --nucleos     # arranca los otros nucleos
 ```
 
 Con `--exec` se ve la tesis del proyecto en ocho bytes de código máquina:
@@ -170,10 +171,14 @@ grep -ao '[a-z0-9-]*@[0-9a-f]*' virt.dtb | sort -u
 | `kernel-core/src/machine.rs` | Lo que se sabe de la máquina: regiones y dónde están ACPI y el device tree. |
 | `kernel-core/src/tables.rs` | Lee y **verifica** los encabezados de ACPI y del device tree. |
 | `kernel-core/src/cbor.rs` | El formato binario del protocolo (D6), escrito a mano. |
-| `kernel-core/src/protocol.rs` | Los verbos. Hoy cinco de los diez. |
+| `kernel-core/src/protocol.rs` | Los verbos. Hoy siete de los diez. |
 | `kernel-core/src/claims.rs` | La tabla de handles: qué tiene reclamado el agente (D14). |
 | `kernel-core/src/fault.rs` | Los faults como datos (P5): causa, dirección y registros. |
-| `kernel-core/src/tests.rs` | 26 tests que corren en la máquina de desarrollo, sin bootear nada. |
+| `kernel-core/src/acpi.rs` | Recorre las tablas de ACPI: núcleos, interrupciones y PCIe. |
+| `kernel-core/src/cores.rs` | Los núcleos que el agente tiene reclamados (D13). |
+| `kernel-core/src/paging.rs` | El **plan** de mapeo: qué va cacheable y qué no (D12). |
+| `kernel-core/src/stack.rs` | La pila propia del kernel, verificada contra el mapa real. |
+| `kernel-core/src/tests.rs` | 69 tests que corren en la máquina de desarrollo, sin bootear nada. |
 | `boot-uefi/` | El entorno de arranque UEFI, compartido por las dos arquitecturas. Sin `asm!`. |
 | `kernel-x86_64/` | Arranque UEFI + UART 16550 en puertos de E/S. |
 | `kernel-aarch64/` | Arranque UEFI + UART PL011 en MMIO. |
