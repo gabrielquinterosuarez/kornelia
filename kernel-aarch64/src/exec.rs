@@ -28,24 +28,24 @@
 use kernel_core::fault::Outcome;
 
 /// 64 KiB de pila de agente para cada nucleo.
-const TAM_PILA_AGENTE: usize = 64 * 1024;
+const AGENT_STACK_SIZE: usize = 64 * 1024;
 
 #[repr(C, align(16))]
-struct PilasAgente([[u8; TAM_PILA_AGENTE]; crate::percpu::RANURAS]);
+struct AgentStacks([[u8; AGENT_STACK_SIZE]; crate::percpu::SLOTS]);
 
-static mut PILAS_AGENTE: PilasAgente =
-    PilasAgente([[0; TAM_PILA_AGENTE]; crate::percpu::RANURAS]);
+static mut AGENT_STACKS: AgentStacks =
+    AgentStacks([[0; AGENT_STACK_SIZE]; crate::percpu::SLOTS]);
 
 core::arch::global_asm!(
     r#"
 .section .text
-.globl exec_trampolin
+.globl exec_trampoline
 
 // x0 = direccion de entrada. Devuelve 0 si volvio solo, 1 si hubo fault.
 //
 // Todo lo que toca esta en el bloque privado de este nucleo, que sale de
 // TPIDR_EL1. Los offsets son los del struct `PerCpu`, verificados al compilar.
-exec_trampolin:
+exec_trampoline:
     stp x29, x30, [sp, #-96]!
     stp x19, x20, [sp, #16]
     stp x21, x22, [sp, #32]
@@ -56,8 +56,8 @@ exec_trampolin:
     mrs  x20, tpidr_el1               // el bloque de este nucleo
 
     // Se arma el punto de recuperacion ANTES de saltar.
-    adrp x9,  exec_recuperacion
-    add  x9,  x9, :lo12:exec_recuperacion
+    adrp x9,  exec_recovery
+    add  x9,  x9, :lo12:exec_recovery
     str  x9,  [x20, #8]               // rip
     mov  x9,  sp
     str  x9,  [x20, #16]              // sp del kernel
@@ -103,9 +103,9 @@ exec_trampolin:
     str  xzr, [x20, #0]
 
     mov  x0,  #0
-    b    exec_salida
+    b    exec_exit
 
-exec_recuperacion:
+exec_recovery:
     // Aca aterriza el `eret` del handler cuando hubo fault. Ya llega con
     // SPSel=1 porque el handler se lo prendio al SPSR; falta ponerle el valor.
     mrs  x9,  tpidr_el1
@@ -114,7 +114,7 @@ exec_recuperacion:
     str  xzr, [x9, #0]
     mov  x0,  #1
 
-exec_salida:
+exec_exit:
     ldp  x19, x20, [sp, #16]
     ldp  x21, x22, [sp, #32]
     ldp  x23, x24, [sp, #48]
@@ -126,7 +126,7 @@ exec_salida:
 );
 
 extern "C" {
-    fn exec_trampolin(entry: u64) -> u64;
+    fn exec_trampoline(entry: u64) -> u64;
 }
 
 /// Salta al codigo y vuelve con lo que haya pasado.
@@ -135,16 +135,16 @@ extern "C" {
 ///
 /// `entry` tiene que apuntar a memoria mapeada y ejecutable.
 pub unsafe fn run(entry: u64) -> Outcome {
-    let ranura = crate::percpu::ranura();
-    let bloque = crate::percpu::bloque(ranura);
+    let slot = crate::percpu::slot();
+    let block = crate::percpu::block(slot);
 
     // La pila de agente de este nucleo.
-    (*bloque).pila =
-        core::ptr::addr_of!(PILAS_AGENTE) as u64 + ((ranura + 1) * TAM_PILA_AGENTE) as u64;
+    (*block).stack =
+        core::ptr::addr_of!(AGENT_STACKS) as u64 + ((slot + 1) * AGENT_STACK_SIZE) as u64;
 
-    let hubo_fault = exec_trampolin(entry) != 0;
+    let had_fault = exec_trampoline(entry) != 0;
 
-    if hubo_fault {
+    if had_fault {
         // El handler ya dejo anotado el fault, con los registros del momento
         // exacto en que fallo — que son mas utiles que los de ahora.
         let f = crate::vectors::last();
@@ -153,7 +153,7 @@ pub unsafe fn run(entry: u64) -> Outcome {
         Outcome {
             faulted: false,
             regs: core::slice::from_raw_parts(
-                core::ptr::addr_of!((*bloque).regs) as *const u64,
+                core::ptr::addr_of!((*block).regs) as *const u64,
                 33,
             ),
             fault: None,
@@ -173,31 +173,31 @@ pub unsafe fn run(entry: u64) -> Outcome {
 /// # Safety
 ///
 /// El rango tiene que estar mapeado.
-pub unsafe fn sincronizar_cache(start: u64, bytes: u64) {
+pub unsafe fn sync_cache(start: u64, bytes: u64) {
     // El tamano de linea de cada cache lo informa el propio CPU (P4). No se
     // hornea: varia entre implementaciones.
     let ctr: u64;
     core::arch::asm!("mrs {}, ctr_el0", out(reg) ctr, options(nomem, nostack));
-    let linea_datos = 4u64 << ((ctr >> 16) & 0xF);
-    let linea_instr = 4u64 << (ctr & 0xF);
+    let data_line = 4u64 << ((ctr >> 16) & 0xF);
+    let instr_line = 4u64 << (ctr & 0xF);
 
-    let fin = start.saturating_add(bytes);
+    let end = start.saturating_add(bytes);
 
     // Primero limpiar la de datos hasta el punto de unificacion, que es donde
     // las dos se encuentran.
-    let mut a = start & !(linea_datos - 1);
-    while a < fin {
+    let mut a = start & !(data_line - 1);
+    while a < end {
         core::arch::asm!("dc cvau, {}", in(reg) a, options(nostack));
-        a += linea_datos;
+        a += data_line;
     }
     core::arch::asm!("dsb ish", options(nostack));
 
     // Y recien despues invalidar la de instrucciones, para que vaya a buscar lo
     // nuevo. Al reves no serviria: invalidaria y volveria a traer lo viejo.
-    let mut a = start & !(linea_instr - 1);
-    while a < fin {
+    let mut a = start & !(instr_line - 1);
+    while a < end {
         core::arch::asm!("ic ivau, {}", in(reg) a, options(nostack));
-        a += linea_instr;
+        a += instr_line;
     }
     core::arch::asm!("dsb ish", options(nostack));
     core::arch::asm!("isb", options(nostack));

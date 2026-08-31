@@ -40,39 +40,39 @@ pub fn main<P: Platform>(p: &mut P) -> ! {
     // exclusiva.
     let machine = p.machine();
 
-    saludar(p, &machine);
+    greet(p, &machine);
 
     // Después del banner y antes de la marca: si esto colgara, se sabe dónde.
     // SAFETY: el firmware ya soltó la máquina (D25).
-    let tablas = unsafe { p.install_page_tables(&machine) };
-    reportar_tablas(p, tablas, &machine);
+    let tables = unsafe { p.install_page_tables(&machine) };
+    report_tables(p, tables, &machine);
 
     // SAFETY: los handlers son parte de la imagen del kernel, que las tablas de
     // arriba acaban de mapear.
     let handlers = unsafe { p.install_fault_handlers() };
-    probar_los_faults(p, handlers);
+    test_faults(p, handlers);
 
     // Las tablas de ACPI, ya con el identity map puesto: recorrerlas es leer
     // memoria física por todos lados.
-    let hw = leer_hardware(p, &machine);
+    let hw = read_hardware(p, &machine);
 
     // El timbre del cable, para que el núcleo pueda dormir en vez de girar.
     // SAFETY: las tablas de páginas y la captura de excepciones ya están.
-    let timbre = unsafe { p.install_serial_interrupt(&hw) };
-    let con_timbre = reportar_timbre(p, timbre);
+    let doorbell = unsafe { p.install_serial_interrupt(&hw) };
+    let with_doorbell = report_doorbell(p, doorbell);
 
     // Y el timbre del buzón, para que el agente pueda despertar al núcleo sin
     // pasar por el cable. SAFETY: el del cable ya está, y comparten controlador.
-    if con_timbre {
-        let campana = unsafe { p.install_doorbell(&hw) };
-        reportar_campana(p, campana);
+    if with_doorbell {
+        let bell = unsafe { p.install_doorbell(&hw) };
+        report_bell(p, bell);
     }
 
     // La marca va última: de acá en adelante lo que sale es binario, así que
     // cualquier texto después la convierte en basura para el cliente.
     {
         let mut u = Umbilical::new(p);
-        u.line(protocol::MARCA);
+        u.line(protocol::MARKER);
     }
 
     // Desde acá manda el protocolo: lo que sale es binario (D6).
@@ -81,7 +81,7 @@ pub fn main<P: Platform>(p: &mut P) -> ! {
     // dependencia heredada es una suposición sin dueño.
     p.set_interrupts(false);
 
-    protocol::serve(p, &machine, &hw, con_timbre)
+    protocol::serve(p, &machine, &hw, with_doorbell)
 }
 
 /// Cuenta si el cable serie quedó con timbre (D5, D17).
@@ -89,7 +89,7 @@ pub fn main<P: Platform>(p: &mut P) -> ! {
 /// Que no se pueda instalar no es fatal: se vuelve a preguntarle al UART byte
 /// por byte, que es lo que se hacía hasta ahora. Anda igual, pero quema un
 /// núcleo entero — así que se dice.
-fn reportar_timbre<P: Platform>(p: &mut P, r: Result<u8, &'static str>) -> bool {
+fn report_doorbell<P: Platform>(p: &mut P, r: Result<u8, &'static str>) -> bool {
     use core::fmt::Write;
     let mut u = Umbilical::new(p);
 
@@ -98,9 +98,9 @@ fn reportar_timbre<P: Platform>(p: &mut P, r: Result<u8, &'static str>) -> bool 
             let _ = write!(u, "serie: timbre {v}, el nucleo duerme entre pedidos\r\n");
             true
         }
-        Err(motivo) => {
+        Err(reason) => {
             u.line("serie: SIN TIMBRE, se sigue preguntando byte por byte");
-            u.kv("  motivo", motivo);
+            u.kv("  motivo", reason);
             u.line("  esto quema un nucleo entero.");
             false
         }
@@ -114,7 +114,7 @@ fn reportar_timbre<P: Platform>(p: &mut P, r: Result<u8, &'static str>) -> bool 
 /// detalle **no** va acá: va por `describe`, que es quien decide cuánto manda
 /// según lo que le pidan (D16). Volcar 110 renglones por serie en cada arranque
 /// sería el kernel decidiendo por el cliente.
-fn saludar<P: Platform>(p: &mut P, m: &Machine) {
+fn greet<P: Platform>(p: &mut P, m: &Machine) {
     use core::fmt::Write;
 
     let mut u = Umbilical::new(p);
@@ -136,18 +136,18 @@ fn saludar<P: Platform>(p: &mut P, m: &Machine) {
             let _ = u.write_str(" libres\r\n");
 
             let _ = u.write_str("tablas:");
-            for (nombre, hay) in [
+            for (name, hay) in [
                 ("acpi", m.tables.acpi.is_some()),
                 ("device-tree", m.tables.device_tree.is_some()),
                 ("smbios", m.tables.smbios.is_some()),
             ] {
-                let _ = write!(u, " {nombre}={}", if hay { "si" } else { "no" });
+                let _ = write!(u, " {name}={}", if hay { "si" } else { "no" });
             }
             let _ = u.write_str("\r\n");
         }
     }
 
-    verificar_la_pila(&mut u, m);
+    check_stack(&mut u, m);
 
     u.line("");
     u.line("Sin procesos. Sin archivos. Sin shell. Sin usuarios.");
@@ -158,7 +158,7 @@ fn saludar<P: Platform>(p: &mut P, m: &Machine) {
 /// Que falle no es fatal hoy: se sigue con las tablas del firmware y el kernel
 /// anda. Pero `mem.claim` no se puede habilitar así, porque esas tablas viven
 /// en memoria que el mapa informa como libre — y por eso se dice fuerte.
-fn reportar_tablas<P: Platform>(
+fn report_tables<P: Platform>(
     p: &mut P,
     r: Result<paging::Mapping, &'static str>,
     maq: &Machine,
@@ -195,9 +195,9 @@ fn reportar_tablas<P: Platform>(
                 u.line("  mem.claim NO se puede habilitar asi.");
             }
         }
-        Err(motivo) => {
+        Err(reason) => {
             u.line("tablas: NO SE PUDIERON ARMAR, se sigue con las del firmware");
-            u.kv("  motivo", motivo);
+            u.kv("  motivo", reason);
             u.line("  mem.claim NO se puede habilitar asi.");
         }
     }
@@ -211,7 +211,7 @@ fn reportar_tablas<P: Platform>(
 /// suponerse — si algún día no se cumple, el síntoma sería que el agente
 /// reclama memoria legítimamente libre y le pisa la pila al kernel, que es la
 /// clase de falla que aparece lejos de su causa.
-fn verificar_la_pila<P: Platform>(u: &mut Umbilical<'_, P>, m: &Machine) {
+fn check_stack<P: Platform>(u: &mut Umbilical<'_, P>, m: &Machine) {
     use core::fmt::Write;
 
     let base = stack::base();
@@ -241,13 +241,13 @@ fn verificar_la_pila<P: Platform>(u: &mut Umbilical<'_, P>, m: &Machine) {
 /// Así que el arranque provoca un breakpoint a propósito y comprueba que haya
 /// vuelto con la causa correcta. Es el mismo criterio que con `CR3`: se relee
 /// en vez de suponer.
-fn probar_los_faults<P: Platform>(p: &mut P, r: Result<(), &'static str>) {
+fn test_faults<P: Platform>(p: &mut P, r: Result<(), &'static str>) {
     use core::fmt::Write;
 
-    if let Err(motivo) = r {
+    if let Err(reason) = r {
         let mut u = Umbilical::new(p);
         u.line("faults: NO SE PUDO INSTALAR LA CAPTURA");
-        u.kv("  motivo", motivo);
+        u.kv("  motivo", reason);
         u.line("  cualquier error va a reiniciar la maquina en silencio.");
         return;
     }
@@ -255,10 +255,10 @@ fn probar_los_faults<P: Platform>(p: &mut P, r: Result<(), &'static str>) {
     // Si esto no vuelve, no vuelve nada: es la prueba.
     p.trigger_breakpoint();
 
-    let capturado = p.last_fault();
+    let captured = p.last_fault();
     let mut u = Umbilical::new(p);
 
-    match capturado {
+    match captured {
         Some(f) if f.cause == fault::Cause::Breakpoint => {
             let _ = write!(
                 u,
@@ -283,18 +283,18 @@ fn probar_los_faults<P: Platform>(p: &mut P, r: Result<(), &'static str>) {
 ///
 /// Que no haya ACPI no es un error: una placa embebida se describe con device
 /// tree y no tiene ninguna. Se dice y se sigue.
-fn leer_hardware<P: Platform>(p: &mut P, m: &Machine) -> acpi::Hardware {
+fn read_hardware<P: Platform>(p: &mut P, m: &Machine) -> acpi::Hardware {
     use core::fmt::Write;
 
     // Se pide antes de tomar el cordón: `Umbilical` toma prestado `p`.
     let p_uart = p.uart_address();
 
     let hw = match m.tables.acpi {
-        None => acpi::Hardware::vacio(),
+        None => acpi::Hardware::blank(),
         // SAFETY: el RSDP ya se verificó por firma y checksum, y el identity map
         // de D12 cubre toda la memoria de la máquina.
         Some(addr) => match unsafe { tables::read_acpi(addr) } {
-            None => acpi::Hardware::vacio(),
+            None => acpi::Hardware::blank(),
             Some(rsdp) => unsafe { acpi::read(&rsdp) },
         },
     };
@@ -321,11 +321,11 @@ fn leer_hardware<P: Platform>(p: &mut P, m: &Machine) -> acpi::Hardware {
     }
     // Lo que la maquina dice del puerto serie, contra lo que teniamos horneado.
     match (hw.serial, p_uart) {
-        (Some(sp), Some(nuestra)) if sp.address != nuestra => {
+        (Some(sp), Some(ours)) if sp.address != ours => {
             let _ = write!(
                 u,
                 "  serie: LA MAQUINA DICE {:#x} Y USAMOS {:#x}\r\n",
-                sp.address, nuestra
+                sp.address, ours
             );
         }
         (Some(sp), Some(_)) => {
@@ -352,7 +352,7 @@ fn leer_hardware<P: Platform>(p: &mut P, m: &Machine) -> acpi::Hardware {
 }
 
 /// Cuenta si el buzón quedó con timbre propio (D17).
-fn reportar_campana<P: Platform>(p: &mut P, r: Result<channel::Doorbell, &'static str>) {
+fn report_bell<P: Platform>(p: &mut P, r: Result<channel::Doorbell, &'static str>) {
     use core::fmt::Write;
     let mut u = Umbilical::new(p);
 
@@ -365,9 +365,9 @@ fn reportar_campana<P: Platform>(p: &mut P, r: Result<channel::Doorbell, &'stati
                 d.id, d.count
             );
         }
-        Err(motivo) => {
+        Err(reason) => {
             u.line("buzon: SIN TIMBRE PROPIO");
-            u.kv("  motivo", motivo);
+            u.kv("  motivo", reason);
             u.line("  un pedido que llegue solo por ahi espera al cable.");
         }
     }

@@ -57,35 +57,35 @@ const GICC_EOIR: u64 = 0x010;
 /// Es a proposito y es la contracara del timbre que va a tener el agente. Por
 /// mas que el agente inunde de llamadas, el cordon umbilical pasa primero — y
 /// eso lo hace cumplir el silicio del GIC, no una decision del kernel (D17, P6).
-const PRIORIDAD_SERIE: u8 = 0x00;
+const SERIAL_PRIORITY: u8 = 0x00;
 
 /// El numero de timbre del buzon del agente.
 ///
 /// Del 0 al 15 son las que un nucleo se manda a otro. La 8 esta libre.
-const SGI_BUZON: u32 = 8;
+const SGI_MAILBOX: u32 = 8;
 
 /// La prioridad del buzon: **mas baja que la del cable** (numero mas grande).
 /// Por mas que el agente inunde de llamadas, el cordon pasa primero (D17, P6).
-const PRIORIDAD_BUZON: u8 = 0x80;
+const MAILBOX_PRIORITY: u8 = 0x80;
 
 /// Donde se dispara una interrupcion de nucleo a nucleo.
 const GICD_SGIR: u64 = 0xF00;
 
 /// El numero de interrupcion que no significa nada: el GIC lo devuelve cuando
 /// no habia ninguna de verdad.
-const ESPURIA: u32 = 1023;
+const SPURIOUS: u32 = 1023;
 
 static mut GICD: u64 = 0;
 static mut GICC: u64 = 0;
 static mut CABLE: u32 = 0;
 
-unsafe fn leer(base: u64, reg: u64) -> u32 {
+unsafe fn read_reg(base: u64, reg: u64) -> u32 {
     core::ptr::read_volatile((base + reg) as *const u32)
 }
-unsafe fn escribir(base: u64, reg: u64, v: u32) {
+unsafe fn write_reg(base: u64, reg: u64, v: u32) {
     core::ptr::write_volatile((base + reg) as *mut u32, v);
 }
-unsafe fn escribir_byte(base: u64, reg: u64, v: u8) {
+unsafe fn write_byte(base: u64, reg: u64, v: u8) {
     core::ptr::write_volatile((base + reg) as *mut u8, v);
 }
 
@@ -101,31 +101,31 @@ pub unsafe fn install(hw: &Hardware) -> Result<u8, &'static str> {
     if gic.cpu_interface == 0 {
         return Err("la maquina no informa la interfaz de nucleo del GIC");
     }
-    let Some(serie) = hw.serial else {
+    let Some(serial) = hw.serial else {
         return Err("la maquina no informa donde esta el puerto serie");
     };
-    if serie.gsi == 0 {
+    if serial.gsi == 0 {
         return Err("la maquina no informa por que interrupcion avisa el serie");
     }
 
     GICD = gic.address;
     GICC = gic.cpu_interface;
-    CABLE = serie.gsi;
+    CABLE = serial.gsi;
 
     // Encender el distribuidor y la interfaz de este nucleo.
-    escribir(GICD, GICD_CTLR, 1);
-    escribir(GICC, GICC_PMR, 0xF0); // que pase todo salvo lo menos prioritario
-    escribir(GICC, GICC_CTLR, 1);
+    write_reg(GICD, GICD_CTLR, 1);
+    write_reg(GICC, GICC_PMR, 0xF0); // que pase todo salvo lo menos prioritario
+    write_reg(GICC, GICC_CTLR, 1);
 
-    let n = serie.gsi;
+    let n = serial.gsi;
 
     // Prioridad, y a que nucleo va. El byte de destino es una mascara de
     // nucleos: el bit 0 es el primero.
-    escribir_byte(GICD, GICD_IPRIORITYR + n as u64, PRIORIDAD_SERIE);
-    escribir_byte(GICD, GICD_ITARGETSR + n as u64, 1);
+    write_byte(GICD, GICD_IPRIORITYR + n as u64, SERIAL_PRIORITY);
+    write_byte(GICD, GICD_ITARGETSR + n as u64, 1);
 
     // Habilitarla: un bit por interrupcion, de a 32 por registro.
-    escribir(GICD, GICD_ISENABLER + (n as u64 / 32) * 4, 1 << (n % 32));
+    write_reg(GICD, GICD_ISENABLER + (n as u64 / 32) * 4, 1 << (n % 32));
 
     // Y decirle al UART que levante la mano cuando llegue un byte.
     crate::uart::enable_rx_interrupt();
@@ -142,18 +142,18 @@ pub unsafe fn install(hw: &Hardware) -> Result<u8, &'static str> {
 /// # Safety
 ///
 /// Solo desde el nucleo que atiende, y sin reentrar.
-pub unsafe fn atender() {
+pub unsafe fn dispatch() {
     if GICC == 0 {
         return;
     }
     // Preguntar que sono. Leer el registro ya es reconocer la interrupcion.
     loop {
-        let cual = leer(GICC, GICC_IAR);
-        let id = cual & 0x3FF;
-        if id == ESPURIA {
+        let which = read_reg(GICC, GICC_IAR);
+        let id = which & 0x3FF;
+        if id == SPURIOUS {
             break;
         }
-        if id == SGI_BUZON {
+        if id == SGI_MAILBOX {
                 // Solo despierta. El trabajo lo hace el bucle.
             kernel_core::channel::rang();
         } else if id == CABLE {
@@ -174,7 +174,7 @@ pub unsafe fn atender() {
             }
         }
         // "Ya atendi", con el mismo numero que vino.
-        escribir(GICC, GICC_EOIR, cual);
+        write_reg(GICC, GICC_EOIR, which);
     }
 }
 
@@ -210,16 +210,16 @@ pub unsafe fn install_doorbell() -> Result<kernel_core::channel::Doorbell, &'sta
         return Err("el GIC todavia no esta encendido");
     }
 
-    escribir_byte(GICD, GICD_IPRIORITYR + SGI_BUZON as u64, PRIORIDAD_BUZON);
-    escribir(GICD, GICD_ISENABLER, 1 << SGI_BUZON);
+    write_byte(GICD, GICD_IPRIORITYR + SGI_MAILBOX as u64, MAILBOX_PRIORITY);
+    write_reg(GICD, GICD_ISENABLER, 1 << SGI_MAILBOX);
 
     // Una sola escritura: los bits de arriba dicen a que nucleos, los de abajo
     // que numero de timbre. El bit 16 es el primer nucleo.
-    let valor = (1u64 << 16) | SGI_BUZON as u64;
+    let value = (1u64 << 16) | SGI_MAILBOX as u64;
     Ok(kernel_core::channel::Doorbell {
-        writes: [(GICD + GICD_SGIR, valor, 4), (0, 0, 0)],
+        writes: [(GICD + GICD_SGIR, value, 4), (0, 0, 0)],
         count: 1,
-        id: SGI_BUZON,
+        id: SGI_MAILBOX,
     })
 }
 
@@ -230,14 +230,14 @@ const GICD_ISPENDR: u64 = 0x200;
 
 /// La prioridad de los aparatos del agente: **mas baja que el cable**. Un
 /// aparato que se vuelva loco no puede tapar el cordon (D17, P6).
-const PRIORIDAD_AGENTE: u8 = 0xA0;
+const AGENT_PRIORITY: u8 = 0xA0;
 
 /// Rutea una interrupcion de aparato al codigo del agente.
 ///
 /// # Safety
 ///
 /// `install` tiene que haber corrido antes.
-pub unsafe fn install_agente(
+pub unsafe fn install_agent(
     hw: &Hardware,
     interrupt: u32,
     _slot: usize,
@@ -255,7 +255,7 @@ pub unsafe fn install_agente(
         return Err(Error::NoRawPath);
     }
     // Ni el cable ni el timbre del buzon se entregan.
-    if hw.serial.map(|s| s.gsi) == Some(interrupt) || interrupt == SGI_BUZON {
+    if hw.serial.map(|s| s.gsi) == Some(interrupt) || interrupt == SGI_MAILBOX {
         return Err(Error::IsKernels);
     }
     // Del 0 al 31 son las de nucleo a nucleo y las privadas de cada nucleo.
@@ -263,9 +263,9 @@ pub unsafe fn install_agente(
         return Err(Error::NoSuchInterrupt);
     }
 
-    escribir_byte(GICD, GICD_IPRIORITYR + interrupt as u64, PRIORIDAD_AGENTE);
-    escribir_byte(GICD, GICD_ITARGETSR + interrupt as u64, 1);
-    escribir(GICD, GICD_ISENABLER + (interrupt as u64 / 32) * 4, 1 << (interrupt % 32));
+    write_byte(GICD, GICD_IPRIORITYR + interrupt as u64, AGENT_PRIORITY);
+    write_byte(GICD, GICD_ITARGETSR + interrupt as u64, 1);
+    write_reg(GICD, GICD_ISENABLER + (interrupt as u64 / 32) * 4, 1 << (interrupt % 32));
 
     // Como hacerla sonar a proposito: marcarla pendiente en el distribuidor.
     // El GIC no distingue eso de que el aparato haya hablado.

@@ -157,7 +157,7 @@ pub trait Platform {
     /// obligaría a tocar las tablas en caliente, y dos reclamos que compartan
     /// bloque se pisarían el permiso sin que nadie se entere.
     ///
-    /// El grano es el bloque de `paging::BLOQUE`, así que el rango tiene que
+    /// El grano es el bloque de `paging::BLOCK`, así que el rango tiene que
     /// estar alineado y ser múltiplo de eso. El que llama se encarga.
     ///
     /// # Safety

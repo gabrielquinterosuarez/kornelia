@@ -46,11 +46,11 @@ pub enum Attr {
 /// Se cubre hasta la region mas alta y no solo hasta donde llega la RAM: ahi
 /// arriba viven los BARs de PCIe, y el agente va a querer escribirles.
 pub fn span_gib(m: &Machine) -> u64 {
-    let mut tope = 0u64;
+    let mut cap = 0u64;
     for r in m.regions {
-        tope = tope.max(r.end());
+        cap = cap.max(r.end());
     }
-    tope.div_ceil(GIB)
+    cap.div_ceil(GIB)
 }
 
 /// Con que atributos hay que mapear la pagina numero `gib`.
@@ -59,14 +59,14 @@ pub fn span_gib(m: &Machine) -> u64 {
 /// dispositivo de una forma dificil de diagnosticar; no cachear RAM de verdad
 /// solo la hace lenta. El error caro y el barato no son simetricos.
 pub fn attr_of(m: &Machine, gib: u64) -> Attr {
-    let inicio = gib * GIB;
-    let fin = inicio + GIB;
+    let start_at = gib * GIB;
+    let end = start_at + GIB;
 
-    let mut hay_memoria = false;
+    let mut has_memory = false;
 
     for r in m.regions {
         // Sin solapamiento con esta pagina, no dice nada de ella.
-        if r.start >= fin || r.end() <= inicio {
+        if r.start >= end || r.end() <= start_at {
             continue;
         }
         match r.kind {
@@ -75,11 +75,11 @@ pub fn attr_of(m: &Machine, gib: u64) -> Attr {
             Kind::Mmio => return Attr::Device,
             // Lo que la maquina no supo explicar no se asume RAM.
             Kind::Reserved | Kind::Broken | Kind::Other(_) => {}
-            _ => hay_memoria = true,
+            _ => has_memory = true,
         }
     }
 
-    if hay_memoria {
+    if has_memory {
         Attr::Memory
     } else {
         // Ni memoria conocida ni nada: un hueco. Puede haber un dispositivo que
@@ -116,7 +116,7 @@ pub struct Mapping {
 /// quinientas doce tablas. La contra es que memoria del agente que caiga en el
 /// mismo bloque de 2 MiB que el kernel queda tambien fuera de su alcance — y eso
 /// se informa en vez de que lo descubra chocandose.
-pub const BLOQUE: u64 = 2 << 20;
+pub const BLOCK: u64 = 2 << 20;
 
 /// Si ese rango pisa memoria del kernel.
 ///

@@ -53,7 +53,7 @@ const MAX_RESPONSE: usize = 64 * 1024;
 
 /// Tope de una lectura, para que la respuesta entre siempre con lugar de sobra
 /// para el envoltorio.
-const MAX_LECTURA: u64 = 32 * 1024;
+const MAX_READ: u64 = 32 * 1024;
 
 static mut INBOX: [u8; MAX_REQUEST] = [0; MAX_REQUEST];
 static mut OUTBOX: [u8; MAX_RESPONSE] = [0; MAX_RESPONSE];
@@ -63,21 +63,21 @@ static mut OUTBOX: [u8; MAX_RESPONSE] = [0; MAX_RESPONSE];
 /// D17: el kernel contesta **por donde le llegaron**. Si contestara siempre por
 /// el cable, el canal rapido serviria para preguntar y no para escuchar.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Origen {
+enum Origin {
     Cable,
-    Buzon,
+    Mailbox,
 }
 
-static mut ORIGEN: Origen = Origen::Cable;
+static mut ORIGIN: Origin = Origin::Cable;
 
 /// La linea que avisa que de aca en adelante lo que sale es binario.
 ///
 /// El arranque habla en texto porque hace falta poder enchufar una terminal y
 /// ver si la maquina esta viva. Desde esta marca, manda el protocolo.
-pub const MARCA: &str = "-- CBOR --";
+pub const MARKER: &str = "-- CBOR --";
 
 /// Atiende el cordon umbilical para siempre.
-pub fn serve<P: Platform>(p: &mut P, m: &Machine, hw: &Hardware, con_timbre: bool) -> ! {
+pub fn serve<P: Platform>(p: &mut P, m: &Machine, hw: &Hardware, with_doorbell: bool) -> ! {
     let inbox = unsafe { &mut *core::ptr::addr_of_mut!(INBOX) };
     let mut n = 0usize;
 
@@ -86,7 +86,7 @@ pub fn serve<P: Platform>(p: &mut P, m: &Machine, hw: &Hardware, con_timbre: boo
         // sacan; sin timbre hay que preguntarle al UART, que es lo que quema un
         // núcleo entero y por lo que existe todo esto.
         // Primero el cable, que es el que nunca se abandona (D17).
-        let del_cable = if con_timbre {
+        let from_cable = if with_doorbell {
             // SAFETY: el bucle corre con el timbre apagado salvo mientras
             // duerme, así que nadie más está en el anillo ahora.
             unsafe { serial::pop() }
@@ -95,9 +95,9 @@ pub fn serve<P: Platform>(p: &mut P, m: &Machine, hw: &Hardware, con_timbre: boo
         };
 
         // Y si por ahí no vino nada, el buzón del agente, si armó uno.
-        let llegado = match del_cable {
+        let arrived_ok = match from_cable {
             Some(b) => {
-                unsafe { ORIGEN = Origen::Cable };
+                unsafe { ORIGIN = Origin::Cable };
                 Some(b)
             }
             None => match channel::current() {
@@ -106,15 +106,15 @@ pub fn serve<P: Platform>(p: &mut P, m: &Machine, hw: &Hardware, con_timbre: boo
                 // que el agente reclamó, así que sigue mapeada.
                 Some(m) => unsafe {
                     m.pop().map(|b| {
-                        ORIGEN = Origen::Buzon;
+                        ORIGIN = Origin::Mailbox;
                         b
                     })
                 },
             },
         };
 
-        let Some(b) = llegado else {
-            if con_timbre {
+        let Some(b) = arrived_ok else {
+            if with_doorbell {
                 // Nada que hacer: dormir hasta que alguien hable. Es lo que
                 // convierte un núcleo quemado en un núcleo reservado.
                 //
@@ -134,7 +134,7 @@ pub fn serve<P: Platform>(p: &mut P, m: &Machine, hw: &Hardware, con_timbre: boo
         } else {
             // Un pedido mas grande que el buffer no se puede completar nunca.
             // Se avisa y se tira, en vez de quedarse callado para siempre.
-            responder_error(p, 0, "request too large");
+            reply_error(p, 0, "request too large");
             n = 0;
             continue;
         }
@@ -145,38 +145,38 @@ pub fn serve<P: Platform>(p: &mut P, m: &Machine, hw: &Hardware, con_timbre: boo
             Scan::Malformed => {
                 // No sirve esperar mas bytes: lo que hay ya no puede volverse
                 // valido. Se descarta todo y se arranca de nuevo.
-                responder_error(p, 0, "malformed cbor");
+                reply_error(p, 0, "malformed cbor");
                 n = 0;
             }
 
-            Scan::Complete(largo) => {
-                atender(p, &inbox[..largo], m, hw);
+            Scan::Complete(length) => {
+                dispatch(p, &inbox[..length], m, hw);
 
                 // Lo que vino pegado atras es el pedido siguiente: se corre al
                 // principio en vez de tirarlo.
-                inbox.copy_within(largo..n, 0);
-                n -= largo;
+                inbox.copy_within(length..n, 0);
+                n -= length;
             }
         }
     }
 }
 
 /// Contesta un pedido ya completo.
-fn atender<P: Platform>(p: &mut P, req: &[u8], m: &Machine, hw: &Hardware) {
+fn dispatch<P: Platform>(p: &mut P, req: &[u8], m: &Machine, hw: &Hardware) {
     let mut r = Reader::new(req);
 
     // `[id, verbo, argumentos]`
     let Some(3) = r.array() else {
-        return responder_error(p, 0, "request must be [id, verb, args]");
+        return reply_error(p, 0, "request must be [id, verb, args]");
     };
     let Some(id) = r.uint() else {
-        return responder_error(p, 0, "id must be an unsigned integer");
+        return reply_error(p, 0, "id must be an unsigned integer");
     };
-    let Some(verbo) = r.text() else {
-        return responder_error(p, id, "verb must be a text string");
+    let Some(verb) = r.text() else {
+        return reply_error(p, id, "verb must be a text string");
     };
 
-    match verbo {
+    match verb {
         "describe" => describe(p, id, &mut r, m, hw),
         "mem.claim" => mem_claim(p, id, &mut r, m),
         "mem.read" => mem_read(p, id, &mut r),
@@ -187,7 +187,7 @@ fn atender<P: Platform>(p: &mut P, req: &[u8], m: &Machine, hw: &Hardware) {
         "listen" => listen(p, id, &mut r),
         "irq.install" => irq_install(p, id, &mut r, hw, false),
         "irq.install_raw" => irq_install(p, id, &mut r, hw, true),
-        _ => responder_error(p, id, "unknown verb"),
+        _ => reply_error(p, id, "unknown verb"),
     }
 }
 
@@ -197,7 +197,7 @@ fn atender<P: Platform>(p: &mut P, req: &[u8], m: &Machine, hw: &Hardware) {
 
 /// Que secciones pidio el cliente.
 #[derive(Default, Clone, Copy)]
-struct Pedido {
+struct Sections {
     memory: bool,
     tables: bool,
     /// Lo que el agente tiene reclamado. Es como recupera su estado al
@@ -213,32 +213,32 @@ struct Pedido {
     /// Los handlers de interrupcion que el agente tiene instalados (D9).
     handlers: bool,
     /// Si no vino la clave `what`, se devuelve el indice (D16).
-    indice: bool,
+    index: bool,
 }
 
 fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw: &Hardware) {
-    let mut q = Pedido { indice: true, ..Default::default() };
+    let mut q = Sections { index: true, ..Default::default() };
 
     // Los argumentos son un mapa, y puede no venir.
-    if let Some(pares) = r.map() {
-        for _ in 0..pares {
-            let Some(clave) = r.text() else {
-                return responder_error(p, id, "argument keys must be text");
+    if let Some(pairs) = r.map() {
+        for _ in 0..pairs {
+            let Some(key) = r.text() else {
+                return reply_error(p, id, "argument keys must be text");
             };
-            if clave != "what" {
+            if key != "what" {
                 // Una clave que este kernel no conoce se saltea: agregar una
                 // clave nueva no tiene por que romper a un kernel viejo.
                 if r.skip().is_none() {
-                    return responder_error(p, id, "malformed argument value");
+                    return reply_error(p, id, "malformed argument value");
                 }
                 continue;
             }
 
-            let Some(cuantas) = r.array() else {
-                return responder_error(p, id, "what must be an array of names");
+            let Some(how_many) = r.array() else {
+                return reply_error(p, id, "what must be an array of names");
             };
-            q.indice = false;
-            for _ in 0..cuantas {
+            q.index = false;
+            for _ in 0..how_many {
                 match r.text() {
                     Some("memory") => q.memory = true,
                     Some("tables") => q.tables = true,
@@ -251,8 +251,8 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
                     Some("handlers") => q.handlers = true,
                     // Contestar solo con lo que se reconocio, callado, seria
                     // mentir por omision.
-                    Some(_) => return responder_error(p, id, "unknown section in what"),
-                    None => return responder_error(p, id, "section names must be text"),
+                    Some(_) => return reply_error(p, id, "unknown section in what"),
+                    None => return reply_error(p, id, "section names must be text"),
                 }
             }
         }
@@ -265,38 +265,38 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
     w.uint(id);
     w.bool(true);
 
-    if q.indice {
-        escribir_indice(&mut w, m, hw, P::ARCH);
+    if q.index {
+        write_index(&mut w, m, hw, P::ARCH);
     } else {
-        let mut secciones = 0;
+        let mut sections = 0;
         if q.memory {
-            secciones += 1;
+            sections += 1;
         }
         if q.tables {
-            secciones += 1;
+            sections += 1;
         }
         if q.claims {
-            secciones += 1;
+            sections += 1;
         }
         for extra in [q.cpus, q.interrupts, q.pcie, q.cores, q.channel, q.handlers] {
             if extra {
-                secciones += 1;
+                sections += 1;
             }
         }
-        w.map(secciones);
+        w.map(sections);
         if q.memory {
             w.text("memory");
-            escribir_memoria(&mut w, m);
+            write_memory(&mut w, m);
         }
         if q.tables {
             w.text("tables");
-            escribir_tablas(&mut w, m, hw);
+            write_tables(&mut w, m, hw);
         }
         if q.claims {
             w.text("claims");
             w.array(claims::count());
             for c in claims::all() {
-                escribir_claim(&mut w, &c);
+                write_claim(&mut w, &c);
             }
         }
         if q.cpus {
@@ -359,7 +359,7 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
             w.text("cores");
             w.array(cores::count());
             for c in cores::all() {
-                escribir_core(&mut w, &c);
+                write_core(&mut w, &c);
             }
         }
         if q.handlers {
@@ -381,17 +381,17 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
                 // probar su handler sin esperar al aparato.
                 w.text("trigger");
                 w.array(h.trigger.count);
-                for (addr, val, ancho) in &h.trigger.writes[..h.trigger.count] {
+                for (addr, value, width) in &h.trigger.writes[..h.trigger.count] {
                     w.array(3);
                     w.uint(*addr);
-                    w.uint(*val);
-                    w.uint(*ancho as u64);
+                    w.uint(*value);
+                    w.uint(*width as u64);
                 }
             }
         }
         if q.channel {
             w.text("channel");
-            escribir_canal(&mut w);
+            write_channel(&mut w);
         }
         if q.pcie {
             w.text("pcie");
@@ -413,15 +413,15 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
     }
 
     match w.finish() {
-        Some(bytes) => emitir(p, bytes),
+        Some(bytes) => emit(p, bytes),
         // Si no entro, se avisa. Quedarse callado dejaria al cliente esperando
         // una respuesta que no va a llegar nunca.
-        None => responder_error(p, id, "response too large"),
+        None => reply_error(p, id, "response too large"),
     }
 }
 
 /// El indice: que hay para pedir, y cuanto de cada cosa.
-fn escribir_indice(w: &mut Writer<'_>, m: &Machine, hw: &Hardware, arch: &str) {
+fn write_index(w: &mut Writer<'_>, m: &Machine, hw: &Hardware, arch: &str) {
     w.map(11);
 
     w.text("arch");
@@ -488,16 +488,16 @@ fn escribir_indice(w: &mut Writer<'_>, m: &Machine, hw: &Hardware, arch: &str) {
 /// cuarto elemento con el numero crudo que informo la maquina. Los arreglos de
 /// CBOR llevan su largo, asi que el cliente ve 3 o 4 y no hay ambiguedad — y
 /// asi no se pierde lo que la maquina dijo de si misma (P4).
-fn escribir_memoria(w: &mut Writer<'_>, m: &Machine) {
+fn write_memory(w: &mut Writer<'_>, m: &Machine) {
     w.array(m.regions.len());
     for r in m.regions {
         match r.kind {
-            Kind::Other(crudo) => {
+            Kind::Other(raw_bytes) => {
                 w.array(4);
                 w.uint(r.start);
                 w.uint(r.bytes);
                 w.text(r.kind.code());
-                w.uint(crudo as u64);
+                w.uint(raw_bytes as u64);
             }
             _ => {
                 w.array(3);
@@ -510,7 +510,7 @@ fn escribir_memoria(w: &mut Writer<'_>, m: &Machine) {
 }
 
 /// Donde la maquina guarda su propia descripcion, ya verificada.
-fn escribir_tablas(w: &mut Writer<'_>, m: &Machine, hw: &Hardware) {
+fn write_tables(w: &mut Writer<'_>, m: &Machine, hw: &Hardware) {
     w.map(4);
 
     w.text("acpi");
@@ -598,7 +598,7 @@ fn escribir_tablas(w: &mut Writer<'_>, m: &Machine, hw: &Hardware) {
 // Salida
 // ---------------------------------------------------------------------------
 
-fn responder_error<P: Platform>(p: &mut P, id: u64, motivo: &str) {
+fn reply_error<P: Platform>(p: &mut P, id: u64, reason: &str) {
     // Un error va a un buffer chico y propio: si se usara OUTBOX, un error
     // ocurrido a mitad de armar una respuesta se pisaria con ella.
     let mut buf = [0u8; 128];
@@ -608,22 +608,22 @@ fn responder_error<P: Platform>(p: &mut P, id: u64, motivo: &str) {
     w.bool(false);
     w.map(1);
     w.text("error");
-    w.text(motivo);
+    w.text(reason);
 
     if let Some(bytes) = w.finish() {
-        emitir(p, bytes);
+        emit(p, bytes);
     }
 }
 
 /// Contesta por donde llegó el pedido (D17).
-fn emitir<P: Platform>(p: &mut P, bytes: &[u8]) {
-    let por_el_buzon = unsafe { ORIGEN } == Origen::Buzon;
+fn emit<P: Platform>(p: &mut P, bytes: &[u8]) {
+    let from_mailbox = unsafe { ORIGIN } == Origin::Mailbox;
 
-    if por_el_buzon {
+    if from_mailbox {
         if let Some(m) = channel::current() {
             // SAFETY: verificado al adoptarlo, y en memoria reclamada.
-            let entero = unsafe { bytes.iter().all(|b| m.push(*b)) };
-            if entero {
+            let whole = unsafe { bytes.iter().all(|b| m.push(*b)) };
+            if whole {
                 return;
             }
             // No entró. El cable siempre está, así que se contesta por ahí en
@@ -666,10 +666,10 @@ struct Args<'a> {
     /// puede costar una copia mas. La vida util los ata al pedido, asi que se
     /// dejan de poder usar cuando llega el siguiente — que es exactamente
     /// cuando se pisan.
-    datos: Option<&'a [u8]>,
+    data: Option<&'a [u8]>,
 }
 
-fn leer_args<'a>(r: &mut Reader<'a>) -> Option<Args<'a>> {
+fn read_args<'a>(r: &mut Reader<'a>) -> Option<Args<'a>> {
     let mut a = Args {
         bytes: None,
         at: None,
@@ -681,18 +681,18 @@ fn leer_args<'a>(r: &mut Reader<'a>) -> Option<Args<'a>> {
         len: None,
         core_id: None,
         interrupt: None,
-        datos: None,
+        data: None,
     };
 
-    let Some(pares) = r.map() else { return Some(a) };
-    for _ in 0..pares {
-        let clave = r.text()?;
-        match clave {
+    let Some(pairs) = r.map() else { return Some(a) };
+    for _ in 0..pairs {
+        let key = r.text()?;
+        match key {
             "bytes" => {
                 // En `mem.write` la clave `bytes` trae los datos; en el resto,
                 // un tamano. Se distinguen por el tipo, que CBOR ya lleva.
                 if let Some(d) = r.bytes() {
-                    a.datos = Some(d);
+                    a.data = Some(d);
                 } else {
                     a.bytes = Some(r.uint()?);
                 }
@@ -712,39 +712,39 @@ fn leer_args<'a>(r: &mut Reader<'a>) -> Option<Args<'a>> {
     Some(a)
 }
 
-fn responder_fallo<P: Platform>(p: &mut P, id: u64, e: claims::Error) {
-    responder_error(p, id, e.code());
+fn reply_failure<P: Platform>(p: &mut P, id: u64, e: claims::Error) {
+    reply_error(p, id, e.code());
 }
 
 fn mem_claim<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine) {
-    let Some(a) = leer_args(r) else {
-        return responder_error(p, id, "malformed arguments");
+    let Some(a) = read_args(r) else {
+        return reply_error(p, id, "malformed arguments");
     };
     let Some(bytes) = a.bytes else {
-        return responder_error(p, id, "mem.claim needs bytes");
+        return reply_error(p, id, "mem.claim needs bytes");
     };
 
-    let quiere_usuario = a.user.unwrap_or(false);
-    let pedido = claims::Request {
+    let wants_user = a.user.unwrap_or(false);
+    let request = claims::Request {
         bytes,
         at: a.at,
         align: a.align.unwrap_or(1),
         below: a.below,
-        user: quiere_usuario,
+        user: wants_user,
     };
 
-    match claims::claim(m, pedido) {
-        Err(e) => responder_fallo(p, id, e),
+    match claims::claim(m, request) {
+        Err(e) => reply_failure(p, id, e),
         Ok(mut c) => {
             // Y si lo pidio alcanzable sin privilegio, marcarlo de verdad. Si
             // no se puede, se suelta: entregar memoria que dice ser del agente
             // y no lo es seria la peor forma de fallar.
-            if quiere_usuario {
+            if wants_user {
                 // SAFETY: el rango salio de un reclamo vigente y quedo alineado
                 // al bloque, que es lo que `set_user_access` exige.
                 if unsafe { p.set_user_access(c.start, c.bytes, true) }.is_err() {
                     claims::release(c.handle);
-                    return responder_fallo(p, id, claims::Error::CannotGrant);
+                    return reply_failure(p, id, claims::Error::CannotGrant);
                 }
                 claims::mark_user(c.handle);
                 c.user = true;
@@ -754,30 +754,30 @@ fn mem_claim<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine) {
             w.array(3);
             w.uint(id);
             w.bool(true);
-            escribir_claim(&mut w, &c);
-            terminar(p, id, w);
+            write_claim(&mut w, &c);
+            finish_reply(p, id, w);
         }
     }
 }
 
 fn mem_read<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
-    let Some(a) = leer_args(r) else {
-        return responder_error(p, id, "malformed arguments");
+    let Some(a) = read_args(r) else {
+        return reply_error(p, id, "malformed arguments");
     };
     let (Some(handle), Some(len)) = (a.handle, a.len) else {
-        return responder_error(p, id, "mem.read needs handle and len");
+        return reply_error(p, id, "mem.read needs handle and len");
     };
     let off = a.off.unwrap_or(0);
 
     // Se acota antes de leer: una lectura que no entra en la respuesta se avisa
     // en vez de mandar menos de lo pedido sin decirlo.
-    if len > MAX_LECTURA {
-        return responder_error(p, id, "read too large");
+    if len > MAX_READ {
+        return reply_error(p, id, "read too large");
     }
 
     match claims::range_of(handle, off, len) {
-        Err(e) => responder_fallo(p, id, e),
-        Ok(dir) => {
+        Err(e) => reply_failure(p, id, e),
+        Ok(addr) => {
             let out = unsafe { &mut *core::ptr::addr_of_mut!(OUTBOX) };
             let mut w = Writer::new(out);
             w.array(3);
@@ -788,27 +788,27 @@ fn mem_read<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
             // De a un byte y volatil: esto puede ser el registro de un
             // dispositivo, no RAM.
             w.bytes_by(len as usize, |i| unsafe {
-                core::ptr::read_volatile((dir + i as u64) as *const u8)
+                core::ptr::read_volatile((addr + i as u64) as *const u8)
             });
-            terminar(p, id, w);
+            finish_reply(p, id, w);
         }
     }
 }
 
 fn mem_write<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
-    let Some(a) = leer_args(r) else {
-        return responder_error(p, id, "malformed arguments");
+    let Some(a) = read_args(r) else {
+        return reply_error(p, id, "malformed arguments");
     };
-    let (Some(handle), Some(datos)) = (a.handle, a.datos) else {
-        return responder_error(p, id, "mem.write needs handle and bytes");
+    let (Some(handle), Some(data)) = (a.handle, a.data) else {
+        return reply_error(p, id, "mem.write needs handle and bytes");
     };
     let off = a.off.unwrap_or(0);
 
-    match claims::range_of(handle, off, datos.len() as u64) {
-        Err(e) => responder_fallo(p, id, e),
-        Ok(dir) => {
-            for (i, b) in datos.iter().enumerate() {
-                unsafe { core::ptr::write_volatile((dir + i as u64) as *mut u8, *b) };
+    match claims::range_of(handle, off, data.len() as u64) {
+        Err(e) => reply_failure(p, id, e),
+        Ok(addr) => {
+            for (i, b) in data.iter().enumerate() {
+                unsafe { core::ptr::write_volatile((addr + i as u64) as *mut u8, *b) };
             }
             let out = unsafe { &mut *core::ptr::addr_of_mut!(OUTBOX) };
             let mut w = Writer::new(out);
@@ -817,18 +817,18 @@ fn mem_write<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
             w.bool(true);
             w.map(1);
             w.text("written");
-            w.uint(datos.len() as u64);
-            terminar(p, id, w);
+            w.uint(data.len() as u64);
+            finish_reply(p, id, w);
         }
     }
 }
 
 fn release<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
-    let Some(a) = leer_args(r) else {
-        return responder_error(p, id, "malformed arguments");
+    let Some(a) = read_args(r) else {
+        return reply_error(p, id, "malformed arguments");
     };
     let Some(handle) = a.handle else {
-        return responder_error(p, id, "release needs handle");
+        return reply_error(p, id, "release needs handle");
     };
 
     // Si era alcanzable sin privilegio, se le saca el permiso antes de soltarla:
@@ -841,7 +841,7 @@ fn release<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
     }
 
     if !claims::release(handle) {
-        return responder_fallo(p, id, claims::Error::NoSuchHandle);
+        return reply_failure(p, id, claims::Error::NoSuchHandle);
     }
 
     let out = unsafe { &mut *core::ptr::addr_of_mut!(OUTBOX) };
@@ -852,10 +852,10 @@ fn release<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
     w.map(1);
     w.text("released");
     w.uint(handle);
-    terminar(p, id, w);
+    finish_reply(p, id, w);
 }
 
-fn escribir_claim(w: &mut Writer<'_>, c: &claims::Claim) {
+fn write_claim(w: &mut Writer<'_>, c: &claims::Claim) {
     w.map(5);
     w.text("handle");
     w.uint(c.handle);
@@ -872,10 +872,10 @@ fn escribir_claim(w: &mut Writer<'_>, c: &claims::Claim) {
     w.bool(c.user);
 }
 
-fn terminar<P: Platform>(p: &mut P, id: u64, w: Writer<'_>) {
+fn finish_reply<P: Platform>(p: &mut P, id: u64, w: Writer<'_>) {
     match w.finish() {
-        Some(bytes) => emitir(p, bytes),
-        None => responder_error(p, id, "response too large"),
+        Some(bytes) => emit(p, bytes),
+        None => reply_error(p, id, "response too large"),
     }
 }
 
@@ -895,23 +895,23 @@ fn terminar<P: Platform>(p: &mut P, id: u64, w: Writer<'_>) {
 /// primer registro de argumento su propia direccion, para poder encontrar sus
 /// datos sin depender de donde lo hayan cargado.
 fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
-    let Some(a) = leer_args(r) else {
-        return responder_error(p, id, "malformed arguments");
+    let Some(a) = read_args(r) else {
+        return reply_error(p, id, "malformed arguments");
     };
     let Some(handle) = a.handle else {
-        return responder_error(p, id, "exec needs handle");
+        return reply_error(p, id, "exec needs handle");
     };
     let off = a.off.unwrap_or(0);
 
     // Se comprueba que la entrada este adentro del reclamo. Un byte alcanza:
     // hasta donde llega el codigo lo sabe el codigo, no el kernel.
-    let entrada = match claims::range_of(handle, off, 1) {
-        Err(e) => return responder_fallo(p, id, e),
-        Ok(dir) => dir,
+    let entry = match claims::range_of(handle, off, 1) {
+        Err(e) => return reply_failure(p, id, e),
+        Ok(addr) => addr,
     };
     // El reclamo entero, para que la arquitectura pueda sincronizar cachés.
     let Some(c) = claims::get(handle) else {
-        return responder_fallo(p, id, claims::Error::NoSuchHandle);
+        return reply_failure(p, id, claims::Error::NoSuchHandle);
     };
 
     // SAFETY: la direccion esta dentro de un reclamo vigente, y el identity map
@@ -922,7 +922,7 @@ fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
     // largo no deja al cordon sin atender. El bucle vuelve a apagarlos al salir
     // porque su propio diseno depende de eso.
     p.set_interrupts(true);
-    let salida = unsafe { p.exec(entrada, (c.start, c.bytes)) };
+    let outcome = unsafe { p.exec(entry, (c.start, c.bytes)) };
     p.set_interrupts(false);
 
     let out = unsafe { &mut *core::ptr::addr_of_mut!(OUTBOX) };
@@ -936,24 +936,24 @@ fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
     w.map(3);
 
     w.text("faulted");
-    w.bool(salida.faulted);
+    w.bool(outcome.faulted);
 
     // Los registros con los nombres de ESTA maquina (D3).
     w.text("registers");
-    let nombres = P::REGISTERS;
-    let cuantos = nombres.len().min(salida.regs.len());
-    w.map(cuantos);
-    for i in 0..cuantos {
-        w.text(nombres[i]);
-        w.uint(salida.regs[i]);
+    let names = P::REGISTERS;
+    let how_many = names.len().min(outcome.regs.len());
+    w.map(how_many);
+    for i in 0..how_many {
+        w.text(names[i]);
+        w.uint(outcome.regs[i]);
     }
 
     w.text("fault");
-    match salida.fault {
+    match outcome.fault {
         None => w.null(),
         Some(f) => {
-            let pares = if f.address.is_some() { 5 } else { 4 };
-            w.map(pares);
+            let pairs = if f.address.is_some() { 5 } else { 4 };
+            w.map(pairs);
             w.text("cause");
             w.text(f.cause.code());
             // El numero que uso la maquina, sin traducir (P4).
@@ -963,14 +963,14 @@ fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
             w.uint(f.detail);
             w.text("pc");
             w.uint(f.pc);
-            if let Some(dir) = f.address {
+            if let Some(addr) = f.address {
                 w.text("address");
-                w.uint(dir);
+                w.uint(addr);
             }
         }
     }
 
-    terminar(p, id, w);
+    finish_reply(p, id, w);
 }
 
 // ---------------------------------------------------------------------------
@@ -982,59 +982,59 @@ fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
 /// No hay reloj todavia, asi que se cuenta en iteraciones. El numero es
 /// generoso: arrancar un nucleo tarda microsegundos, y esperar de mas solo
 /// cuesta tiempo la unica vez que el nucleo no arranca.
-const ESPERA: u64 = 200_000_000;
+const WAIT_ROUNDS: u64 = 200_000_000;
 
 /// Arranca un nucleo y lo deja esperando trabajo (D13).
 ///
 /// El agente no necesita que el kernel sea plural para serlo el: si quiere
 /// cinco cosas a la vez, reclama cinco nucleos (P2).
 fn core_claim<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, hw: &Hardware) {
-    let Some(a) = leer_args(r) else {
-        return responder_error(p, id, "malformed arguments");
+    let Some(a) = read_args(r) else {
+        return reply_error(p, id, "malformed arguments");
     };
-    let Some(pedido) = a.core_id else {
-        return responder_error(p, id, "core.claim needs id");
+    let Some(request) = a.core_id else {
+        return reply_error(p, id, "core.claim needs id");
     };
 
     // Tiene que ser un nucleo que la maquina informe, y que informe como
     // usable: inventarle uno seria mandar una interrupcion al vacio.
-    let Some(cpu) = hw.cpus.iter().find(|c| c.id == pedido) else {
-        return responder_fallo_core(p, id, cores::Error::NoSuchCore);
+    let Some(cpu) = hw.cpus.iter().find(|c| c.id == request) else {
+        return reply_core_failure(p, id, cores::Error::NoSuchCore);
     };
     if !cpu.enabled {
-        return responder_fallo_core(p, id, cores::Error::NotUsable);
+        return reply_core_failure(p, id, cores::Error::NotUsable);
     }
-    if pedido == p.this_core() {
+    if request == p.this_core() {
         // Es el que esta contestando este pedido.
-        return responder_fallo_core(p, id, cores::Error::IsBootCore);
+        return reply_core_failure(p, id, cores::Error::IsBootCore);
     }
-    if cores::is_claimed(pedido) {
-        return responder_fallo_core(p, id, cores::Error::Taken);
+    if cores::is_claimed(request) {
+        return reply_core_failure(p, id, cores::Error::Taken);
     }
 
-    let (slot, handle) = match cores::reserve(pedido) {
-        Err(e) => return responder_fallo_core(p, id, e),
+    let (slot, handle) = match cores::reserve(request) {
+        Err(e) => return reply_core_failure(p, id, e),
         Ok(x) => x,
     };
 
     // SAFETY: las tablas de paginas y la captura de faults ya estan puestas;
     // el nucleo nuevo copia esa configuracion.
-    if let Err(e) = unsafe { p.start_core(hw, pedido, slot) } {
+    if let Err(e) = unsafe { p.start_core(hw, request, slot) } {
         cores::settle(slot, cores::State::Failed);
-        return responder_fallo_core(p, id, e);
+        return reply_core_failure(p, id, e);
     }
 
     // Que el pedido se haya hecho no significa que el nucleo este vivo: son dos
     // CPUs distintas y una no puede afirmar por la otra. Se espera a que avise.
-    let mut vueltas = 0u64;
-    while !cores::has_arrived(slot) && vueltas < ESPERA {
+    let mut rounds = 0u64;
+    while !cores::has_arrived(slot) && rounds < WAIT_ROUNDS {
         core::hint::spin_loop();
-        vueltas += 1;
+        rounds += 1;
     }
 
     if !cores::has_arrived(slot) {
         cores::settle(slot, cores::State::Failed);
-        return responder_fallo_core(p, id, cores::Error::NeverArrived);
+        return reply_core_failure(p, id, cores::Error::NeverArrived);
     }
     cores::settle(slot, cores::State::Idle);
 
@@ -1043,11 +1043,11 @@ fn core_claim<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, hw: &Hardware
     w.array(3);
     w.uint(id);
     w.bool(true);
-    escribir_core(&mut w, &cores::Core { handle, id: pedido, state: cores::State::Idle });
-    terminar(p, id, w);
+    write_core(&mut w, &cores::Core { handle, id: request, state: cores::State::Idle });
+    finish_reply(p, id, w);
 }
 
-fn escribir_core(w: &mut Writer<'_>, c: &cores::Core) {
+fn write_core(w: &mut Writer<'_>, c: &cores::Core) {
     w.map(3);
     w.text("handle");
     w.uint(c.handle);
@@ -1057,8 +1057,8 @@ fn escribir_core(w: &mut Writer<'_>, c: &cores::Core) {
     w.text(c.state.code());
 }
 
-fn responder_fallo_core<P: Platform>(p: &mut P, id: u64, e: cores::Error) {
-    responder_error(p, id, e.code());
+fn reply_core_failure<P: Platform>(p: &mut P, id: u64, e: cores::Error) {
+    reply_error(p, id, e.code());
 }
 
 // ---------------------------------------------------------------------------
@@ -1075,22 +1075,22 @@ fn responder_fallo_core<P: Platform>(p: &mut P, id: u64, e: cores::Error) {
 /// El kernel sigue sin saber nada de red: recibe un pedazo de memoria con una
 /// forma acordada y mira ahi. Quien mueve los paquetes es el agente (D4).
 fn listen<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
-    let Some(a) = leer_args(r) else {
-        return responder_error(p, id, "malformed arguments");
+    let Some(a) = read_args(r) else {
+        return reply_error(p, id, "malformed arguments");
     };
     let Some(handle) = a.handle else {
-        return responder_error(p, id, "listen needs handle");
+        return reply_error(p, id, "listen needs handle");
     };
 
     // Tiene que ser memoria que el agente reclamo: el kernel no adopta un
     // puntero suelto, adopta algo que ya esta anotado como suyo.
     let Some(c) = claims::get(handle) else {
-        return responder_fallo(p, id, claims::Error::NoSuchHandle);
+        return reply_failure(p, id, claims::Error::NoSuchHandle);
     };
 
     // SAFETY: el reclamo esta vigente y el identity map cubre toda la memoria.
     match unsafe { channel::adopt(handle, c.start, c.bytes) } {
-        Err(e) => responder_error(p, id, e.code()),
+        Err(e) => reply_error(p, id, e.code()),
         Ok(m) => {
             let out = unsafe { &mut *core::ptr::addr_of_mut!(OUTBOX) };
             let mut w = Writer::new(out);
@@ -1102,7 +1102,7 @@ fn listen<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
             w.uint(handle);
             w.text("capacity");
             w.uint(m.capacity() as u64);
-            terminar(p, id, w);
+            finish_reply(p, id, w);
         }
     }
 }
@@ -1111,7 +1111,7 @@ fn listen<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
 ///
 /// Se publica en vez de documentarse aparte para que el agente no lo tenga
 /// horneado: si algun dia cambia, lo pregunta y se enteró (P4).
-fn escribir_canal(w: &mut Writer<'_>) {
+fn write_channel(w: &mut Writer<'_>) {
     w.map(6);
 
     // Lo que el agente tiene que escribir para que el kernel lo reconozca.
@@ -1123,8 +1123,8 @@ fn escribir_canal(w: &mut Writer<'_>) {
     // Donde va cada campo del encabezado.
     w.text("layout");
     w.map(channel::LAYOUT.len());
-    for (nombre, off) in channel::LAYOUT {
-        w.text(nombre);
+    for (name, off) in channel::LAYOUT {
+        w.text(name);
         w.uint(*off);
     }
 
@@ -1141,11 +1141,11 @@ fn escribir_canal(w: &mut Writer<'_>) {
             w.uint(d.id as u64);
             w.text("writes");
             w.array(d.count);
-            for (addr, val, ancho) in &d.writes[..d.count] {
+            for (addr, value, width) in &d.writes[..d.count] {
                 w.array(3);
                 w.uint(*addr);
-                w.uint(*val);
-                w.uint(*ancho as u64);
+                w.uint(*value);
+                w.uint(*width as u64);
             }
         }
     }
@@ -1191,23 +1191,23 @@ fn irq_install<P: Platform>(
     hw: &Hardware,
     raw: bool,
 ) {
-    let Some(a) = leer_args(r) else {
-        return responder_error(p, id, "malformed arguments");
+    let Some(a) = read_args(r) else {
+        return reply_error(p, id, "malformed arguments");
     };
     let (Some(handle), Some(interrupt)) = (a.handle, a.interrupt) else {
-        return responder_error(p, id, "irq.install needs handle and interrupt");
+        return reply_error(p, id, "irq.install needs handle and interrupt");
     };
     let off = a.off.unwrap_or(0);
 
     // La entrada tiene que estar adentro de un reclamo vigente. Un byte alcanza:
     // hasta donde llega el handler lo sabe el handler.
-    let entrada = match claims::range_of(handle, off, 1) {
-        Err(e) => return responder_fallo(p, id, e),
-        Ok(dir) => dir,
+    let entry = match claims::range_of(handle, off, 1) {
+        Err(e) => return reply_failure(p, id, e),
+        Ok(addr) => addr,
     };
 
-    let slot = match handlers::reserve(interrupt as u32, entrada, raw) {
-        Err(e) => return responder_error(p, id, e.code()),
+    let slot = match handlers::reserve(interrupt as u32, entry, raw) {
+        Err(e) => return reply_error(p, id, e.code()),
         Ok(s) => s,
     };
 
@@ -1217,7 +1217,7 @@ fn irq_install<P: Platform>(
             // Si la arquitectura no pudo, la ranura se suelta: dejarla tomada
             // haria que el proximo intento diga "ya instalado" por nada.
             handlers::release_slot(slot);
-            responder_error(p, id, e.code())
+            reply_error(p, id, e.code())
         }
         Ok(trigger) => {
             handlers::set_trigger(slot, trigger);
@@ -1230,10 +1230,10 @@ fn irq_install<P: Platform>(
             w.text("interrupt");
             w.uint(interrupt);
             w.text("entry");
-            w.uint(entrada);
+            w.uint(entry);
             w.text("raw");
             w.bool(raw);
-            terminar(p, id, w);
+            finish_reply(p, id, w);
         }
     }
 }

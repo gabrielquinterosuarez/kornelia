@@ -48,10 +48,10 @@ impl Platform for X86_64 {
         paging::install(m)
     }
 
-    const REGISTERS: &'static [&'static str] = idt::REGISTROS;
+    const REGISTERS: &'static [&'static str] = idt::REGISTERS;
 
     unsafe fn install_fault_handlers(&mut self) -> Result<(), &'static str> {
-        idt::install(percpu::RANURA_ARRANQUE)
+        idt::install(percpu::BOOT_SLOT)
     }
 
     fn trigger_breakpoint(&mut self) {
@@ -83,7 +83,7 @@ impl Platform for X86_64 {
         slot: usize,
         raw: bool,
     ) -> Result<kernel_core::channel::Doorbell, kernel_core::handlers::Error> {
-        irq::install_agente(hw, interrupt, slot, raw)
+        irq::install_agent(hw, interrupt, slot, raw)
     }
 
     unsafe fn set_user_access(
@@ -138,9 +138,9 @@ impl Platform for X86_64 {
 /// Lo usa el handler de excepciones: ahí no hay una `Platform` a mano, y
 /// tampoco conviene depender de una estructura que puede ser justo la que se
 /// rompió.
-pub struct Serie;
+pub struct SerialText;
 
-impl core::fmt::Write for Serie {
+impl core::fmt::Write for SerialText {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         for b in s.as_bytes() {
             uart::write_byte(*b);
@@ -162,7 +162,7 @@ pub extern "efiapi" fn efi_main(image: *mut c_void, systab: *mut c_void) -> usiz
     // Ya no queda nada por pedirle al firmware, asi que se abandona su pila.
     unsafe {
         MACHINE = machine;
-        saltar_a_la_pila_propia()
+        jump_to_own_stack()
     }
 }
 
@@ -174,7 +174,7 @@ pub extern "efiapi" fn efi_main(image: *mut c_void, systab: *mut c_void) -> usiz
 static mut MACHINE: Machine = Machine::mute("no se llego a describir la maquina");
 
 /// Corre ya sobre la pila propia del kernel.
-extern "C" fn arrancar() -> ! {
+extern "C" fn boot_core() -> ! {
     let machine = unsafe { MACHINE };
     kernel_core::main(&mut X86_64 { machine })
 }
@@ -191,18 +191,18 @@ extern "C" fn arrancar() -> ! {
 /// Solo se puede llamar cuando ya no queda nada por hacer con el firmware: al
 /// mover SP se pierde todo lo que hubiera en la pila vieja, incluida la
 /// direccion de retorno a quien nos llamo.
-unsafe fn saltar_a_la_pila_propia() -> ! {
+unsafe fn jump_to_own_stack() -> ! {
     core::arch::asm!(
         // La cima esta alineada a 16. `call` apila 8 bytes de retorno, con lo
         // que la funcion arranca con RSP%16==8, que es justo lo que pide la ABI
         // de System V.
-        "mov rsp, {cima}",
-        "call {entrada}",
+        "mov rsp, {top_of}",
+        "call {entry}",
         // `arrancar` no vuelve. Si algun dia volviera, es un bug y conviene que
         // se detenga acá y no que siga por la pila con basura.
         "ud2",
-        cima = in(reg) kernel_core::stack::top(),
-        entrada = sym arrancar,
+        top_of = in(reg) kernel_core::stack::top(),
+        entry = sym boot_core,
         options(noreturn),
     )
 }

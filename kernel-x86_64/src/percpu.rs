@@ -19,10 +19,10 @@ use kernel_core::cores;
 
 /// El nucleo de arranque no esta en la tabla de nucleos reclamados, asi que se
 /// le reserva la ranura de mas arriba.
-pub const RANURA_ARRANQUE: usize = cores::MAX;
+pub const BOOT_SLOT: usize = cores::MAX;
 
 /// Cuantos bloques hay: uno por nucleo reclamable, mas el de arranque.
-pub const RANURAS: usize = cores::MAX + 1;
+pub const SLOTS: usize = cores::MAX + 1;
 
 /// Lo privado de cada nucleo.
 ///
@@ -32,35 +32,35 @@ pub const RANURAS: usize = cores::MAX + 1;
 #[repr(C, align(64))]
 pub struct PerCpu {
     /// Hay un `exec` en curso y el punto de recuperacion esta armado.
-    pub armado: u64,
+    pub armed: u64,
     /// Adonde saltar si el codigo del agente falla.
     pub rip: u64,
     /// La pila del kernel de este nucleo, para recuperarla.
     pub rsp: u64,
     /// La cima de la pila donde corre el codigo del agente.
-    pub pila: u64,
+    pub stack: u64,
     /// Los registros al terminar un `exec` que volvio solo.
     pub regs: [u64; 18],
     /// Que ranura es esta. Lo lee el handler para saber donde anotar.
-    pub ranura: u64,
+    pub slot: u64,
 }
 
 impl PerCpu {
-    const fn nuevo() -> Self {
-        Self { armado: 0, rip: 0, rsp: 0, pila: 0, regs: [0; 18], ranura: 0 }
+    const fn new() -> Self {
+        Self { armed: 0, rip: 0, rsp: 0, stack: 0, regs: [0; 18], slot: 0 }
     }
 }
 
 // El ensamblador usa estos numeros escritos a mano. Si alguien agrega un campo
 // arriba, esto no compila en vez de leer basura.
-const _: () = assert!(core::mem::offset_of!(PerCpu, armado) == 0);
+const _: () = assert!(core::mem::offset_of!(PerCpu, armed) == 0);
 const _: () = assert!(core::mem::offset_of!(PerCpu, rip) == 8);
 const _: () = assert!(core::mem::offset_of!(PerCpu, rsp) == 16);
-const _: () = assert!(core::mem::offset_of!(PerCpu, pila) == 24);
+const _: () = assert!(core::mem::offset_of!(PerCpu, stack) == 24);
 const _: () = assert!(core::mem::offset_of!(PerCpu, regs) == 32);
-const _: () = assert!(core::mem::offset_of!(PerCpu, ranura) == 176);
+const _: () = assert!(core::mem::offset_of!(PerCpu, slot) == 176);
 
-static mut BLOQUES: [PerCpu; RANURAS] = [const { PerCpu::nuevo() }; RANURAS];
+static mut BLOCKS: [PerCpu; SLOTS] = [const { PerCpu::new() }; SLOTS];
 
 /// Donde el CPU guarda la base de GS.
 const IA32_GS_BASE: u32 = 0xC000_0101;
@@ -69,17 +69,17 @@ const IA32_GS_BASE: u32 = 0xC000_0101;
 ///
 /// # Safety
 ///
-/// Se llama una vez por nucleo, y `ranura` tiene que ser suya y de nadie mas.
-pub unsafe fn instalar(ranura: usize) {
-    let b = &mut (*core::ptr::addr_of_mut!(BLOQUES))[ranura];
-    b.ranura = ranura as u64;
+/// Se llama una vez por nucleo, y `slot` tiene que ser suya y de nadie mas.
+pub unsafe fn install_block(slot: usize) {
+    let b = &mut (*core::ptr::addr_of_mut!(BLOCKS))[slot];
+    b.slot = slot as u64;
 
-    let dir = b as *mut PerCpu as u64;
+    let addr = b as *mut PerCpu as u64;
     core::arch::asm!(
         "wrmsr",
         in("ecx") IA32_GS_BASE,
-        in("eax") dir as u32,
-        in("edx") (dir >> 32) as u32,
+        in("eax") addr as u32,
+        in("edx") (addr >> 32) as u32,
         options(nomem, nostack, preserves_flags),
     );
 }
@@ -88,10 +88,10 @@ pub unsafe fn instalar(ranura: usize) {
 ///
 /// Una sola lectura, sin tocar memoria compartida: es lo que hace que se pueda
 /// llamar desde adentro de un handler de excepciones.
-pub fn ranura() -> usize {
+pub fn slot() -> usize {
     let r: u64;
-    // SAFETY: `instalar` dejo GS apuntando a un bloque valido; el 176 es el
-    // offset de `ranura`, verificado arriba en tiempo de compilacion.
+    // SAFETY: `install_block` dejo GS apuntando a un bloque valido; el 176 es el
+    // offset de `slot`, verificado arriba en tiempo de compilacion.
     unsafe { core::arch::asm!("mov {}, gs:[176]", out(reg) r, options(nostack, readonly)) };
     r as usize
 }
@@ -101,15 +101,15 @@ pub fn ranura() -> usize {
 /// # Safety
 ///
 /// Quien lo use tiene que respetar que es de un solo nucleo.
-pub unsafe fn bloque(ranura: usize) -> *mut PerCpu {
-    core::ptr::addr_of_mut!((*core::ptr::addr_of_mut!(BLOQUES))[ranura])
+pub unsafe fn block(slot: usize) -> *mut PerCpu {
+    core::ptr::addr_of_mut!((*core::ptr::addr_of_mut!(BLOCKS))[slot])
 }
 
 /// Si hay un `exec` en curso en **este** nucleo.
 ///
 /// Lo llama el handler de excepciones, que no puede darse el lujo de leer
 /// memoria compartida para averiguarlo.
-pub fn armado() -> u64 {
+pub fn armed() -> u64 {
     let v: u64;
     // SAFETY: offset 0 del bloque, verificado arriba.
     unsafe { core::arch::asm!("mov {}, gs:[0]", out(reg) v, options(nostack, readonly)) };
@@ -117,7 +117,7 @@ pub fn armado() -> u64 {
 }
 
 /// Adonde desviar el regreso si el codigo del agente fallo.
-pub fn punto_de_retorno() -> u64 {
+pub fn return_point() -> u64 {
     let v: u64;
     // SAFETY: offset 8 del bloque, verificado arriba.
     unsafe { core::arch::asm!("mov {}, gs:[8]", out(reg) v, options(nostack, readonly)) };

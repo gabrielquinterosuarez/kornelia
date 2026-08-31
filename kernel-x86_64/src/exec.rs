@@ -37,17 +37,17 @@
 use kernel_core::fault::Outcome;
 
 /// 64 KiB de pila para el codigo del agente de cada nucleo.
-const TAM_PILA: usize = 64 * 1024;
+const STACK_SIZE: usize = 64 * 1024;
 
 #[repr(C, align(16))]
-struct Pilas([[u8; TAM_PILA]; crate::percpu::RANURAS]);
+struct Stacks([[u8; STACK_SIZE]; crate::percpu::SLOTS]);
 
-static mut PILAS_AGENTE: Pilas = Pilas([[0; TAM_PILA]; crate::percpu::RANURAS]);
+static mut AGENT_STACKS: Stacks = Stacks([[0; STACK_SIZE]; crate::percpu::SLOTS]);
 
 core::arch::global_asm!(
     r#"
 .section .text
-.globl exec_trampolin
+.globl exec_trampoline
 
 // rdi = direccion de entrada. Devuelve 0 si volvio solo, 1 si hubo fault.
 //
@@ -59,7 +59,7 @@ core::arch::global_asm!(
 // de Rust. En el target `x86_64-unknown-uefi`, `extern "C"` NO es System V sino
 // la ABI de Windows, donde el primer argumento va en RCX. Declararlo "C" hace
 // que se salte a lo que hubiera en RDI, que es basura.
-exec_trampolin:
+exec_trampoline:
     push rbp
     push rbx
     push r12
@@ -68,7 +68,7 @@ exec_trampolin:
     push r15
 
     // Se arma el punto de recuperacion ANTES de saltar.
-    lea rax, [rip + exec_recuperacion]
+    lea rax, [rip + exec_recovery]
     mov gs:[8], rax                    // rip
     mov gs:[16], rsp                   // rsp del kernel
     mov qword ptr gs:[0], 1            // armado
@@ -109,9 +109,9 @@ exec_trampolin:
     mov rsp, gs:[16]
     mov qword ptr gs:[0], 0
     xor eax, eax
-    jmp exec_salida
+    jmp exec_exit
 
-exec_recuperacion:
+exec_recovery:
     // Aca aterriza el `iretq` del handler cuando hubo fault. La pila del agente
     // puede estar rota, asi que lo primero es recuperar la nuestra — y eso se
     // puede hacer porque `gs:` no depende de la pila.
@@ -119,7 +119,7 @@ exec_recuperacion:
     mov qword ptr gs:[0], 0
     mov eax, 1
 
-exec_salida:
+exec_exit:
     pop r15
     pop r14
     pop r13
@@ -131,7 +131,7 @@ exec_salida:
 );
 
 extern "sysv64" {
-    fn exec_trampolin(entry: u64) -> u64;
+    fn exec_trampoline(entry: u64) -> u64;
 }
 
 /// Salta al codigo y vuelve con lo que haya pasado.
@@ -141,17 +141,17 @@ extern "sysv64" {
 /// `entry` tiene que apuntar a memoria mapeada y ejecutable. Corre en el nucleo
 /// que la llama, sobre la pila de agente de ese nucleo.
 pub unsafe fn run(entry: u64) -> Outcome {
-    let ranura = crate::percpu::ranura();
-    let bloque = crate::percpu::bloque(ranura);
+    let slot = crate::percpu::slot();
+    let block = crate::percpu::block(slot);
 
     // La pila de agente de este nucleo. Se pone en cada llamada y no una vez al
     // arrancar: es barato, y asi no hay un orden de inicializacion que recordar.
-    (*bloque).pila =
-        core::ptr::addr_of!(PILAS_AGENTE) as u64 + ((ranura + 1) * TAM_PILA) as u64;
+    (*block).stack =
+        core::ptr::addr_of!(AGENT_STACKS) as u64 + ((slot + 1) * STACK_SIZE) as u64;
 
-    let hubo_fault = exec_trampolin(entry) != 0;
+    let had_fault = exec_trampoline(entry) != 0;
 
-    if hubo_fault {
+    if had_fault {
         // El handler ya dejo anotado el fault, con los registros del momento
         // exacto en que fallo — que son mas utiles que los de ahora.
         let f = crate::idt::last();
@@ -160,7 +160,7 @@ pub unsafe fn run(entry: u64) -> Outcome {
         Outcome {
             faulted: false,
             regs: core::slice::from_raw_parts(
-                core::ptr::addr_of!((*bloque).regs) as *const u64,
+                core::ptr::addr_of!((*block).regs) as *const u64,
                 18,
             ),
             fault: None,

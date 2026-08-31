@@ -27,12 +27,12 @@ use kernel_core::cores;
 
 /// 16 KiB de pila para cada nucleo. Alcanza de sobra: van a correr codigo del
 /// agente, que trae la suya.
-const TAM_PILA: usize = 16 * 1024;
+const STACK_SIZE: usize = 16 * 1024;
 
 #[repr(C, align(16))]
-struct Pilas([[u8; TAM_PILA]; cores::MAX]);
+struct Stacks([[u8; STACK_SIZE]; cores::MAX]);
 
-static mut PILAS: Pilas = Pilas([[0; TAM_PILA]; cores::MAX]);
+static mut STACKS: Stacks = Stacks([[0; STACK_SIZE]; cores::MAX]);
 
 // Lo que el nucleo de arranque deja anotado para que los demas se configuren
 // igual que el. Se leen con la MMU apagada, asi que tienen que estar alineados.
@@ -45,7 +45,7 @@ static mut AP_TTBR0: u64 = 0;
 #[no_mangle]
 static mut AP_VBAR: u64 = 0;
 #[no_mangle]
-static mut AP_PILAS: u64 = 0;
+static mut AP_STACKS: u64 = 0;
 
 /// El identificador de PSCI para "prender un nucleo", en su version de 64 bits.
 const CPU_ON: u64 = 0xC400_0003;
@@ -94,8 +94,8 @@ ap_entry:
     isb
 
     // Su pila: la base del arreglo mas su ranura por el tamano de cada una.
-    adrp x1, AP_PILAS
-    ldr  x1, [x1, :lo12:AP_PILAS]
+    adrp x1, AP_STACKS
+    ldr  x1, [x1, :lo12:AP_STACKS]
     mov  x2, #(16 * 1024)
     madd x1, x19, x2, x1
     add  x1, x1, x2                   // la cima: crece hacia abajo
@@ -146,7 +146,7 @@ pub unsafe fn prepare() {
     core::arch::asm!("mrs {}, tcr_el1", out(reg) AP_TCR, options(nomem, nostack));
     core::arch::asm!("mrs {}, ttbr0_el1", out(reg) AP_TTBR0, options(nomem, nostack));
     core::arch::asm!("mrs {}, vbar_el1", out(reg) AP_VBAR, options(nomem, nostack));
-    AP_PILAS = core::ptr::addr_of!(PILAS) as u64;
+    AP_STACKS = core::ptr::addr_of!(STACKS) as u64;
 }
 
 /// El identificador de este nucleo.
@@ -166,11 +166,11 @@ pub unsafe fn start(psci: Option<Psci>, id: u64, slot: usize) -> Result<(), core
         return Err(cores::Error::NoMechanism);
     };
 
-    let entrada = ap_entry as *const () as u64;
-    let estado = llamar(p.use_hvc, CPU_ON, id, entrada, slot as u64);
+    let entry = ap_entry as *const () as u64;
+    let state = call_it(p.use_hvc, CPU_ON, id, entry, slot as u64);
 
     // PSCI devuelve 0 en exito y un negativo en error.
-    if estado != 0 {
+    if state != 0 {
         return Err(cores::Error::NeverArrived);
     }
     Ok(())
@@ -181,12 +181,12 @@ pub unsafe fn start(psci: Option<Psci>, id: u64, slot: usize) -> Result<(), core
 /// Los registros del x4 al x17 se declaran pisados porque la convencion de
 /// llamadas de ARM permite que el firmware los use: si no se dijera, el
 /// compilador podria dejar algo vivo ahi y encontrarlo cambiado al volver.
-unsafe fn llamar(use_hvc: bool, funcion: u64, a1: u64, a2: u64, a3: u64) -> i64 {
-    let salida: i64;
+unsafe fn call_it(use_hvc: bool, function: u64, a1: u64, a2: u64, a3: u64) -> i64 {
+    let outcome: i64;
     if use_hvc {
         core::arch::asm!(
             "hvc #0",
-            inout("x0") funcion => salida,
+            inout("x0") function => outcome,
             inout("x1") a1 => _, inout("x2") a2 => _, inout("x3") a3 => _,
             lateout("x4") _, lateout("x5") _, lateout("x6") _, lateout("x7") _,
             lateout("x8") _, lateout("x9") _, lateout("x10") _, lateout("x11") _,
@@ -196,7 +196,7 @@ unsafe fn llamar(use_hvc: bool, funcion: u64, a1: u64, a2: u64, a3: u64) -> i64 
     } else {
         core::arch::asm!(
             "smc #0",
-            inout("x0") funcion => salida,
+            inout("x0") function => outcome,
             inout("x1") a1 => _, inout("x2") a2 => _, inout("x3") a3 => _,
             lateout("x4") _, lateout("x5") _, lateout("x6") _, lateout("x7") _,
             lateout("x8") _, lateout("x9") _, lateout("x10") _, lateout("x11") _,
@@ -204,5 +204,5 @@ unsafe fn llamar(use_hvc: bool, funcion: u64, a1: u64, a2: u64, a3: u64) -> i64 
             lateout("x16") _, lateout("x17") _,
         );
     }
-    salida
+    outcome
 }

@@ -87,14 +87,14 @@ impl Error {
     }
 }
 
-static mut TABLA: [Option<Handler>; MAX] = [None; MAX];
+static mut TABLE: [Option<Handler>; MAX] = [None; MAX];
 
 /// Reserva una ranura para esa interrupcion.
 ///
 /// Devuelve el numero de ranura, que es lo que la arquitectura usa para saber
 /// cual handler llamar.
 pub fn reserve(interrupt: u32, entry: u64, raw: bool) -> Result<usize, Error> {
-    let t = unsafe { &mut *core::ptr::addr_of_mut!(TABLA) };
+    let t = unsafe { &mut *core::ptr::addr_of_mut!(TABLE) };
 
     if t.iter().flatten().any(|h| h.interrupt == interrupt) {
         return Err(Error::Taken);
@@ -105,7 +105,7 @@ pub fn reserve(interrupt: u32, entry: u64, raw: bool) -> Result<usize, Error> {
         entry,
         raw,
         count: 0,
-        trigger: crate::channel::Doorbell::vacio(),
+        trigger: crate::channel::Doorbell::blank(),
     });
     Ok(slot)
 }
@@ -113,7 +113,7 @@ pub fn reserve(interrupt: u32, entry: u64, raw: bool) -> Result<usize, Error> {
 /// Suelta una ranura, si la instalacion no salio.
 pub fn release_slot(slot: usize) {
     if slot < MAX {
-        unsafe { (*core::ptr::addr_of_mut!(TABLA))[slot] = None }
+        unsafe { (*core::ptr::addr_of_mut!(TABLE))[slot] = None }
     }
 }
 
@@ -123,7 +123,7 @@ pub fn set_trigger(slot: usize, t: crate::channel::Doorbell) {
         return;
     }
     unsafe {
-        if let Some(h) = &mut (*core::ptr::addr_of_mut!(TABLA))[slot] {
+        if let Some(h) = &mut (*core::ptr::addr_of_mut!(TABLE))[slot] {
             h.trigger = t;
         }
     }
@@ -134,12 +134,12 @@ pub fn at(slot: usize) -> Option<Handler> {
     if slot >= MAX {
         return None;
     }
-    unsafe { (*core::ptr::addr_of!(TABLA))[slot] }
+    unsafe { (*core::ptr::addr_of!(TABLE))[slot] }
 }
 
 /// La ranura que atiende esa interrupcion.
 pub fn slot_of(interrupt: u32) -> Option<usize> {
-    let t = unsafe { &*core::ptr::addr_of!(TABLA) };
+    let t = unsafe { &*core::ptr::addr_of!(TABLE) };
     t.iter().position(|h| h.map(|x| x.interrupt) == Some(interrupt))
 }
 
@@ -151,14 +151,14 @@ pub fn served(slot: usize) {
         return;
     }
     unsafe {
-        if let Some(h) = &mut (*core::ptr::addr_of_mut!(TABLA))[slot] {
+        if let Some(h) = &mut (*core::ptr::addr_of_mut!(TABLE))[slot] {
             h.count = h.count.wrapping_add(1);
         }
     }
 }
 
 pub fn all() -> impl Iterator<Item = Handler> {
-    let t = unsafe { &*core::ptr::addr_of!(TABLA) };
+    let t = unsafe { &*core::ptr::addr_of!(TABLE) };
     t.iter().filter_map(|h| *h)
 }
 
@@ -169,5 +169,5 @@ pub fn count() -> usize {
 /// Borra la tabla. Solo para los tests.
 #[cfg(test)]
 pub fn reset() {
-    unsafe { *core::ptr::addr_of_mut!(TABLA) = [None; MAX] }
+    unsafe { *core::ptr::addr_of_mut!(TABLE) = [None; MAX] }
 }

@@ -39,7 +39,7 @@ sudo apt install qemu-system-x86 qemu-system-arm ovmf qemu-efi-aarch64
 ```bash
 ./scripts/run-x86_64.sh
 ./scripts/run-aarch64.sh
-./scripts/check-frontera.sh # D23/D24: verifica los dos ejes de la frontera
+./scripts/check-boundary.sh # D23/D24: verifica los dos ejes de la frontera
 ./scripts/check.sh          # el porton completo: frontera + tests + compila y BOOTEA las dos
 ```
 
@@ -76,11 +76,11 @@ un agente: arranca QEMU, espera la marca `-- CBOR --` y habla el protocolo.
 ./scripts/client.py --what cpus,interrupts,pcie
 ./scripts/client.py --what tables --raw   # mostrando los bytes que viajan
 ./scripts/client.py --arch aarch64
-./scripts/client.py --memoria             # el lazo: claim, write, read, release
+./scripts/client.py --memory             # el lazo: claim, write, read, release
 ./scripts/client.py --exec                # sube codigo maquina y lo corre
-./scripts/client.py --smp 4 --nucleos     # arranca los otros nucleos
-./scripts/client.py --buzon                # arma el segundo canal y le habla por ahi
-./scripts/client.py --timbre               # el agente despierta al kernel
+./scripts/client.py --smp 4 --cores     # arranca los otros nucleos
+./scripts/client.py --mailbox                # arma el segundo canal y le habla por ahi
+./scripts/client.py --doorbell               # el agente despierta al kernel
 ./scripts/client.py --handler              # el agente atiende una interrupcion
 ```
 
@@ -102,7 +102,7 @@ En un sistema operativo normal, el segundo programa sería un SIGSEGV y el
 proceso se moriría. Acá **es un valor de retorno**: causa, dirección tocada y
 todos los registros del instante exacto en que falló. El agente lo lee y corrige.
 
-Con `--memoria` se ve el primer momento en que el agente no solo mira la
+Con `--memory` se ve el primer momento en que el agente no solo mira la
 máquina sino que la **usa**:
 
 ```

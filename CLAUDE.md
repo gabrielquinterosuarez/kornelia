@@ -63,7 +63,7 @@ prometía algo que los diez no podían pedir).
 
 1. **Ni `kernel-core/` ni `boot-uefi/` pueden contener código específico de
    arquitectura.** Nada de `#[cfg(target_arch)]`, `core::arch` ni `asm!`. Todo pasa
-   por el trait `Platform`. `./scripts/check-frontera.sh` lo verifica y CI debe fallar
+   por el trait `Platform`. `./scripts/check-boundary.sh` lo verifica y CI debe fallar
    si se rompe. Además `kernel-core/` no puede nombrar a `boot-uefi` (D24: el núcleo
    no sabe cómo arrancó).
 2. **Las dos arquitecturas arrancan siempre.** Un cambio que rompe una de las dos no
@@ -74,9 +74,16 @@ prometía algo que los diez no podían pedir).
 4. **Salida del UART en ASCII puro.** Manda bytes, no texto: los acentos salen rotos.
 5. Sin dependencias externas salvo que haya una razón fuerte. El kernel es `no_std`.
 6. **El código va en inglés; el español es solo para humanos.** Nombres de
-   archivos, tipos, campos, funciones, constantes y variables: inglés. Comentarios
-   y documentación: español. Los textos que salen por el UART también en español,
-   porque son para leer en una terminal — pero en ASCII puro (regla 4).
+   archivos, tipos, campos, funciones, constantes, variables, etiquetas de
+   ensamblador y nombres de test: inglés. Comentarios y documentación: español.
+   Los textos que salen por el UART también en español, porque son para leer en
+   una terminal — pero en ASCII puro (regla 4).
+
+   **Lo verifica `./scripts/check-language.py`, dentro del portón.** Esta regla
+   estuvo escrita acá y se rompió igual, dos veces: el proyecto ya sabe que una
+   regla que no se comprueba es una intención (D23). El chequeo es una lista de
+   palabras y por eso no es completo — cuando se cuela una que no está, se
+   agrega a la lista y deja de poder volver.
 
 ## Estado actual
 

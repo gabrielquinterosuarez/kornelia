@@ -51,16 +51,16 @@ const MAGIC: u32 = 0x4E52_4F4B;
 const VERSION: u32 = 1;
 
 /// El encabezado, antes de los dos anillos.
-const ENCABEZADO: u64 = 32;
+const HEADER: u64 = 32;
 
 // Offsets de cada campo.
 const OFF_MAGIC: u64 = 0;
 const OFF_VERSION: u64 = 4;
-const OFF_CAPACIDAD: u64 = 8;
-const OFF_PED_CABEZA: u64 = 16;
-const OFF_PED_COLA: u64 = 20;
-const OFF_RES_CABEZA: u64 = 24;
-const OFF_RES_COLA: u64 = 28;
+const OFF_CAPACITY: u64 = 8;
+const OFF_REQ_HEAD: u64 = 16;
+const OFF_REQ_TAIL: u64 = 20;
+const OFF_RESP_HEAD: u64 = 24;
+const OFF_RESP_TAIL: u64 = 28;
 
 /// Un buzon ya verificado.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -69,7 +69,7 @@ pub struct Mailbox {
     /// Donde empieza, en fisicas.
     base: u64,
     /// Cuantos bytes tiene cada anillo.
-    capacidad: u32,
+    capacity: u32,
     /// El handle del que salio, para poder informarlo.
     pub handle: u64,
 }
@@ -100,14 +100,14 @@ impl Error {
 }
 
 /// Un solo buzon: hay un solo agente (D13).
-static mut ADOPTADO: Option<Mailbox> = None;
+static mut ADOPTED: Option<Mailbox> = None;
 
 /// Un entero del encabezado, como atomico.
 ///
 /// # Safety
 ///
 /// `addr` tiene que estar mapeada y alineada a 4.
-unsafe fn campo(addr: u64) -> &'static AtomicU32 {
+unsafe fn field(addr: u64) -> &'static AtomicU32 {
     &*(addr as *const AtomicU32)
 }
 
@@ -117,43 +117,43 @@ unsafe fn campo(addr: u64) -> &'static AtomicU32 {
 ///
 /// `start..start+bytes` tiene que estar mapeada.
 pub unsafe fn adopt(handle: u64, start: u64, bytes: u64) -> Result<Mailbox, Error> {
-    if bytes < ENCABEZADO {
+    if bytes < HEADER {
         return Err(Error::TooSmall);
     }
-    if campo(start + OFF_MAGIC).load(Ordering::Acquire) != MAGIC {
+    if field(start + OFF_MAGIC).load(Ordering::Acquire) != MAGIC {
         return Err(Error::NoMagic);
     }
-    if campo(start + OFF_VERSION).load(Ordering::Relaxed) != VERSION {
+    if field(start + OFF_VERSION).load(Ordering::Relaxed) != VERSION {
         return Err(Error::BadVersion);
     }
 
-    let capacidad = campo(start + OFF_CAPACIDAD).load(Ordering::Relaxed);
+    let capacity = field(start + OFF_CAPACITY).load(Ordering::Relaxed);
     // Potencia de dos para que dar la vuelta sea una mascara y no una division.
-    if capacidad == 0 || !capacidad.is_power_of_two() {
+    if capacity == 0 || !capacity.is_power_of_two() {
         return Err(Error::BadCapacity);
     }
     // Los dos anillos tienen que entrar en lo que el agente reclamo. Si no
     // entraran, el kernel escribiria fuera de lo que le entregaron.
-    let necesario = ENCABEZADO + 2 * capacidad as u64;
-    if necesario > bytes {
+    let needed = HEADER + 2 * capacity as u64;
+    if needed > bytes {
         return Err(Error::TooSmall);
     }
 
-    let m = Mailbox { base: start, capacidad, handle };
-    ADOPTADO = Some(m);
+    let m = Mailbox { base: start, capacity, handle };
+    ADOPTED = Some(m);
     Ok(m)
 }
 
 /// El buzon adoptado, si hay.
 pub fn current() -> Option<Mailbox> {
-    unsafe { ADOPTADO }
+    unsafe { ADOPTED }
 }
 
 /// Deja de escuchar por el buzon.
 pub fn forget(handle: u64) -> bool {
     unsafe {
-        if ADOPTADO.map(|m| m.handle) == Some(handle) {
-            ADOPTADO = None;
+        if ADOPTED.map(|m| m.handle) == Some(handle) {
+            ADOPTED = None;
             return true;
         }
     }
@@ -162,7 +162,7 @@ pub fn forget(handle: u64) -> bool {
 
 impl Mailbox {
     pub fn capacity(&self) -> u32 {
-        self.capacidad
+        self.capacity
     }
 
     /// Saca el byte mas viejo que dejo el agente, si hay.
@@ -171,23 +171,23 @@ impl Mailbox {
     ///
     /// El buzon tiene que seguir mapeado.
     pub unsafe fn pop(&self) -> Option<u8> {
-        let cabeza = campo(self.base + OFF_PED_CABEZA);
-        let cola = campo(self.base + OFF_PED_COLA);
+        let head = field(self.base + OFF_REQ_HEAD);
+        let tail = field(self.base + OFF_REQ_TAIL);
 
         // `Acquire`: si se ve el indice nuevo, se ven tambien los bytes que el
         // agente escribio antes de avanzarlo.
-        let c = cabeza.load(Ordering::Acquire);
-        let t = cola.load(Ordering::Relaxed);
+        let c = head.load(Ordering::Acquire);
+        let t = tail.load(Ordering::Relaxed);
         if t == c {
             return None;
         }
 
-        let pos = t & (self.capacidad - 1);
-        let b = core::ptr::read_volatile((self.base + ENCABEZADO + pos as u64) as *const u8);
+        let pos = t & (self.capacity - 1);
+        let b = core::ptr::read_volatile((self.base + HEADER + pos as u64) as *const u8);
 
         // `Release`: el byte ya se leyo antes de decirle al agente que ese lugar
         // esta libre. Al reves podria sobreescribirlo antes de que lo leamos.
-        cola.store(t.wrapping_add(1), Ordering::Release);
+        tail.store(t.wrapping_add(1), Ordering::Release);
         Some(b)
     }
 
@@ -197,23 +197,23 @@ impl Mailbox {
     ///
     /// El buzon tiene que seguir mapeado.
     pub unsafe fn push(&self, b: u8) -> bool {
-        let cabeza = campo(self.base + OFF_RES_CABEZA);
-        let cola = campo(self.base + OFF_RES_COLA);
+        let head = field(self.base + OFF_RESP_HEAD);
+        let tail = field(self.base + OFF_RESP_TAIL);
 
-        let c = cabeza.load(Ordering::Relaxed);
-        let t = cola.load(Ordering::Acquire);
-        if c.wrapping_sub(t) >= self.capacidad {
+        let c = head.load(Ordering::Relaxed);
+        let t = tail.load(Ordering::Acquire);
+        if c.wrapping_sub(t) >= self.capacity {
             return false;
         }
 
-        let pos = c & (self.capacidad - 1);
+        let pos = c & (self.capacity - 1);
         core::ptr::write_volatile(
-            (self.base + ENCABEZADO + self.capacidad as u64 + pos as u64) as *mut u8,
+            (self.base + HEADER + self.capacity as u64 + pos as u64) as *mut u8,
             b,
         );
 
         // `Release`: el byte esta escrito antes de que el agente vea el indice.
-        cabeza.store(c.wrapping_add(1), Ordering::Release);
+        head.store(c.wrapping_add(1), Ordering::Release);
         true
     }
 }
@@ -222,7 +222,7 @@ impl Mailbox {
 ///
 /// Lo publica `describe` para que el agente no tenga que deducirlo.
 pub const fn size_for(capacity: u32) -> u64 {
-    ENCABEZADO + 2 * capacity as u64
+    HEADER + 2 * capacity as u64
 }
 
 /// Los offsets del acuerdo, para que `describe` los publique en vez de que el
@@ -230,12 +230,12 @@ pub const fn size_for(capacity: u32) -> u64 {
 pub const LAYOUT: &[(&str, u64)] = &[
     ("magic", OFF_MAGIC),
     ("version", OFF_VERSION),
-    ("capacity", OFF_CAPACIDAD),
-    ("request_head", OFF_PED_CABEZA),
-    ("request_tail", OFF_PED_COLA),
-    ("response_head", OFF_RES_CABEZA),
-    ("response_tail", OFF_RES_COLA),
-    ("rings", ENCABEZADO),
+    ("capacity", OFF_CAPACITY),
+    ("request_head", OFF_REQ_HEAD),
+    ("request_tail", OFF_REQ_TAIL),
+    ("response_head", OFF_RESP_HEAD),
+    ("response_tail", OFF_RESP_TAIL),
+    ("rings", HEADER),
 ];
 
 /// El valor que el agente tiene que escribir en `magic`.
@@ -246,7 +246,7 @@ pub const EXPECTED_VERSION: u32 = VERSION;
 /// Olvida el buzon. Solo para los tests.
 #[cfg(test)]
 pub fn reset() {
-    unsafe { ADOPTADO = None }
+    unsafe { ADOPTED = None }
 }
 
 // ---------------------------------------------------------------------------
@@ -273,21 +273,21 @@ pub struct Doorbell {
 }
 
 impl Doorbell {
-    pub const fn vacio() -> Self {
+    pub const fn blank() -> Self {
         Self { writes: [(0, 0, 0); 2], count: 0, id: 0 }
     }
 }
 
-static mut CAMPANA: Option<Doorbell> = None;
+static mut BELL: Option<Doorbell> = None;
 
 /// Anota como se toca el timbre, para que `describe` lo publique.
 pub fn set_doorbell(d: Doorbell) {
-    unsafe { CAMPANA = Some(d) }
+    unsafe { BELL = Some(d) }
 }
 
 /// Como se toca el timbre, si hay.
 pub fn doorbell() -> Option<Doorbell> {
-    unsafe { CAMPANA }
+    unsafe { BELL }
 }
 
 /// Cuantas veces sono el timbre.
@@ -296,14 +296,14 @@ pub fn doorbell() -> Option<Doorbell> {
 /// no seria observable: el unico canal por el que un cliente puede mirar es el
 /// cable, y usarlo despierta al nucleo igual. Si este numero sube, la
 /// interrupcion del agente llego y el kernel la atendio.
-static TIMBRES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static RINGS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// Lo llama quien atiende el timbre. Nada mas: el trabajo lo hace el bucle.
 pub fn rang() {
-    TIMBRES.fetch_add(1, Ordering::Relaxed);
+    RINGS.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Cuantas veces sono.
 pub fn rings() -> u64 {
-    TIMBRES.load(Ordering::Relaxed)
+    RINGS.load(Ordering::Relaxed)
 }

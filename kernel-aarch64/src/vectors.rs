@@ -22,7 +22,7 @@ use kernel_core::fault::{Cause, Fault};
 
 /// El estado que ve el handler, en el orden en que lo dejo el codigo de abajo.
 #[repr(C)]
-pub struct Marco {
+pub struct Frame {
     /// x0 a x30.
     x: [u64; 31],
     /// Donde volver. En una excepcion sincronica apunta a la instruccion que
@@ -33,16 +33,16 @@ pub struct Marco {
     _relleno: u64,
 }
 
-pub const REGISTROS: &[&str] = &[
+pub const REGISTERS: &[&str] = &[
     "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13",
     "x14", "x15", "x16", "x17", "x18", "x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26",
     "x27", "x28", "x29", "x30", "pc", "pstate",
 ];
 
 /// Uno por nucleo: dos que fallan a la vez no se pisan el reporte.
-static mut VALORES: [[u64; REGISTROS.len()]; crate::percpu::RANURAS] =
-    [[0; REGISTROS.len()]; crate::percpu::RANURAS];
-static mut ULTIMO: [Option<Fault>; crate::percpu::RANURAS] = [None; crate::percpu::RANURAS];
+static mut VALUES: [[u64; REGISTERS.len()]; crate::percpu::SLOTS] =
+    [[0; REGISTERS.len()]; crate::percpu::SLOTS];
+static mut LAST: [Option<Fault>; crate::percpu::SLOTS] = [None; crate::percpu::SLOTS];
 
 core::arch::global_asm!(
     r#"
@@ -52,8 +52,8 @@ core::arch::global_asm!(
 // corresponda: de que se trata una excepcion sincronica lo dice ESR_EL1, no la
 // posicion — pero un IRQ **si** se distingue por la posicion, y tiene que ir a
 // otro lado: para el handler de faults un IRQ seria un error sin causa.
-.macro ENTRADA destino
-    b \destino
+.macro ENTRY target
+    b \target
     .balign 0x80
 .endm
 
@@ -61,22 +61,22 @@ core::arch::global_asm!(
 .balign 2048
 .globl VECTORES
 VECTORES:
-    ENTRADA vec_common   // mismo EL, SP0:  sincronica
-    ENTRADA vec_irq      //                 IRQ  <- durante un exec entra aca
-    ENTRADA vec_common   //                 FIQ
-    ENTRADA vec_common   //                 SError
-    ENTRADA vec_common   // mismo EL, SPx:  sincronica
-    ENTRADA vec_irq      //                 IRQ  <- y aca si corre el kernel
-    ENTRADA vec_common   //                 FIQ
-    ENTRADA vec_common   //                 SError
-    ENTRADA vec_common   // EL mas bajo, 64 bits: sincronica
-    ENTRADA vec_irq      //                       IRQ
-    ENTRADA vec_common   //                       FIQ
-    ENTRADA vec_common   //                       SError
-    ENTRADA vec_common   // EL mas bajo, 32 bits: sincronica
-    ENTRADA vec_irq      //                       IRQ
-    ENTRADA vec_common   //                       FIQ
-    ENTRADA vec_common   //                       SError
+    ENTRY vec_common   // mismo EL, SP0:  sincronica
+    ENTRY vec_irq      //                 IRQ  <- durante un exec entra aca
+    ENTRY vec_common   //                 FIQ
+    ENTRY vec_common   //                 SError
+    ENTRY vec_common   // mismo EL, SPx:  sincronica
+    ENTRY vec_irq      //                 IRQ  <- y aca si corre el kernel
+    ENTRY vec_common   //                 FIQ
+    ENTRY vec_common   //                 SError
+    ENTRY vec_common   // EL mas bajo, 64 bits: sincronica
+    ENTRY vec_irq      //                       IRQ
+    ENTRY vec_common   //                       FIQ
+    ENTRY vec_common   //                       SError
+    ENTRY vec_common   // EL mas bajo, 32 bits: sincronica
+    ENTRY vec_irq      //                       IRQ
+    ENTRY vec_common   //                       FIQ
+    ENTRY vec_common   //                       SError
 
 vec_common:
     // 34 huecos de 8 bytes: 31 registros, ELR, SPSR y uno de relleno para que
@@ -172,7 +172,7 @@ vec_irq:
 extern "C" fn irq_rust() {
     // SAFETY: corre con los timbres cerrados por el hardware, asi que nadie mas
     // esta adentro del reparto.
-    unsafe { crate::irq::atender() }
+    unsafe { crate::irq::dispatch() }
 }
 
 extern "C" {
@@ -180,7 +180,7 @@ extern "C" {
 }
 
 #[no_mangle]
-extern "C" fn fault_rust(m: &mut Marco) {
+extern "C" fn fault_rust(m: &mut Frame) {
     let esr: u64;
     let far: u64;
     unsafe {
@@ -192,7 +192,7 @@ extern "C" fn fault_rust(m: &mut Marco) {
     // el detalle propio de esa clase.
     let ec = esr >> 26;
     let iss = esr & 0x01FF_FFFF;
-    let cause = traducir(ec);
+    let cause = translate(ec);
 
     // FAR solo tiene sentido cuando la excepcion fue por tocar una direccion.
     let address = matches!(
@@ -202,18 +202,18 @@ extern "C" fn fault_rust(m: &mut Marco) {
     .then_some(far);
 
     // De quien es este fault. Una sola lectura de un registro del CPU.
-    let ranura = crate::percpu::ranura();
+    let slot = crate::percpu::slot();
 
     let regs = unsafe {
-        let v = &mut (*core::ptr::addr_of_mut!(VALORES))[ranura];
+        let v = &mut (*core::ptr::addr_of_mut!(VALUES))[slot];
         v[..31].copy_from_slice(&m.x);
         v[31] = m.elr;
         v[32] = m.spsr;
-        &(*core::ptr::addr_of!(VALORES))[ranura]
+        &(*core::ptr::addr_of!(VALUES))[slot]
     };
 
     let f = Fault { cause, raw: ec, detail: iss, pc: m.elr, address, regs };
-    unsafe { (*core::ptr::addr_of_mut!(ULTIMO))[ranura] = Some(f) };
+    unsafe { (*core::ptr::addr_of_mut!(LAST))[slot] = Some(f) };
 
     if cause.resumable() {
         // ELR apunta al `brk` mismo: sin correrlo, se reejecuta para siempre.
@@ -227,8 +227,8 @@ extern "C" fn fault_rust(m: &mut Marco) {
     // al punto de recuperacion, que le contesta al agente con este fault como
     // dato (P5). Esto es lo que hace que el codigo del agente no pueda matar al
     // kernel.
-    if crate::percpu::armado() != 0 {
-        m.elr = crate::percpu::punto_de_retorno();
+    if crate::percpu::armed() != 0 {
+        m.elr = crate::percpu::return_point();
         // El codigo del agente corria sobre SP_EL0, asi que el SPSR guardado
         // dice que hay que volver ahi. Se le prende el bit para volver a
         // SP_EL1: la pila del agente puede ser justo lo que se rompio.
@@ -236,16 +236,16 @@ extern "C" fn fault_rust(m: &mut Marco) {
         return;
     }
 
-    let mut s = crate::Serie;
+    let mut s = crate::SerialText;
     let _ = s.write_str("\r\n");
-    kernel_core::fault::report(&f, REGISTROS, &mut s);
+    kernel_core::fault::report(&f, REGISTERS, &mut s);
     loop {
         unsafe { core::arch::asm!("msr daifset, #0xf; wfi", options(nomem, nostack)) }
     }
 }
 
 /// Traduce la clase de excepcion del ESR.
-fn traducir(ec: u64) -> Cause {
+fn translate(ec: u64) -> Cause {
     match ec {
         0x00 => Cause::Unknown,
         0x0E => Cause::Protection,      // estado de ejecucion ilegal
@@ -264,23 +264,23 @@ fn traducir(ec: u64) -> Cause {
 /// # Safety
 ///
 /// Solo desde EL1.
-pub unsafe fn install(ranura: usize) -> Result<(), &'static str> {
+pub unsafe fn install(slot: usize) -> Result<(), &'static str> {
     // El bloque privado primero: el handler lo lee para saber de quien es el
     // fault, asi que tiene que estar puesto antes de que pueda haber uno.
-    crate::percpu::instalar(ranura);
+    crate::percpu::install_block(slot);
 
-    let dir = core::ptr::addr_of!(VECTORES) as u64;
-    if dir % 2048 != 0 {
+    let addr = core::ptr::addr_of!(VECTORES) as u64;
+    if addr % 2048 != 0 {
         return Err("la tabla de vectores no quedo alineada a 2048");
     }
-    core::arch::asm!("msr vbar_el1, {}", in(reg) dir, options(nomem, nostack));
+    core::arch::asm!("msr vbar_el1, {}", in(reg) addr, options(nomem, nostack));
     core::arch::asm!("isb", options(nomem, nostack));
 
     // Se relee, por el mismo motivo que con las tablas de paginas: un install
     // que no hiciera nada se veria igual que uno que anduvo.
-    let puesto: u64;
-    core::arch::asm!("mrs {}, vbar_el1", out(reg) puesto, options(nomem, nostack));
-    if puesto != dir {
+    let read_back: u64;
+    core::arch::asm!("mrs {}, vbar_el1", out(reg) read_back, options(nomem, nostack));
+    if read_back != addr {
         return Err("VBAR_EL1 no quedo apuntando a nuestra tabla");
     }
     Ok(())
@@ -292,5 +292,5 @@ pub fn breakpoint() {
 
 /// El ultimo fault de **este** nucleo.
 pub fn last() -> Option<Fault> {
-    unsafe { (*core::ptr::addr_of!(ULTIMO))[crate::percpu::ranura()] }
+    unsafe { (*core::ptr::addr_of!(LAST))[crate::percpu::slot()] }
 }

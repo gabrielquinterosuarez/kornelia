@@ -110,13 +110,13 @@ impl Error {
 
 /// La ranura de cada nucleo. El que arranca escribe aca su identificador mas
 /// uno, para que cero siga significando "todavia no llego".
-static LLEGADA: [AtomicU64; MAX] = [const { AtomicU64::new(0) }; MAX];
+static ARRIVAL: [AtomicU64; MAX] = [const { AtomicU64::new(0) }; MAX];
 
 /// Cuantas ranuras estan en uso. Solo la escribe el nucleo de arranque.
-static USADAS: AtomicUsize = AtomicUsize::new(0);
+static USED: AtomicUsize = AtomicUsize::new(0);
 
-static mut TABLA: [Option<Core>; MAX] = [None; MAX];
-static mut PROXIMO: u64 = 1;
+static mut TABLE: [Option<Core>; MAX] = [None; MAX];
+static mut NEXT: u64 = 1;
 
 /// Lo que un nucleo recien arrancado llama para avisar que llego.
 ///
@@ -126,13 +126,13 @@ pub fn arrived(slot: usize, id: u64) {
     if slot < MAX {
         // `Release` empareja con el `Acquire` del otro lado: todo lo que este
         // nucleo escribio antes de esto queda visible para quien lea la llegada.
-        LLEGADA[slot].store(id.wrapping_add(1), Ordering::Release);
+        ARRIVAL[slot].store(id.wrapping_add(1), Ordering::Release);
     }
 }
 
 /// Si el nucleo de esa ranura ya aviso que llego.
 pub fn has_arrived(slot: usize) -> bool {
-    slot < MAX && LLEGADA[slot].load(Ordering::Acquire) != 0
+    slot < MAX && ARRIVAL[slot].load(Ordering::Acquire) != 0
 }
 
 /// Reserva una ranura para un nucleo que se va a arrancar.
@@ -140,23 +140,23 @@ pub fn has_arrived(slot: usize) -> bool {
 /// Devuelve el numero de ranura, que es lo que el codigo de arranque le pasa al
 /// nucleo nuevo para que sepa cual es la suya.
 pub fn reserve(id: u64) -> Result<(usize, u64), Error> {
-    let slot = USADAS.load(Ordering::Relaxed);
+    let slot = USED.load(Ordering::Relaxed);
     if slot >= MAX {
         return Err(Error::TableFull);
     }
 
     let handle = unsafe {
-        let h = PROXIMO;
-        PROXIMO += 1;
+        let h = NEXT;
+        NEXT += 1;
         h
     };
 
-    LLEGADA[slot].store(0, Ordering::Release);
+    ARRIVAL[slot].store(0, Ordering::Release);
     unsafe {
-        (&mut *core::ptr::addr_of_mut!(TABLA))[slot] =
+        (&mut *core::ptr::addr_of_mut!(TABLE))[slot] =
             Some(Core { handle, id, state: State::Starting });
     }
-    USADAS.store(slot + 1, Ordering::Release);
+    USED.store(slot + 1, Ordering::Release);
     Ok((slot, handle))
 }
 
@@ -166,7 +166,7 @@ pub fn settle(slot: usize, state: State) {
         return;
     }
     unsafe {
-        if let Some(c) = &mut (&mut *core::ptr::addr_of_mut!(TABLA))[slot] {
+        if let Some(c) = &mut (&mut *core::ptr::addr_of_mut!(TABLE))[slot] {
             c.state = state;
         }
     }
@@ -178,8 +178,8 @@ pub fn is_claimed(id: u64) -> bool {
 }
 
 pub fn all() -> impl Iterator<Item = Core> {
-    let n = USADAS.load(Ordering::Acquire);
-    let t = unsafe { &*core::ptr::addr_of!(TABLA) };
+    let n = USED.load(Ordering::Acquire);
+    let t = unsafe { &*core::ptr::addr_of!(TABLE) };
     t[..n.min(MAX)].iter().filter_map(|c| *c)
 }
 
@@ -190,12 +190,12 @@ pub fn count() -> usize {
 /// Borra la tabla. Solo para los tests.
 #[cfg(test)]
 pub fn reset() {
-    for l in &LLEGADA {
+    for l in &ARRIVAL {
         l.store(0, Ordering::Release);
     }
-    USADAS.store(0, Ordering::Release);
+    USED.store(0, Ordering::Release);
     unsafe {
-        *core::ptr::addr_of_mut!(TABLA) = [None; MAX];
-        PROXIMO = 1;
+        *core::ptr::addr_of_mut!(TABLE) = [None; MAX];
+        NEXT = 1;
     }
 }

@@ -177,7 +177,7 @@ fn head(b: &[u8], pos: usize) -> Result<(u8, u64, usize), Scan> {
     let major = ib >> 5;
     let ai = ib & 0x1f;
 
-    let (largo, valor) = match ai {
+    let (length, value) = match ai {
         0..=23 => (0usize, ai as u64),
         24 => (1, 0),
         25 => (2, 0),
@@ -187,21 +187,21 @@ fn head(b: &[u8], pos: usize) -> Result<(u8, u64, usize), Scan> {
         _ => return Err(Scan::Malformed),
     };
 
-    if largo == 0 {
-        return Ok((major, valor, pos + 1));
+    if length == 0 {
+        return Ok((major, value, pos + 1));
     }
 
-    let desde = pos + 1;
-    let hasta = desde + largo;
-    if hasta > b.len() {
+    let from_at = pos + 1;
+    let up_to = from_at + length;
+    if up_to > b.len() {
         return Err(Scan::Incomplete);
     }
 
     let mut v: u64 = 0;
-    for x in &b[desde..hasta] {
+    for x in &b[from_at..up_to] {
         v = (v << 8) | *x as u64;
     }
-    Ok((major, v, hasta))
+    Ok((major, v, up_to))
 }
 
 /// Recorre un item entero y devuelve donde termina.
@@ -210,7 +210,7 @@ fn scan_one(b: &[u8], pos: usize, depth: u32) -> Result<usize, Scan> {
         return Err(Scan::Malformed);
     }
 
-    let (major, valor, mut p) = head(b, pos)?;
+    let (major, value, mut p) = head(b, pos)?;
 
     match major {
         // Enteros y valores simples: se agotan en el encabezado.
@@ -218,17 +218,17 @@ fn scan_one(b: &[u8], pos: usize, depth: u32) -> Result<usize, Scan> {
 
         // Cadenas: el valor es cuantos bytes siguen.
         2 | 3 => {
-            let fin = p.checked_add(valor as usize).ok_or(Scan::Malformed)?;
-            if fin > b.len() {
+            let end = p.checked_add(value as usize).ok_or(Scan::Malformed)?;
+            if end > b.len() {
                 Err(Scan::Incomplete)
             } else {
-                Ok(fin)
+                Ok(end)
             }
         }
 
         // Arreglo: el valor es cuantos items siguen.
         4 => {
-            for _ in 0..valor {
+            for _ in 0..value {
                 p = scan_one(b, p, depth + 1)?;
             }
             Ok(p)
@@ -236,7 +236,7 @@ fn scan_one(b: &[u8], pos: usize, depth: u32) -> Result<usize, Scan> {
 
         // Mapa: el valor es cuantos PARES siguen.
         5 => {
-            for _ in 0..valor.saturating_mul(2) {
+            for _ in 0..value.saturating_mul(2) {
                 p = scan_one(b, p, depth + 1)?;
             }
             Ok(p)
@@ -268,17 +268,17 @@ impl<'a> Reader<'a> {
     }
 
     fn head(&mut self) -> Option<(u8, u64)> {
-        let (major, valor, p) = head(self.b, self.pos).ok()?;
+        let (major, value, p) = head(self.b, self.pos).ok()?;
         self.pos = p;
-        Some((major, valor))
+        Some((major, value))
     }
 
     fn expect(&mut self, major: u8) -> Option<u64> {
-        let guardado = self.pos;
+        let saved = self.pos;
         match self.head() {
             Some((m, v)) if m == major => Some(v),
             _ => {
-                self.pos = guardado;
+                self.pos = saved;
                 None
             }
         }
@@ -299,17 +299,17 @@ impl<'a> Reader<'a> {
     }
 
     pub fn text(&mut self) -> Option<&'a str> {
-        let guardado = self.pos;
+        let saved = self.pos;
         let n = self.expect(3)? as usize;
-        let fin = self.pos.checked_add(n)?;
-        let s = self.b.get(self.pos..fin).and_then(|x| core::str::from_utf8(x).ok());
+        let end = self.pos.checked_add(n)?;
+        let s = self.b.get(self.pos..end).and_then(|x| core::str::from_utf8(x).ok());
         match s {
             Some(s) => {
-                self.pos = fin;
+                self.pos = end;
                 Some(s)
             }
             None => {
-                self.pos = guardado;
+                self.pos = saved;
                 None
             }
         }
@@ -318,16 +318,16 @@ impl<'a> Reader<'a> {
     /// Una cadena de bytes cruda: es lo que trae el codigo maquina que sube el
     /// agente.
     pub fn bytes(&mut self) -> Option<&'a [u8]> {
-        let guardado = self.pos;
+        let saved = self.pos;
         let n = self.expect(2)? as usize;
-        let fin = self.pos.checked_add(n)?;
-        match self.b.get(self.pos..fin) {
+        let end = self.pos.checked_add(n)?;
+        match self.b.get(self.pos..end) {
             Some(x) => {
-                self.pos = fin;
+                self.pos = end;
                 Some(x)
             }
             None => {
-                self.pos = guardado;
+                self.pos = saved;
                 None
             }
         }
@@ -335,12 +335,12 @@ impl<'a> Reader<'a> {
 
     /// Un `true` o un `false`.
     pub fn bool(&mut self) -> Option<bool> {
-        let guardado = self.pos;
+        let saved = self.pos;
         match self.head() {
             Some((7, 21)) => Some(true),
             Some((7, 20)) => Some(false),
             _ => {
-                self.pos = guardado;
+                self.pos = saved;
                 None
             }
         }
@@ -351,8 +351,8 @@ impl<'a> Reader<'a> {
     /// Es lo que permite ignorar una clave que este kernel no conoce sin perder
     /// el hilo del resto del mensaje.
     pub fn skip(&mut self) -> Option<()> {
-        let fin = scan_one(self.b, self.pos, 0).ok()?;
-        self.pos = fin;
+        let end = scan_one(self.b, self.pos, 0).ok()?;
+        self.pos = end;
         Some(())
     }
 }

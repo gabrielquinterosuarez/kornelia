@@ -23,28 +23,28 @@ use kernel_core::{claims, cores};
 
 /// Donde se copia el trampolin. Tiene que estar abajo de 1 MiB, alineado a
 /// pagina, y coincidir con la constante `TRAMP` del ensamblador de abajo.
-const TRAMPOLIN: u64 = 0x8000;
+const TRAMPOLINE: u64 = 0x8000;
 
 /// 16 KiB de pila para cada nucleo.
-const TAM_PILA: usize = 16 * 1024;
+const STACK_SIZE: usize = 16 * 1024;
 
 #[repr(C, align(16))]
-struct Pilas([[u8; TAM_PILA]; cores::MAX]);
+struct Stacks([[u8; STACK_SIZE]; cores::MAX]);
 
-static mut PILAS: Pilas = Pilas([[0; TAM_PILA]; cores::MAX]);
+static mut STACKS: Stacks = Stacks([[0; STACK_SIZE]; cores::MAX]);
 
 core::arch::global_asm!(
     r#"
 .section .rodata
-.globl AP_TRAMPOLIN_INICIO
-.globl AP_TRAMPOLIN_FIN
+.globl AP_TRAMPOLINE_START
+.globl AP_TRAMPOLINE_END
 
 // La direccion adonde se va a copiar todo esto. Los saltos lejanos necesitan
 // direcciones absolutas, asi que el destino no puede ser una incognita.
 .set TRAMP, 0x8000
 
 .balign 4096
-AP_TRAMPOLIN_INICIO:
+AP_TRAMPOLINE_START:
 .code16
 ap16:
     cli
@@ -113,10 +113,10 @@ gdt:
     .quad 0x00CF9A000000FFFF
     .quad 0x00CF92000000FFFF
     .quad 0x00AF9A000000FFFF
-gdt_fin:
+gdt_end:
 
 gdt_desc:
-    .word gdt_fin - gdt - 1
+    .word gdt_end - gdt - 1
     .long TRAMP + (gdt - ap16)
 
 // cr3, pila, entrada y ranura. Los escribe el nucleo de arranque despues de
@@ -128,14 +128,14 @@ params:
     .quad 0
     .quad 0
 
-AP_TRAMPOLIN_FIN:
+AP_TRAMPOLINE_END:
 "#,
     options(att_syntax)
 );
 
 extern "C" {
-    static AP_TRAMPOLIN_INICIO: u8;
-    static AP_TRAMPOLIN_FIN: u8;
+    static AP_TRAMPOLINE_START: u8;
+    static AP_TRAMPOLINE_END: u8;
 }
 
 /// Donde quedan los parametros dentro del trampolin ya copiado.
@@ -143,10 +143,10 @@ extern "C" {
 /// Se calcula en vez de horneárse: si alguien agrega una instruccion arriba,
 /// el offset cambia solo.
 unsafe fn params() -> *mut u64 {
-    let inicio = core::ptr::addr_of!(AP_TRAMPOLIN_INICIO) as u64;
-    let fin = core::ptr::addr_of!(AP_TRAMPOLIN_FIN) as u64;
+    let start_at = core::ptr::addr_of!(AP_TRAMPOLINE_START) as u64;
+    let end = core::ptr::addr_of!(AP_TRAMPOLINE_END) as u64;
     // `params` son los ultimos 32 bytes del blob.
-    (TRAMPOLIN + (fin - inicio) - 32) as *mut u64
+    (TRAMPOLINE + (end - start_at) - 32) as *mut u64
 }
 
 /// Lo primero que corre un nucleo nuevo, ya en 64 bits y con todo puesto.
@@ -178,34 +178,34 @@ pub fn this_core() -> u64 {
 // --- El APIC ----------------------------------------------------------------
 
 /// Registro de control de interrupciones: la parte de abajo dispara el envio.
-const ICR_BAJO: u64 = 0x300;
+const ICR_LOW: u64 = 0x300;
 /// La parte de arriba, donde va a quien se le manda.
-const ICR_ALTO: u64 = 0x310;
+const ICR_HIGH: u64 = 0x310;
 /// Registro de interrupcion espuria: su bit 8 prende el APIC.
 const SVR: u64 = 0xF0;
 /// Bit 12 del ICR: todavia no se entrego lo anterior.
-const OCUPADO: u32 = 1 << 12;
+const TAKEN: u32 = 1 << 12;
 
-unsafe fn apic_leer(base: u64, reg: u64) -> u32 {
+unsafe fn apic_read(base: u64, reg: u64) -> u32 {
     core::ptr::read_volatile((base + reg) as *const u32)
 }
 
-unsafe fn apic_escribir(base: u64, reg: u64, v: u32) {
+unsafe fn apic_write(base: u64, reg: u64, v: u32) {
     core::ptr::write_volatile((base + reg) as *mut u32, v);
 }
 
 /// Espera a que el APIC termine de entregar lo anterior.
-unsafe fn esperar_entrega(base: u64) {
-    let mut vueltas = 0;
-    while apic_leer(base, ICR_BAJO) & OCUPADO != 0 && vueltas < 1_000_000 {
+unsafe fn wait_for_delivery(base: u64) {
+    let mut rounds = 0;
+    while apic_read(base, ICR_LOW) & TAKEN != 0 && rounds < 1_000_000 {
         core::hint::spin_loop();
-        vueltas += 1;
+        rounds += 1;
     }
 }
 
 /// Una espera a ojo. Todavia no hay reloj: se cuenta en vueltas.
-fn demorar(vueltas: u64) {
-    for _ in 0..vueltas {
+fn delay(rounds: u64) {
+    for _ in 0..rounds {
         core::hint::spin_loop();
     }
 }
@@ -216,22 +216,22 @@ fn demorar(vueltas: u64) {
 ///
 /// `base` tiene que ser la direccion del APIC local, mapeada no cacheable.
 unsafe fn init_sipi(base: u64, apic_id: u64, vector: u8) {
-    let destino = (apic_id as u32) << 24;
+    let target = (apic_id as u32) << 24;
 
     // INIT: lo deja en un estado conocido.
-    apic_escribir(base, ICR_ALTO, destino);
-    apic_escribir(base, ICR_BAJO, 0x0000_4500);
-    esperar_entrega(base);
-    demorar(10_000_000);
+    apic_write(base, ICR_HIGH, target);
+    apic_write(base, ICR_LOW, 0x0000_4500);
+    wait_for_delivery(base);
+    delay(10_000_000);
 
     // SIPI: le dice en que pagina arrancar. Se manda dos veces porque asi lo
     // pide Intel — la primera se puede perder si el nucleo todavia estaba
     // saliendo del INIT.
     for _ in 0..2 {
-        apic_escribir(base, ICR_ALTO, destino);
-        apic_escribir(base, ICR_BAJO, 0x0000_4600 | vector as u32);
-        esperar_entrega(base);
-        demorar(1_000_000);
+        apic_write(base, ICR_HIGH, target);
+        apic_write(base, ICR_LOW, 0x0000_4600 | vector as u32);
+        wait_for_delivery(base);
+        delay(1_000_000);
     }
 }
 
@@ -250,32 +250,32 @@ pub unsafe fn start(hw: &Hardware, id: u64, slot: usize) -> Result<(), cores::Er
 
     // El trampolin va a una direccion fija y baja. Si el agente reclamo
     // justo esa pagina, se avisa en vez de pisarsela.
-    let fin = TRAMPOLIN + 4096;
-    if claims::all().any(|c| TRAMPOLIN < c.end() && fin > c.start) {
+    let end = TRAMPOLINE + 4096;
+    if claims::all().any(|c| TRAMPOLINE < c.end() && end > c.start) {
         return Err(cores::Error::NoMechanism);
     }
 
-    let inicio = core::ptr::addr_of!(AP_TRAMPOLIN_INICIO) as u64;
-    let largo = core::ptr::addr_of!(AP_TRAMPOLIN_FIN) as u64 - inicio;
-    core::ptr::copy_nonoverlapping(inicio as *const u8, TRAMPOLIN as *mut u8, largo as usize);
+    let start_at = core::ptr::addr_of!(AP_TRAMPOLINE_START) as u64;
+    let length = core::ptr::addr_of!(AP_TRAMPOLINE_END) as u64 - start_at;
+    core::ptr::copy_nonoverlapping(start_at as *const u8, TRAMPOLINE as *mut u8, length as usize);
 
     // Los parametros: las mismas tablas de paginas que este nucleo, una pila
     // propia, adonde saltar, y cual es su ranura.
     let cr3: u64;
     core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack));
 
-    let pila = core::ptr::addr_of!(PILAS) as u64 + ((slot + 1) * TAM_PILA) as u64;
+    let stack = core::ptr::addr_of!(STACKS) as u64 + ((slot + 1) * STACK_SIZE) as u64;
 
     let p = params();
     p.write(cr3);
-    p.add(1).write(pila);
+    p.add(1).write(stack);
     p.add(2).write(ap_main as *const () as u64);
     p.add(3).write(slot as u64);
 
     // Prender el APIC por si el firmware lo dejo apagado.
-    let svr = apic_leer(apic.address, SVR);
-    apic_escribir(apic.address, SVR, svr | (1 << 8));
+    let svr = apic_read(apic.address, SVR);
+    apic_write(apic.address, SVR, svr | (1 << 8));
 
-    init_sipi(apic.address, id, (TRAMPOLIN >> 12) as u8);
+    init_sipi(apic.address, id, (TRAMPOLINE >> 12) as u8);
     Ok(())
 }

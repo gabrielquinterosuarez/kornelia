@@ -31,18 +31,18 @@
 /// El pedido mas grande son 64 KiB, pero llegan de a poco y el bucle los saca
 /// enseguida: lo que tiene que aguantar es una rafaga entre dos despertadas, y
 /// la cola del UART en si misma tiene 16 bytes.
-const TAM: usize = 4096;
+const SIZE: usize = 4096;
 
-static mut ANILLO: [u8; TAM] = [0; TAM];
+static mut RING: [u8; SIZE] = [0; SIZE];
 /// Donde escribe el que atiende el timbre.
-static mut ESCRIBE: usize = 0;
+static mut WRITE_AT: usize = 0;
 /// Donde lee el bucle.
-static mut LEE: usize = 0;
+static mut READ_AT: usize = 0;
 /// Cuantos bytes se perdieron por no haber lugar.
 ///
 /// Se cuentan en vez de taparlos: un pedido al que le falta un byte se ve como
 /// CBOR malformado, y sin este numero seria un misterio.
-static mut PERDIDOS: u64 = 0;
+static mut DROPPED: u64 = 0;
 
 /// Guarda un byte que acaba de llegar.
 ///
@@ -53,15 +53,15 @@ static mut PERDIDOS: u64 = 0;
 /// Solo desde el nucleo que atiende el cable, y sin que el bucle este a mitad
 /// de un `pop`.
 pub unsafe fn push(b: u8) {
-    let e = ESCRIBE;
-    let siguiente = (e + 1) % TAM;
-    if siguiente == LEE {
+    let e = WRITE_AT;
+    let next_one = (e + 1) % SIZE;
+    if next_one == READ_AT {
         // Lleno. Se descarta el que llega y se cuenta.
-        PERDIDOS += 1;
+        DROPPED += 1;
         return;
     }
-    (*core::ptr::addr_of_mut!(ANILLO))[e] = b;
-    ESCRIBE = siguiente;
+    (*core::ptr::addr_of_mut!(RING))[e] = b;
+    WRITE_AT = next_one;
 }
 
 /// Saca el byte mas viejo, si hay.
@@ -70,15 +70,15 @@ pub unsafe fn push(b: u8) {
 ///
 /// Solo desde el bucle, y con el timbre apagado.
 pub unsafe fn pop() -> Option<u8> {
-    if LEE == ESCRIBE {
+    if READ_AT == WRITE_AT {
         return None;
     }
-    let b = (*core::ptr::addr_of!(ANILLO))[LEE];
-    LEE = (LEE + 1) % TAM;
+    let b = (*core::ptr::addr_of!(RING))[READ_AT];
+    READ_AT = (READ_AT + 1) % SIZE;
     Some(b)
 }
 
 /// Cuantos bytes se perdieron por falta de lugar.
 pub fn dropped() -> u64 {
-    unsafe { PERDIDOS }
+    unsafe { DROPPED }
 }

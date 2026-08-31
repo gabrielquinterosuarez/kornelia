@@ -21,16 +21,16 @@
 //! dejo UEFI no tiene ninguno. Asi que hay que armar una propia.
 
 /// Selector del segmento de codigo. Es el indice 1 de la GDT, por 8 bytes.
-pub const CODIGO: u16 = 0x08;
+pub const CODE: u16 = 0x08;
 /// Selector del segmento de datos.
-pub const DATOS: u16 = 0x10;
+pub const DATA: u16 = 0x10;
 /// El primer selector de TSS. Cada nucleo tiene el suyo, y cada descriptor
 /// ocupa dos entradas porque en 64 bits mide 16 bytes.
 const TSS_BASE: u16 = 0x18;
 
 /// El selector del TSS de esa ranura.
-fn selector_tss(ranura: usize) -> u16 {
-    TSS_BASE + (ranura as u16) * 16
+fn tss_selector(slot: usize) -> u16 {
+    TSS_BASE + (slot as u16) * 16
 }
 
 /// Cual de las siete pilas de la IST usan las excepciones. La 1.
@@ -45,19 +45,19 @@ pub const IST_FAULTS: u8 = 1;
 pub const IST_IRQ: u8 = 2;
 
 /// Cuantas pilas de la IST se usan.
-const PILAS_IST: usize = 2;
+const IST_STACKS: usize = 2;
 
 /// 16 KiB. Solo tiene que aguantar el marco de excepcion y lo que use el
 /// handler, que trabaja sobre buffers estaticos y no sobre la pila.
-const TAM_PILA: usize = 16 * 1024;
+const STACK_SIZE: usize = 16 * 1024;
 
 #[repr(C, align(16))]
-struct Pilas([[u8; TAM_PILA]; crate::percpu::RANURAS * PILAS_IST]);
+struct Stacks([[u8; STACK_SIZE]; crate::percpu::SLOTS * IST_STACKS]);
 
 /// Una pila de excepcion por nucleo. Compartirlas seria que dos nucleos que
 /// fallan a la vez se pisen el marco de excepcion — corrupcion adentro del
 /// mecanismo que existe para que nada se corrompa en silencio.
-static mut PILAS_EXCEPCION: Pilas = Pilas([[0; TAM_PILA]; crate::percpu::RANURAS * PILAS_IST]);
+static mut EXCEPTION_STACKS: Stacks = Stacks([[0; STACK_SIZE]; crate::percpu::SLOTS * IST_STACKS]);
 
 /// El TSS de 64 bits. De todo lo que tiene, lo unico que se usa es `ist[0]`.
 ///
@@ -80,7 +80,7 @@ struct Tss {
     iomap: u16,
 }
 
-static mut TSS_POR_NUCLEO: [Tss; crate::percpu::RANURAS] = [const {
+static mut TSS_PER_CORE: [Tss; crate::percpu::SLOTS] = [const {
     Tss {
         _reservado0: 0,
         rsp: [0; 3],
@@ -90,22 +90,22 @@ static mut TSS_POR_NUCLEO: [Tss; crate::percpu::RANURAS] = [const {
         _reservado3: 0,
         iomap: core::mem::size_of::<Tss>() as u16,
     }
-}; crate::percpu::RANURAS];
+}; crate::percpu::SLOTS];
 
 /// Nulo, codigo, datos, y dos huecos por cada TSS.
-const ENTRADAS_GDT: usize = 3 + 2 * crate::percpu::RANURAS;
+const GDT_ENTRIES: usize = 3 + 2 * crate::percpu::SLOTS;
 
 #[repr(C, align(16))]
-struct Gdt([u64; ENTRADAS_GDT]);
+struct Gdt([u64; GDT_ENTRIES]);
 
 /// La tabla es una sola y la comparten todos los nucleos: los descriptores son
 /// de solo lectura una vez armados. Lo que cambia por nucleo es **cual TSS
 /// carga cada uno**.
-static mut GDT: Gdt = Gdt([0; ENTRADAS_GDT]);
+static mut GDT: Gdt = Gdt([0; GDT_ENTRIES]);
 
 #[repr(C, packed)]
 struct Descriptor {
-    limite: u16,
+    limit: u16,
     base: u64,
 }
 
@@ -114,19 +114,19 @@ struct Descriptor {
 /// # Safety
 ///
 /// Solo despues de `ExitBootServices`: se reemplaza la GDT del firmware.
-pub unsafe fn install(ranura: usize) -> Result<(), &'static str> {
-    if ranura >= crate::percpu::RANURAS {
+pub unsafe fn install(slot: usize) -> Result<(), &'static str> {
+    if slot >= crate::percpu::SLOTS {
         return Err("ranura fuera de rango");
     }
 
-    let tss = &mut (*core::ptr::addr_of_mut!(TSS_POR_NUCLEO))[ranura];
+    let tss = &mut (*core::ptr::addr_of_mut!(TSS_PER_CORE))[slot];
 
     // Dos pilas por nucleo, y la IST apunta al final de cada una porque crecen
     // hacia abajo.
-    let pilas = core::ptr::addr_of!(PILAS_EXCEPCION) as u64;
-    let mia = ranura * PILAS_IST;
-    tss.ist[(IST_FAULTS - 1) as usize] = pilas + ((mia + 1) * TAM_PILA) as u64;
-    tss.ist[(IST_IRQ - 1) as usize] = pilas + ((mia + 2) * TAM_PILA) as u64;
+    let stacks = core::ptr::addr_of!(EXCEPTION_STACKS) as u64;
+    let mine = slot * IST_STACKS;
+    tss.ist[(IST_FAULTS - 1) as usize] = stacks + ((mine + 1) * STACK_SIZE) as u64;
+    tss.ist[(IST_IRQ - 1) as usize] = stacks + ((mine + 2) * STACK_SIZE) as u64;
 
     let gdt = &mut *core::ptr::addr_of_mut!(GDT);
     gdt.0[0] = 0;
@@ -141,20 +141,20 @@ pub unsafe fn install(ranura: usize) -> Result<(), &'static str> {
     //
     // Se arman todos, no solo el propio: la tabla es compartida y el nucleo que
     // llegue despues necesita encontrar el suyo ya puesto.
-    for i in 0..crate::percpu::RANURAS {
-        let otro = core::ptr::addr_of!((*core::ptr::addr_of!(TSS_POR_NUCLEO))[i]) as u64;
-        let limite = (core::mem::size_of::<Tss>() - 1) as u64;
-        gdt.0[3 + i * 2] = limite & 0xFFFF
-            | (otro & 0xFF_FFFF) << 16
+    for i in 0..crate::percpu::SLOTS {
+        let other_one = core::ptr::addr_of!((*core::ptr::addr_of!(TSS_PER_CORE))[i]) as u64;
+        let limit = (core::mem::size_of::<Tss>() - 1) as u64;
+        gdt.0[3 + i * 2] = limit & 0xFFFF
+            | (other_one & 0xFF_FFFF) << 16
             // 0x89: presente, anillo 0, TSS de 64 bits disponible.
             | 0x89 << 40
-            | ((limite >> 16) & 0xF) << 48
-            | ((otro >> 24) & 0xFF) << 56;
-        gdt.0[4 + i * 2] = otro >> 32;
+            | ((limit >> 16) & 0xF) << 48
+            | ((other_one >> 24) & 0xFF) << 56;
+        gdt.0[4 + i * 2] = other_one >> 32;
     }
 
     let d = Descriptor {
-        limite: (core::mem::size_of::<Gdt>() - 1) as u16,
+        limit: (core::mem::size_of::<Gdt>() - 1) as u16,
         base: core::ptr::addr_of!(*gdt) as u64,
     };
 
@@ -166,24 +166,24 @@ pub unsafe fn install(ranura: usize) -> Result<(), &'static str> {
         // asi que se arma el salto a mano — se apila el selector nuevo y la
         // direccion de vuelta, y `retfq` los usa como si volviera de una
         // llamada lejana.
-        "push {codigo}",
+        "push {code_bytes}",
         "lea {tmp}, [rip + 2f]",
         "push {tmp}",
         "retfq",
         "2:",
 
         // Los de datos si se recargan directo.
-        "mov ss, {datos:x}",
-        "mov ds, {datos:x}",
-        "mov es, {datos:x}",
+        "mov ss, {data:x}",
+        "mov ds, {data:x}",
+        "mov es, {data:x}",
 
         // Y por ultimo el TSS, que es lo que hace visible la IST.
         "ltr {tss:x}",
 
         descriptor = in(reg) &d,
-        codigo = in(reg) CODIGO as u64,
-        datos = in(reg) DATOS as u64,
-        tss = in(reg) selector_tss(ranura) as u64,
+        code_bytes = in(reg) CODE as u64,
+        data = in(reg) DATA as u64,
+        tss = in(reg) tss_selector(slot) as u64,
         tmp = out(reg) _,
         // Sin `nostack`: este bloque apila para el salto lejano.
         options(preserves_flags),
@@ -193,7 +193,7 @@ pub unsafe fn install(ranura: usize) -> Result<(), &'static str> {
     // se veria igual que uno que anduvo.
     let cs: u16;
     core::arch::asm!("mov {0:x}, cs", out(reg) cs, options(nomem, nostack));
-    if cs != CODIGO {
+    if cs != CODE {
         return Err("CS no quedo en el segmento de codigo nuestro");
     }
     Ok(())

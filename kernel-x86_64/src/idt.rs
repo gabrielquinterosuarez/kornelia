@@ -23,14 +23,14 @@ use kernel_core::fault::{Cause, Fault};
 
 /// Los 32 primeros vectores son las excepciones del CPU. Del 32 para arriba son
 /// interrupciones de dispositivo, que le tocan al agente (D9).
-const EXCEPCIONES: usize = 32;
+const EXCEPTIONS: usize = 32;
 
 /// El estado que ve el handler, en el mismo orden en que quedo en la pila.
 ///
 /// El orden importa y no es negociable: lo fija la secuencia de `push` del stub
 /// y lo que el CPU apila solo.
 #[repr(C)]
-pub struct Marco {
+pub struct Frame {
     // Lo que apila el stub, del ultimo al primero.
     rax: u64,
     rbx: u64,
@@ -59,22 +59,22 @@ pub struct Marco {
 }
 
 /// Los nombres, en el mismo orden en que `copiar_registros` deja los valores.
-pub const REGISTROS: &[&str] = &[
+pub const REGISTERS: &[&str] = &[
     "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp", "r8", "r9", "r10", "r11", "r12",
     "r13", "r14", "r15", "rip", "rflags",
 ];
 
 /// Uno por nucleo: dos que fallan a la vez no se pisan el reporte.
-static mut VALORES: [[u64; REGISTROS.len()]; crate::percpu::RANURAS] =
-    [[0; REGISTROS.len()]; crate::percpu::RANURAS];
-static mut ULTIMO: [Option<Fault>; crate::percpu::RANURAS] = [None; crate::percpu::RANURAS];
+static mut VALUES: [[u64; REGISTERS.len()]; crate::percpu::SLOTS] =
+    [[0; REGISTERS.len()]; crate::percpu::SLOTS];
+static mut LAST: [Option<Fault>; crate::percpu::SLOTS] = [None; crate::percpu::SLOTS];
 
 core::arch::global_asm!(
     r#"
 .section .text
 
 // Vector sin codigo de error: se mete un cero para emparejar el marco.
-.macro STUB_SIN n
+.macro STUB_WITHOUT n
 stub_\n:
     push 0
     push \n
@@ -82,44 +82,44 @@ stub_\n:
 .endm
 
 // Vector con codigo de error: ya lo apilo el CPU.
-.macro STUB_CON n
+.macro STUB_WITH n
 stub_\n:
     push \n
     jmp fault_common
 .endm
 
-STUB_SIN 0
-STUB_SIN 1
-STUB_SIN 2
-STUB_SIN 3
-STUB_SIN 4
-STUB_SIN 5
-STUB_SIN 6
-STUB_SIN 7
-STUB_CON 8
-STUB_SIN 9
-STUB_CON 10
-STUB_CON 11
-STUB_CON 12
-STUB_CON 13
-STUB_CON 14
-STUB_SIN 15
-STUB_SIN 16
-STUB_CON 17
-STUB_SIN 18
-STUB_SIN 19
-STUB_SIN 20
-STUB_CON 21
-STUB_SIN 22
-STUB_SIN 23
-STUB_SIN 24
-STUB_SIN 25
-STUB_SIN 26
-STUB_SIN 27
-STUB_SIN 28
-STUB_CON 29
-STUB_CON 30
-STUB_SIN 31
+STUB_WITHOUT 0
+STUB_WITHOUT 1
+STUB_WITHOUT 2
+STUB_WITHOUT 3
+STUB_WITHOUT 4
+STUB_WITHOUT 5
+STUB_WITHOUT 6
+STUB_WITHOUT 7
+STUB_WITH 8
+STUB_WITHOUT 9
+STUB_WITH 10
+STUB_WITH 11
+STUB_WITH 12
+STUB_WITH 13
+STUB_WITH 14
+STUB_WITHOUT 15
+STUB_WITHOUT 16
+STUB_WITH 17
+STUB_WITHOUT 18
+STUB_WITHOUT 19
+STUB_WITHOUT 20
+STUB_WITH 21
+STUB_WITHOUT 22
+STUB_WITHOUT 23
+STUB_WITHOUT 24
+STUB_WITHOUT 25
+STUB_WITHOUT 26
+STUB_WITHOUT 27
+STUB_WITHOUT 28
+STUB_WITH 29
+STUB_WITH 30
+STUB_WITHOUT 31
 
 fault_common:
     // Los registros, tal cual estaban cuando fallo.
@@ -181,13 +181,13 @@ STUBS:
 );
 
 extern "C" {
-    static STUBS: [u64; EXCEPCIONES];
+    static STUBS: [u64; EXCEPTIONS];
 }
 
 /// Lo que llama el stub. Corre con los registros ya a salvo.
 #[no_mangle]
-extern "sysv64" fn fault_rust(m: &mut Marco) {
-    let cause = traducir(m.vector);
+extern "sysv64" fn fault_rust(m: &mut Frame) {
+    let cause = translate(m.vector);
 
     // CR2 guarda la direccion que se quiso tocar, y solo tiene sentido en un
     // page fault: en cualquier otra excepcion es lo que haya quedado de antes.
@@ -201,15 +201,15 @@ extern "sysv64" fn fault_rust(m: &mut Marco) {
 
     // De quien es este fault. Una sola lectura de un registro del CPU: adentro
     // de un handler no se puede depender de memoria compartida.
-    let ranura = crate::percpu::ranura();
+    let slot = crate::percpu::slot();
 
     let regs = unsafe {
-        let v = &mut (*core::ptr::addr_of_mut!(VALORES))[ranura];
+        let v = &mut (*core::ptr::addr_of_mut!(VALUES))[slot];
         *v = [
             m.rax, m.rbx, m.rcx, m.rdx, m.rsi, m.rdi, m.rbp, m.rsp, m.r8, m.r9, m.r10, m.r11,
             m.r12, m.r13, m.r14, m.r15, m.rip, m.rflags,
         ];
-        &(*core::ptr::addr_of!(VALORES))[ranura]
+        &(*core::ptr::addr_of!(VALUES))[slot]
     };
 
     let f = Fault {
@@ -220,7 +220,7 @@ extern "sysv64" fn fault_rust(m: &mut Marco) {
         address,
         regs,
     };
-    unsafe { (*core::ptr::addr_of_mut!(ULTIMO))[ranura] = Some(f) };
+    unsafe { (*core::ptr::addr_of_mut!(LAST))[slot] = Some(f) };
 
     if cause.resumable() {
         // En x86 un `int3` es un trap: RIP ya quedo apuntando a la instruccion
@@ -233,22 +233,22 @@ extern "sysv64" fn fault_rust(m: &mut Marco) {
     // al punto de recuperacion, que le contesta al agente con este fault como
     // dato (P5). Esto es lo que hace que el codigo del agente no pueda matar al
     // kernel.
-    if crate::percpu::armado() != 0 {
-        m.rip = crate::percpu::punto_de_retorno();
+    if crate::percpu::armed() != 0 {
+        m.rip = crate::percpu::return_point();
         return;
     }
 
     // Sin `exec` en curso, un fault es un bug del kernel: la misma instruccion
     // volveria a fallar para siempre. Se cuenta y se para — pero se cuenta.
-    let mut s = crate::Serie;
+    let mut s = crate::SerialText;
     let _ = s.write_str("\r\n");
-    kernel_core::fault::report(&f, REGISTROS, &mut s);
+    kernel_core::fault::report(&f, REGISTERS, &mut s);
     loop {
         unsafe { core::arch::asm!("cli; hlt", options(nomem, nostack)) }
     }
 }
 
-fn traducir(vector: u64) -> Cause {
+fn translate(vector: u64) -> Cause {
     match vector {
         0 => Cause::DivideByZero,
         3 => Cause::Breakpoint,
@@ -265,30 +265,30 @@ fn traducir(vector: u64) -> Cause {
 
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
-struct Entrada {
-    off_baja: u16,
+struct Entry {
+    off_low: u16,
     selector: u16,
     ist: u8,
-    tipo: u8,
-    off_media: u16,
-    off_alta: u32,
-    cero: u32,
+    kind: u8,
+    off_mid: u16,
+    off_high: u32,
+    zero: u32,
 }
 
-impl Entrada {
-    const fn vacia() -> Self {
-        Self { off_baja: 0, selector: 0, ist: 0, tipo: 0, off_media: 0, off_alta: 0, cero: 0 }
+impl Entry {
+    const fn blank() -> Self {
+        Self { off_low: 0, selector: 0, ist: 0, kind: 0, off_mid: 0, off_high: 0, zero: 0 }
     }
 }
 
 #[repr(C, align(16))]
-struct Idt([Entrada; 256]);
+struct Idt([Entry; 256]);
 
-static mut IDT: Idt = Idt([Entrada::vacia(); 256]);
+static mut IDT: Idt = Idt([Entry::blank(); 256]);
 
 #[repr(C, packed)]
 struct Descriptor {
-    limite: u16,
+    limit: u16,
     base: u64,
 }
 
@@ -298,35 +298,35 @@ struct Descriptor {
 ///
 /// Los stubs tienen que estar mapeados y ejecutables, que lo estan porque son
 /// parte de la imagen del kernel.
-pub unsafe fn install(ranura: usize) -> Result<(), &'static str> {
+pub unsafe fn install(slot: usize) -> Result<(), &'static str> {
     // Primero el bloque privado: el handler lo lee para saber de quien es el
     // fault, asi que tiene que estar puesto antes de que pueda haber uno.
-    crate::percpu::instalar(ranura);
+    crate::percpu::install_block(slot);
 
     // Despues la GDT: sin un TSS ahi adentro no existe la pila de excepcion, y
     // las entradas de abajo la piden.
-    crate::gdt::install(ranura)?;
+    crate::gdt::install(slot)?;
 
     let idt = &mut *core::ptr::addr_of_mut!(IDT);
 
-    for v in 0..EXCEPCIONES {
-        let dir = STUBS[v];
-        idt.0[v] = Entrada {
-            off_baja: dir as u16,
-            selector: crate::gdt::CODIGO,
+    for v in 0..EXCEPTIONS {
+        let addr = STUBS[v];
+        idt.0[v] = Entry {
+            off_low: addr as u16,
+            selector: crate::gdt::CODE,
             // La pila propia: el CPU cambia a ella ANTES de apilar el marco,
             // asi que da igual que el codigo del agente haya roto RSP (P5).
             ist: crate::gdt::IST_FAULTS,
             // 0x8E: presente, privilegio 0, compuerta de interrupcion de 64 bits.
-            tipo: 0x8E,
-            off_media: (dir >> 16) as u16,
-            off_alta: (dir >> 32) as u32,
-            cero: 0,
+            kind: 0x8E,
+            off_mid: (addr >> 16) as u16,
+            off_high: (addr >> 32) as u32,
+            zero: 0,
         };
     }
 
     let d = Descriptor {
-        limite: (core::mem::size_of::<Idt>() - 1) as u16,
+        limit: (core::mem::size_of::<Idt>() - 1) as u16,
         base: core::ptr::addr_of!(*idt) as u64,
     };
     core::arch::asm!("lidt [{}]", in(reg) &d, options(readonly, nostack));
@@ -343,22 +343,22 @@ pub unsafe fn install(ranura: usize) -> Result<(), &'static str> {
 ///
 /// `handler` tiene que apuntar a codigo que termine en `iretq`.
 pub unsafe fn set_gate(vector: usize, handler: u64) -> Result<(), &'static str> {
-    if vector < EXCEPCIONES || vector >= 256 {
+    if vector < EXCEPTIONS || vector >= 256 {
         return Err("vector fuera del rango de los aparatos");
     }
     let idt = &mut *core::ptr::addr_of_mut!(IDT);
-    idt.0[vector] = Entrada {
-        off_baja: handler as u16,
-        selector: crate::gdt::CODIGO,
+    idt.0[vector] = Entry {
+        off_low: handler as u16,
+        selector: crate::gdt::CODE,
         // Con pila propia: durante un `exec` la pila en uso es la del agente, y
         // si la rompio el timbre se estrellaria justo al entrar (D29: en este
         // nucleo la interrupcion tiene prioridad, asi que tiene que poder
         // entrar siempre).
         ist: crate::gdt::IST_IRQ,
-        tipo: 0x8E,
-        off_media: (handler >> 16) as u16,
-        off_alta: (handler >> 32) as u32,
-        cero: 0,
+        kind: 0x8E,
+        off_mid: (handler >> 16) as u16,
+        off_high: (handler >> 32) as u32,
+        zero: 0,
     };
     Ok(())
 }
@@ -370,5 +370,5 @@ pub fn breakpoint() {
 
 /// El ultimo fault de **este** nucleo.
 pub fn last() -> Option<Fault> {
-    unsafe { (*core::ptr::addr_of!(ULTIMO))[crate::percpu::ranura()] }
+    unsafe { (*core::ptr::addr_of!(LAST))[crate::percpu::slot()] }
 }

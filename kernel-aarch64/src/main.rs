@@ -47,10 +47,10 @@ impl Platform for AArch64 {
         paging::install(m)
     }
 
-    const REGISTERS: &'static [&'static str] = vectors::REGISTROS;
+    const REGISTERS: &'static [&'static str] = vectors::REGISTERS;
 
     unsafe fn install_fault_handlers(&mut self) -> Result<(), &'static str> {
-        vectors::install(percpu::RANURA_ARRANQUE)
+        vectors::install(percpu::BOOT_SLOT)
     }
 
     fn trigger_breakpoint(&mut self) {
@@ -82,7 +82,7 @@ impl Platform for AArch64 {
         slot: usize,
         raw: bool,
     ) -> Result<kernel_core::channel::Doorbell, kernel_core::handlers::Error> {
-        irq::install_agente(hw, interrupt, slot, raw)
+        irq::install_agent(hw, interrupt, slot, raw)
     }
 
     unsafe fn set_user_access(
@@ -131,7 +131,7 @@ impl Platform for AArch64 {
     unsafe fn exec(&mut self, entry: u64, region: (u64, u64)) -> Outcome {
         // En aarch64 las dos caches NO son coherentes: hay que empujar lo
         // escrito hasta donde lo ve el camino de instrucciones.
-        exec::sincronizar_cache(region.0, region.1);
+        exec::sync_cache(region.0, region.1);
         exec::run(entry)
     }
 }
@@ -141,9 +141,9 @@ impl Platform for AArch64 {
 /// Lo usa el handler de excepciones: ahí no hay una `Platform` a mano, y
 /// tampoco conviene depender de una estructura que puede ser justo la que se
 /// rompió.
-pub struct Serie;
+pub struct SerialText;
 
-impl core::fmt::Write for Serie {
+impl core::fmt::Write for SerialText {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         for b in s.as_bytes() {
             uart::write_byte(*b);
@@ -162,7 +162,7 @@ pub extern "efiapi" fn efi_main(image: *mut c_void, systab: *mut c_void) -> usiz
     // Ya no queda nada por pedirle al firmware, asi que se abandona su pila.
     unsafe {
         MACHINE = machine;
-        saltar_a_la_pila_propia()
+        jump_to_own_stack()
     }
 }
 
@@ -174,7 +174,7 @@ pub extern "efiapi" fn efi_main(image: *mut c_void, systab: *mut c_void) -> usiz
 static mut MACHINE: Machine = Machine::mute("no se llego a describir la maquina");
 
 /// Corre ya sobre la pila propia del kernel.
-extern "C" fn arrancar() -> ! {
+extern "C" fn boot_core() -> ! {
     let machine = unsafe { MACHINE };
     kernel_core::main(&mut AArch64 { machine })
 }
@@ -191,16 +191,16 @@ extern "C" fn arrancar() -> ! {
 /// Solo se puede llamar cuando ya no queda nada por hacer con el firmware: al
 /// mover SP se pierde todo lo que hubiera en la pila vieja, incluida la
 /// direccion de retorno a quien nos llamo.
-unsafe fn saltar_a_la_pila_propia() -> ! {
+unsafe fn jump_to_own_stack() -> ! {
     core::arch::asm!(
         // AArch64 no apila la direccion de retorno (va en X30), asi que SP
         // queda alineado a 16 tal cual, que es lo que exige el hardware.
-        "mov sp, {cima}",
-        "bl {entrada}",
+        "mov sp, {top_of}",
+        "bl {entry}",
         // `arrancar` no vuelve. Si algun dia volviera, es un bug.
         "brk #0",
-        cima = in(reg) kernel_core::stack::top(),
-        entrada = sym arrancar,
+        top_of = in(reg) kernel_core::stack::top(),
+        entry = sym boot_core,
         options(noreturn),
     )
 }

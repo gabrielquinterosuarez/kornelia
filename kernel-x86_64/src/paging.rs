@@ -26,7 +26,7 @@ use kernel_core::machine::Machine;
 use kernel_core::paging::{self, Attr, Mapping};
 
 /// 512 entradas de 8 bytes: una tabla ocupa una pagina de 4 KiB.
-const ENTRADAS: usize = 512;
+const ENTRIES: usize = 512;
 
 /// Cada PDPT cubre 512 GiB. Con ocho se llegan a 4 TiB, que es mucho mas de lo
 /// que direcciona cualquier maquina donde esto vaya a correr — y si algun dia
@@ -40,21 +40,21 @@ const MAX_PDPT: usize = 8;
 const MAX_PD: usize = 4;
 
 #[repr(C, align(4096))]
-struct Tabla([u64; ENTRADAS]);
+struct Table([u64; ENTRIES]);
 
-static mut PML4: Tabla = Tabla([0; ENTRADAS]);
-static mut PDPT: [Tabla; MAX_PDPT] = [const { Tabla([0; ENTRADAS]) }; MAX_PDPT];
-static mut PD: [Tabla; MAX_PD] = [const { Tabla([0; ENTRADAS]) }; MAX_PD];
+static mut PML4: Table = Table([0; ENTRIES]);
+static mut PDPT: [Table; MAX_PDPT] = [const { Table([0; ENTRIES]) }; MAX_PDPT];
+static mut PD: [Table; MAX_PD] = [const { Table([0; ENTRIES]) }; MAX_PD];
 
 // --- Los bits de una entrada ------------------------------------------------
-const PRESENTE: u64 = 1 << 0;
-const ESCRIBIBLE: u64 = 1 << 1;
+const PRESENT: u64 = 1 << 0;
+const WRITABLE: u64 = 1 << 1;
 /// PWT: write-through.
 const PWT: u64 = 1 << 3;
 /// PCD: cache disable. Con PWT arriba da "no cacheable" con el PAT por defecto.
 const PCD: u64 = 1 << 4;
 /// PS en el PDPT: esta entrada es una pagina de 1 GiB.
-const GRANDE: u64 = 1 << 7;
+const HUGE: u64 = 1 << 7;
 
 /// Arma las tablas y las carga en CR3.
 ///
@@ -63,7 +63,7 @@ const GRANDE: u64 = 1 << 7;
 /// Solo despues de `ExitBootServices`: cambiar CR3 con el firmware todavia vivo
 /// le sacaria el piso a sus propias estructuras.
 pub unsafe fn install(m: &Machine) -> Result<Mapping, &'static str> {
-    if !hay_paginas_de_1gib() {
+    if !has_1gib_pages() {
         return Err("el CPU no tiene paginas de 1 GiB (CPUID 80000001h EDX.26)");
     }
 
@@ -71,7 +71,7 @@ pub unsafe fn install(m: &Machine) -> Result<Mapping, &'static str> {
     if total == 0 {
         return Err("el mapa de memoria esta vacio");
     }
-    if total > (MAX_PDPT * ENTRADAS) as u64 {
+    if total > (MAX_PDPT * ENTRIES) as u64 {
         return Err("la maquina direcciona mas de 4 TiB y las tablas no llegan");
     }
 
@@ -80,11 +80,11 @@ pub unsafe fn install(m: &Machine) -> Result<Mapping, &'static str> {
 
     let pd = &mut *core::ptr::addr_of_mut!(PD);
     let mut device_gib = 0;
-    let mut partidos = 0usize;
+    let mut split_count = 0usize;
 
     for gib in 0..total {
-        let cual = (gib / ENTRADAS as u64) as usize;
-        let cual_entrada = (gib % ENTRADAS as u64) as usize;
+        let which = (gib / ENTRIES as u64) as usize;
+        let which_entry = (gib % ENTRIES as u64) as usize;
 
         let device = paging::attr_of(m, gib) == Attr::Device;
         if device {
@@ -95,55 +95,55 @@ pub unsafe fn install(m: &Machine) -> Result<Mapping, &'static str> {
         if !paging::needs_split(m, gib) {
             // Nada que distinguir adentro: un solo bloque de 1 GiB. Sin el bit
             // de usuario, o sea que es del kernel — de ahi no salen reclamos.
-            pdpt[cual].0[cual_entrada] =
-                (gib * paging::GIB) | PRESENTE | ESCRIBIBLE | GRANDE | cache;
+            pdpt[which].0[which_entry] =
+                (gib * paging::GIB) | PRESENT | WRITABLE | HUGE | cache;
             continue;
         }
 
         // Con kernel o con memoria libre adentro: se parte en bloques de 2 MiB
         // para poder marcar cuales alcanza el agente y cuales no.
-        if partidos >= MAX_PD {
+        if split_count >= MAX_PD {
             return Err("hay mas pedazos con kernel adentro de los que se pueden partir");
         }
-        let tabla = &mut pd[partidos];
-        for i in 0..ENTRADAS {
-            let base = gib * paging::GIB + i as u64 * paging::BLOQUE;
+        let table = &mut pd[split_count];
+        for i in 0..ENTRIES {
+            let base = gib * paging::GIB + i as u64 * paging::BLOCK;
             // Arrancan siendo del kernel. El permiso se prende bloque por
             // bloque cuando el agente reclama memoria pidiendolo (D27).
-            tabla.0[i] = base | PRESENTE | ESCRIBIBLE | GRANDE | cache;
+            table.0[i] = base | PRESENT | WRITABLE | HUGE | cache;
         }
         // La entrada que apunta a la tabla de bloques lleva el bit de usuario
         // **prendido**, y no porque todo lo de abajo sea del agente: el permiso
         // efectivo es el AND de todos los niveles, asi que si esta apagado aca
         // arriba, lo que digan los bloques de abajo no importa. Quien decide es
         // cada bloque.
-        pdpt[cual].0[cual_entrada] =
-            (core::ptr::addr_of!(*tabla) as u64) | PRESENTE | ESCRIBIBLE | USUARIO;
-        partidos += 1;
+        pdpt[which].0[which_entry] =
+            (core::ptr::addr_of!(*table) as u64) | PRESENT | WRITABLE | USER;
+        split_count += 1;
     }
 
     // Cuantos PDPT se llegaron a usar, y se cuelgan del PML4.
-    let usados = total.div_ceil(ENTRADAS as u64) as usize;
-    for i in 0..usados {
-        let dir = core::ptr::addr_of!(pdpt[i]) as u64;
+    let used_slots = total.div_ceil(ENTRIES as u64) as usize;
+    for i in 0..used_slots {
+        let addr = core::ptr::addr_of!(pdpt[i]) as u64;
         // Mismo motivo que arriba: el nivel de mas arriba tiene que dejar pasar
         // para que los de abajo puedan decidir.
-        pml4.0[i] = dir | PRESENTE | ESCRIBIBLE | USUARIO;
+        pml4.0[i] = addr | PRESENT | WRITABLE | USER;
     }
 
     // El salto. Desde la instruccion siguiente, todas las direcciones se
     // traducen con estas tablas — por eso el identity map tiene que incluir el
     // codigo que esta corriendo, y lo incluye: mapea todo.
-    let raiz = core::ptr::addr_of!(*pml4) as u64;
-    core::arch::asm!("mov cr3, {}", in(reg) raiz, options(nostack, preserves_flags));
+    let root = core::ptr::addr_of!(*pml4) as u64;
+    core::arch::asm!("mov cr3, {}", in(reg) root, options(nostack, preserves_flags));
 
     // Se relee para confirmar que el cambio ocurrio. Sin esto, un `install`
     // que no hiciera nada se veria igual que uno que anduvo — y el sintoma
     // seria que mem.claim entrega las tablas del firmware creyendolas libres.
     // Los 12 bits de abajo de CR3 son banderas, no direccion.
-    let puesto: u64;
-    core::arch::asm!("mov {}, cr3", out(reg) puesto, options(nostack, preserves_flags));
-    if puesto & !0xFFF != raiz {
+    let read_back: u64;
+    core::arch::asm!("mov {}, cr3", out(reg) read_back, options(nostack, preserves_flags));
+    if read_back & !0xFFF != root {
         return Err("CR3 no quedo apuntando a nuestras tablas");
     }
 
@@ -154,9 +154,9 @@ pub unsafe fn install(m: &Machine) -> Result<Mapping, &'static str> {
     // Va despues de cargar las tablas y antes de que exista ningun reclamo: si
     // hubiera una pagina ya marcada, el kernel dejaria de poder ejecutar la
     // suya en el mismo instante.
-    let smep = prender_smep();
+    let smep = enable_smep();
 
-    Ok(Mapping { gib: total, device_gib, root: raiz, isolation: smep })
+    Ok(Mapping { gib: total, device_gib, root: root, isolation: smep })
 }
 
 /// Prende SMEP si el CPU lo tiene.
@@ -170,7 +170,7 @@ pub unsafe fn install(m: &Machine) -> Result<Mapping, &'static str> {
 ///
 /// Ninguna pagina puede estar marcada para el agente todavia, o el kernel
 /// dejaria de poder ejecutar la suya.
-unsafe fn prender_smep() -> bool {
+unsafe fn enable_smep() -> bool {
     use core::arch::x86_64::__cpuid_count;
 
     // Hoja 7, subhoja 0, bit 7 de EBX.
@@ -196,7 +196,7 @@ unsafe fn prender_smep() -> bool {
 /// No se da por sentado: es una extension, y un CPU viejo o un modelo de QEMU
 /// austero no la tiene. Si faltara y se armaran las tablas igual, el bit PS se
 /// interpretaria como parte de una direccion y el salto seria a la nada.
-fn hay_paginas_de_1gib() -> bool {
+fn has_1gib_pages() -> bool {
     use core::arch::x86_64::__cpuid;
 
     // Primero hay que preguntar si existen las hojas extendidas: pedir una que
@@ -213,59 +213,59 @@ fn hay_paginas_de_1gib() -> bool {
 /// funcion del CPU que el firmware suele prender. Una pagina es del agente o la
 /// ejecuta el kernel, nunca las dos — la misma regla que aarch64 tiene metida en
 /// el modelo de permisos.
-const USUARIO: u64 = 1 << 2;
+const USER: u64 = 1 << 2;
 
 /// Marca un rango como alcanzable, o no, desde el nivel sin privilegio.
 ///
 /// # Safety
 ///
-/// El rango tiene que estar alineado a `BLOQUE` y caer en pedazos ya partidos.
+/// El rango tiene que estar alineado a `BLOCK` y caer en pedazos ya partidos.
 pub unsafe fn set_user_access(
     m: &Machine,
     start: u64,
     bytes: u64,
     user: bool,
 ) -> Result<(), &'static str> {
-    if start % paging::BLOQUE != 0 || bytes % paging::BLOQUE != 0 || bytes == 0 {
+    if start % paging::BLOCK != 0 || bytes % paging::BLOCK != 0 || bytes == 0 {
         return Err("el rango no esta alineado al bloque");
     }
 
     let pdpt = &mut *core::ptr::addr_of_mut!(PDPT);
     let pd = &mut *core::ptr::addr_of_mut!(PD);
 
-    let mut dir = start;
-    while dir < start + bytes {
-        let gib = dir / paging::GIB;
+    let mut addr = start;
+    while addr < start + bytes {
+        let gib = addr / paging::GIB;
         if !paging::needs_split(m, gib) {
             return Err("ese pedazo no tiene grano fino");
         }
         // Encontrar la tabla de bloques que cuelga de esa entrada.
-        let cual = (gib / ENTRADAS as u64) as usize;
-        let entrada = pdpt[cual].0[(gib % ENTRADAS as u64) as usize];
-        if entrada & GRANDE != 0 {
+        let which = (gib / ENTRIES as u64) as usize;
+        let entry = pdpt[which].0[(gib % ENTRIES as u64) as usize];
+        if entry & HUGE != 0 {
             return Err("ese pedazo quedo como un bloque entero");
         }
-        let tabla_dir = entrada & 0x000F_FFFF_FFFF_F000;
+        let table_addr = entry & 0x000F_FFFF_FFFF_F000;
 
-        let indice = ((dir % paging::GIB) / paging::BLOQUE) as usize;
-        let tabla = pd
+        let index = ((addr % paging::GIB) / paging::BLOCK) as usize;
+        let table = pd
             .iter_mut()
-            .find(|t| core::ptr::addr_of!(**t) as u64 == tabla_dir)
+            .find(|t| core::ptr::addr_of!(**t) as u64 == table_addr)
             .ok_or("no se encontro la tabla de bloques")?;
 
         if user {
-            tabla.0[indice] |= USUARIO;
+            table.0[index] |= USER;
         } else {
-            tabla.0[indice] &= !USUARIO;
+            table.0[index] &= !USER;
         }
-        dir += paging::BLOQUE;
+        addr += paging::BLOCK;
     }
 
     // Lo que el CPU se acuerde de antes ya no vale. Recargar la raiz vacia el
     // recuerdo entero: mas caro que borrar entrada por entrada, pero esto pasa
     // al reclamar memoria y no en un camino caliente.
-    let raiz: u64;
-    core::arch::asm!("mov {}, cr3", out(reg) raiz, options(nomem, nostack));
-    core::arch::asm!("mov cr3, {}", in(reg) raiz, options(nostack));
+    let root: u64;
+    core::arch::asm!("mov {}, cr3", out(reg) root, options(nomem, nostack));
+    core::arch::asm!("mov cr3, {}", in(reg) root, options(nostack));
     Ok(())
 }

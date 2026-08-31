@@ -15,14 +15,14 @@ const LSR: u16 = COM1 + 5;
 const LSR_DATA_READY: u8 = 1 << 0; // hay un byte esperando en la FIFO de entrada
 const LSR_THR_EMPTY: u8 = 1 << 5; // el registro de salida quedo libre
 
-unsafe fn outb(port: u16, val: u8) {
-    core::arch::asm!("out dx, al", in("dx") port, in("al") val, options(nomem, nostack));
+unsafe fn outb(port: u16, value: u8) {
+    core::arch::asm!("out dx, al", in("dx") port, in("al") value, options(nomem, nostack));
 }
 
 unsafe fn inb(port: u16) -> u8 {
-    let val: u8;
-    core::arch::asm!("in al, dx", out("al") val, in("dx") port, options(nomem, nostack));
-    val
+    let value: u8;
+    core::arch::asm!("in al, dx", out("al") value, in("dx") port, options(nomem, nostack));
+    value
 }
 
 pub fn init() {

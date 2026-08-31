@@ -121,16 +121,16 @@ impl Default for Request {
     }
 }
 
-static mut TABLA: [Option<Claim>; MAX] = [None; MAX];
+static mut TABLE: [Option<Claim>; MAX] = [None; MAX];
 
 /// El proximo handle. Solo sube: un handle liberado **no se reusa**, para que
 /// un pedido que llega tarde con un handle viejo de un error y no toque lo que
 /// otro reclamo despues en el mismo lugar.
-static mut PROXIMO: u64 = 1;
+static mut NEXT: u64 = 1;
 
 /// Todos los reclamos vigentes.
 pub fn all() -> impl Iterator<Item = Claim> {
-    let t = unsafe { &*core::ptr::addr_of!(TABLA) };
+    let t = unsafe { &*core::ptr::addr_of!(TABLE) };
     t.iter().filter_map(|c| *c)
 }
 
@@ -144,10 +144,10 @@ pub fn get(handle: u64) -> Option<Claim> {
 
 /// Devuelve lo reclamado. `true` si existia.
 pub fn release(handle: u64) -> bool {
-    let t = unsafe { &mut *core::ptr::addr_of_mut!(TABLA) };
-    for hueco in t.iter_mut() {
-        if hueco.map(|c| c.handle) == Some(handle) {
-            *hueco = None;
+    let t = unsafe { &mut *core::ptr::addr_of_mut!(TABLE) };
+    for gap in t.iter_mut() {
+        if gap.map(|c| c.handle) == Some(handle) {
+            *gap = None;
             return true;
         }
     }
@@ -168,8 +168,8 @@ pub fn claim(m: &Machine, r: Request) -> Result<Claim, Error> {
     // en un solo lugar.
     let r = if r.user {
         Request {
-            bytes: r.bytes.next_multiple_of(crate::paging::BLOQUE),
-            align: r.align.max(crate::paging::BLOQUE),
+            bytes: r.bytes.next_multiple_of(crate::paging::BLOCK),
+            align: r.align.max(crate::paging::BLOCK),
             ..r
         }
     } else {
@@ -177,13 +177,13 @@ pub fn claim(m: &Machine, r: Request) -> Result<Claim, Error> {
     };
 
     match r.at {
-        Some(dir) => reclamar_exacto(m, dir, r.bytes),
-        None => buscar_hueco(m, r),
+        Some(addr) => claim_exact(m, addr, r.bytes),
+        None => find_gap(m, r),
     }
 }
 
 /// Reclama un rango exacto. Es el camino del MMIO.
-fn reclamar_exacto(m: &Machine, start: u64, bytes: u64) -> Result<Claim, Error> {
+fn claim_exact(m: &Machine, start: u64, bytes: u64) -> Result<Claim, Error> {
     let end = start.checked_add(bytes).ok_or(Error::Unmapped)?;
 
     // Tiene que estar entero adentro de lo que la maquina informo, y de una sola
@@ -196,14 +196,14 @@ fn reclamar_exacto(m: &Machine, start: u64, bytes: u64) -> Result<Claim, Error> 
     if region.kind == Kind::Kernel {
         return Err(Error::IsKernel);
     }
-    if pisa_algo(start, end) {
+    if overlaps(start, end) {
         return Err(Error::Taken);
     }
-    anotar(start, bytes, region.kind)
+    record(start, bytes, region.kind)
 }
 
 /// Busca el primer hueco libre que sirva.
-fn buscar_hueco(m: &Machine, r: Request) -> Result<Claim, Error> {
+fn find_gap(m: &Machine, r: Request) -> Result<Claim, Error> {
     for region in m.regions {
         // Solo RAM utilizable: lo demas se puede pedir, pero por direccion
         // exacta y sabiendo lo que se pide.
@@ -211,30 +211,30 @@ fn buscar_hueco(m: &Machine, r: Request) -> Result<Claim, Error> {
             continue;
         }
 
-        let mut candidato = alinear(region.start, r.align);
+        let mut candidate = align_up(region.start, r.align);
 
         loop {
-            let Some(fin) = candidato.checked_add(r.bytes) else { break };
-            if fin > region.end() {
+            let Some(end) = candidate.checked_add(r.bytes) else { break };
+            if end > region.end() {
                 break;
             }
-            if let Some(tope) = r.below {
-                if fin > tope {
+            if let Some(cap) = r.below {
+                if end > cap {
                     break;
                 }
             }
 
-            match primero_que_pisa(candidato, fin) {
+            match first_overlap(candidate, end) {
                 // Libre: es este.
-                None => return anotar(candidato, r.bytes, region.kind),
+                None => return record(candidate, r.bytes, region.kind),
                 // Ocupado: se salta hasta despues de lo que estorba. Avanzar de
                 // a poco recorreria byte por byte una maquina con gigabytes.
                 Some(c) => {
-                    let siguiente = alinear(c.end(), r.align);
-                    if siguiente <= candidato {
+                    let next_one = align_up(c.end(), r.align);
+                    if next_one <= candidate {
                         break; // no avanza: se corta en vez de girar en falso
                     }
-                    candidato = siguiente;
+                    candidate = next_one;
                 }
             }
         }
@@ -244,7 +244,7 @@ fn buscar_hueco(m: &Machine, r: Request) -> Result<Claim, Error> {
 
 /// Anota que ese reclamo quedo alcanzable sin privilegio.
 pub fn mark_user(handle: u64) {
-    let t = unsafe { &mut *core::ptr::addr_of_mut!(TABLA) };
+    let t = unsafe { &mut *core::ptr::addr_of_mut!(TABLE) };
     for c in t.iter_mut().flatten() {
         if c.handle == handle {
             c.user = true;
@@ -252,30 +252,30 @@ pub fn mark_user(handle: u64) {
     }
 }
 
-fn anotar(start: u64, bytes: u64, kind: Kind) -> Result<Claim, Error> {
-    let t = unsafe { &mut *core::ptr::addr_of_mut!(TABLA) };
-    let hueco = t.iter_mut().find(|c| c.is_none()).ok_or(Error::TableFull)?;
+fn record(start: u64, bytes: u64, kind: Kind) -> Result<Claim, Error> {
+    let t = unsafe { &mut *core::ptr::addr_of_mut!(TABLE) };
+    let gap = t.iter_mut().find(|c| c.is_none()).ok_or(Error::TableFull)?;
 
     let handle = unsafe {
-        let h = PROXIMO;
-        PROXIMO += 1;
+        let h = NEXT;
+        NEXT += 1;
         h
     };
 
     let c = Claim { handle, start, bytes, kind, user: false };
-    *hueco = Some(c);
+    *gap = Some(c);
     Ok(c)
 }
 
-fn primero_que_pisa(start: u64, end: u64) -> Option<Claim> {
+fn first_overlap(start: u64, end: u64) -> Option<Claim> {
     all().find(|c| start < c.end() && end > c.start)
 }
 
-fn pisa_algo(start: u64, end: u64) -> bool {
-    primero_que_pisa(start, end).is_some()
+fn overlaps(start: u64, end: u64) -> bool {
+    first_overlap(start, end).is_some()
 }
 
-fn alinear(v: u64, a: u64) -> u64 {
+fn align_up(v: u64, a: u64) -> u64 {
     // `a` ya se comprobo potencia de dos.
     (v + a - 1) & !(a - 1)
 }
@@ -284,8 +284,8 @@ fn alinear(v: u64, a: u64) -> u64 {
 /// direccion fisica donde empieza.
 pub fn range_of(handle: u64, off: u64, len: u64) -> Result<u64, Error> {
     let c = get(handle).ok_or(Error::NoSuchHandle)?;
-    let fin = off.checked_add(len).ok_or(Error::OutOfBounds)?;
-    if fin > c.bytes {
+    let end = off.checked_add(len).ok_or(Error::OutOfBounds)?;
+    if end > c.bytes {
         return Err(Error::OutOfBounds);
     }
     Ok(c.start + off)
@@ -295,7 +295,7 @@ pub fn range_of(handle: u64, off: u64, len: u64) -> Result<u64, Error> {
 #[cfg(test)]
 pub fn reset() {
     unsafe {
-        *core::ptr::addr_of_mut!(TABLA) = [None; MAX];
-        PROXIMO = 1;
+        *core::ptr::addr_of_mut!(TABLE) = [None; MAX];
+        NEXT = 1;
     }
 }

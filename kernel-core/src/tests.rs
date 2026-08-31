@@ -124,7 +124,7 @@ impl Platform for Fake {
 }
 
 /// Devuelve lo que `Umbilical::size` emite para ese tamano.
-fn formato(bytes: u64) -> String {
+fn format_of(bytes: u64) -> String {
     let mut f = Fake::new();
     {
         let mut u = Umbilical::new(&mut f);
@@ -138,11 +138,11 @@ fn formato(bytes: u64) -> String {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn usa_la_unidad_mas_grande_que_sea_exacta() {
-    assert_eq!(formato(4096), "4 KiB");
-    assert_eq!(formato(1024 * 1024), "1 MiB");
-    assert_eq!(formato(1024 * 1024 * 1024), "1 GiB");
-    assert_eq!(formato(12 * 1024 * 1024 * 1024), "12 GiB");
+fn uses_the_largest_unit_that_is_exact() {
+    assert_eq!(format_of(4096), "4 KiB");
+    assert_eq!(format_of(1024 * 1024), "1 MiB");
+    assert_eq!(format_of(1024 * 1024 * 1024), "1 GiB");
+    assert_eq!(format_of(12 * 1024 * 1024 * 1024), "12 GiB");
 }
 
 /// El invariante que sostiene P4: el kernel no miente sobre la maquina.
@@ -150,27 +150,27 @@ fn usa_la_unidad_mas_grande_que_sea_exacta() {
 /// Un "512 MiB" que en realidad eran 512 MiB menos una pagina seria una mentira
 /// silenciosa, del peor tipo: se lee igual de bien que la verdad.
 #[test]
-fn nunca_redondea() {
-    let casi_512_mib = 512 * 1024 * 1024 - 4096;
-    let s = formato(casi_512_mib);
+fn never_rounds() {
+    let almost_512_mib = 512 * 1024 * 1024 - 4096;
+    let s = format_of(almost_512_mib);
     assert!(!s.contains("MiB"), "redondeo a MiB: {s}");
     assert_eq!(s, "524284 KiB");
 
-    let casi_1_gib = 1024 * 1024 * 1024 - 1024 * 1024;
-    let s = formato(casi_1_gib);
+    let almost_1_gib = 1024 * 1024 * 1024 - 1024 * 1024;
+    let s = format_of(almost_1_gib);
     assert!(!s.contains("GiB"), "redondeo a GiB: {s}");
     assert_eq!(s, "1023 MiB");
 }
 
 #[test]
-fn lo_que_no_es_multiplo_de_kib_sale_en_bytes() {
-    assert_eq!(formato(1), "1 B");
-    assert_eq!(formato(1500), "1500 B");
+fn what_is_not_a_multiple_of_kib_comes_out_in_bytes() {
+    assert_eq!(format_of(1), "1 B");
+    assert_eq!(format_of(1500), "1500 B");
 }
 
 #[test]
-fn el_cero_no_rompe_nada() {
-    assert_eq!(formato(0), "0 KiB");
+fn zero_breaks_nothing() {
+    assert_eq!(format_of(0), "0 KiB");
 }
 
 // ---------------------------------------------------------------------------
@@ -178,14 +178,14 @@ fn el_cero_no_rompe_nada() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn solo_se_cuenta_como_libre_lo_que_es_libre() {
-    static REGIONES: [Region; 4] = [
+fn only_what_is_free_counts_as_free() {
+    static REGIONS: [Region; 4] = [
         Region { start: 0, bytes: 4096, kind: Kind::Free },
         Region { start: 4096, bytes: 8192, kind: Kind::Firmware },
         Region { start: 12288, bytes: 4096, kind: Kind::Free },
         Region { start: 16384, bytes: 1 << 30, kind: Kind::Mmio },
     ];
-    let m = Machine { regions: &REGIONES, tables: Tables::default(), failure: None };
+    let m = Machine { regions: &REGIONS, tables: Tables::default(), failure: None };
 
     // 8 KiB: las dos regiones libres. Ni el firmware ni el MMIO cuentan, por
     // mas que el MMIO sea 1 GiB de espacio direccionable.
@@ -193,7 +193,7 @@ fn solo_se_cuenta_como_libre_lo_que_es_libre() {
 }
 
 #[test]
-fn una_maquina_muda_no_tiene_nada() {
+fn a_mute_machine_has_nothing() {
     let m = Machine::mute("se rompio algo");
     assert_eq!(m.free_bytes(), 0);
     assert!(m.regions.is_empty());
@@ -201,13 +201,13 @@ fn una_maquina_muda_no_tiene_nada() {
 }
 
 #[test]
-fn el_fin_de_una_region_no_desborda() {
+fn the_end_of_a_region_does_not_overflow() {
     let r = Region { start: u64::MAX - 10, bytes: 1000, kind: Kind::Free };
     assert_eq!(r.end(), u64::MAX);
 }
 
 #[test]
-fn un_tipo_desconocido_conserva_su_numero() {
+fn an_unknown_kind_keeps_its_number() {
     // P4: no se le inventa significado, se informa crudo.
     let k = Kind::Other(9999);
     assert_eq!(k.name(), "otra");
@@ -236,7 +236,7 @@ fn rsdp(revision: u8) -> [u8; 36] {
 }
 
 #[test]
-fn acepta_un_rsdp_bien_formado() {
+fn accepts_a_well_formed_rsdp() {
     let b = rsdp(2);
     let a = unsafe { read_acpi(b.as_ptr() as u64) }.expect("deberia aceptarlo");
     assert_eq!(a.revision, 2);
@@ -245,7 +245,7 @@ fn acepta_un_rsdp_bien_formado() {
 }
 
 #[test]
-fn en_acpi_1_0_no_se_lee_el_xsdt() {
+fn in_acpi_1_0_the_xsdt_is_not_read() {
     // La revision 0 no tiene encabezado extendido: leerlo seria leer lo que
     // haya al lado y pasarlo por una direccion.
     let a = unsafe { read_acpi(rsdp(0).as_ptr() as u64) }.unwrap();
@@ -254,7 +254,7 @@ fn en_acpi_1_0_no_se_lee_el_xsdt() {
 }
 
 #[test]
-fn rechaza_una_firma_ajena() {
+fn rejects_a_foreign_signature() {
     let mut b = rsdp(2);
     b[0] = b'X';
     assert!(unsafe { read_acpi(b.as_ptr() as u64) }.is_none());
@@ -263,7 +263,7 @@ fn rechaza_una_firma_ajena() {
 /// Esta es la razon de ser del checksum: un puntero que casualmente empiece
 /// con la firma correcta pero no sea un RSDP.
 #[test]
-fn rechaza_un_checksum_que_no_cierra() {
+fn rejects_a_checksum_that_does_not_add_up() {
     let mut b = rsdp(2);
     b[9] = b[9].wrapping_add(1);
     assert!(unsafe { read_acpi(b.as_ptr() as u64) }.is_none());
@@ -280,7 +280,7 @@ fn dtb() -> [u8; 28] {
 }
 
 #[test]
-fn acepta_un_device_tree_bien_formado() {
+fn accepts_a_well_formed_device_tree() {
     let b = dtb();
     let d = unsafe { read_device_tree(b.as_ptr() as u64) }.expect("deberia aceptarlo");
     assert_eq!(d.bytes, 1024);
@@ -288,7 +288,7 @@ fn acepta_un_device_tree_bien_formado() {
 }
 
 #[test]
-fn rechaza_un_magico_que_no_es() {
+fn rejects_a_magic_that_is_not() {
     let mut b = dtb();
     b[3] = 0x00;
     assert!(unsafe { read_device_tree(b.as_ptr() as u64) }.is_none());
@@ -297,7 +297,7 @@ fn rechaza_un_magico_que_no_es() {
 /// Un magico escrito en little-endian tiene que ser rechazado: es justo el bug
 /// que aparece si alguien "arregla" el `from_be`.
 #[test]
-fn rechaza_el_magico_al_reves() {
+fn rejects_the_magic_backwards() {
     let mut b = dtb();
     b[0..4].copy_from_slice(&0xd00d_feedu32.to_le_bytes());
     assert!(unsafe { read_device_tree(b.as_ptr() as u64) }.is_none());
@@ -308,7 +308,7 @@ fn rechaza_el_magico_al_reves() {
 // ---------------------------------------------------------------------------
 
 /// Codifica con el Writer y devuelve los bytes.
-fn enc(f: impl FnOnce(&mut Writer<'_>)) -> Vec<u8> {
+fn encode(f: impl FnOnce(&mut Writer<'_>)) -> Vec<u8> {
     let mut buf = [0u8; 512];
     let n = {
         let mut w = Writer::new(&mut buf);
@@ -321,32 +321,32 @@ fn enc(f: impl FnOnce(&mut Writer<'_>)) -> Vec<u8> {
 /// Los ejemplos canonicos del RFC 8949. Si estos dan, la codificacion es CBOR
 /// de verdad y no un formato binario propio que se le parece.
 #[test]
-fn los_enteros_se_codifican_como_manda_el_rfc() {
-    assert_eq!(enc(|w| w.uint(0)), [0x00]);
-    assert_eq!(enc(|w| w.uint(23)), [0x17]);
+fn integers_are_encoded_as_the_rfc_says() {
+    assert_eq!(encode(|w| w.uint(0)), [0x00]);
+    assert_eq!(encode(|w| w.uint(23)), [0x17]);
     // 24 ya no entra en los 5 bits del encabezado: pasa a un byte aparte.
-    assert_eq!(enc(|w| w.uint(24)), [0x18, 0x18]);
-    assert_eq!(enc(|w| w.uint(255)), [0x18, 0xff]);
-    assert_eq!(enc(|w| w.uint(256)), [0x19, 0x01, 0x00]);
-    assert_eq!(enc(|w| w.uint(65535)), [0x19, 0xff, 0xff]);
-    assert_eq!(enc(|w| w.uint(65536)), [0x1a, 0x00, 0x01, 0x00, 0x00]);
+    assert_eq!(encode(|w| w.uint(24)), [0x18, 0x18]);
+    assert_eq!(encode(|w| w.uint(255)), [0x18, 0xff]);
+    assert_eq!(encode(|w| w.uint(256)), [0x19, 0x01, 0x00]);
+    assert_eq!(encode(|w| w.uint(65535)), [0x19, 0xff, 0xff]);
+    assert_eq!(encode(|w| w.uint(65536)), [0x1a, 0x00, 0x01, 0x00, 0x00]);
     assert_eq!(
-        enc(|w| w.uint(u64::MAX)),
+        encode(|w| w.uint(u64::MAX)),
         [0x1b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]
     );
 }
 
 #[test]
-fn cadenas_arreglos_y_simples_como_manda_el_rfc() {
-    assert_eq!(enc(|w| w.text("")), [0x60]);
-    assert_eq!(enc(|w| w.text("a")), [0x61, 0x61]);
-    assert_eq!(enc(|w| w.text("IETF")), [0x64, 0x49, 0x45, 0x54, 0x46]);
-    assert_eq!(enc(|w| w.bytes(&[1, 2, 3, 4])), [0x44, 1, 2, 3, 4]);
-    assert_eq!(enc(|w| w.bool(false)), [0xf4]);
-    assert_eq!(enc(|w| w.bool(true)), [0xf5]);
-    assert_eq!(enc(|w| w.null()), [0xf6]);
+fn strings_arrays_and_simples_as_the_rfc_says() {
+    assert_eq!(encode(|w| w.text("")), [0x60]);
+    assert_eq!(encode(|w| w.text("a")), [0x61, 0x61]);
+    assert_eq!(encode(|w| w.text("IETF")), [0x64, 0x49, 0x45, 0x54, 0x46]);
+    assert_eq!(encode(|w| w.bytes(&[1, 2, 3, 4])), [0x44, 1, 2, 3, 4]);
+    assert_eq!(encode(|w| w.bool(false)), [0xf4]);
+    assert_eq!(encode(|w| w.bool(true)), [0xf5]);
+    assert_eq!(encode(|w| w.null()), [0xf6]);
     assert_eq!(
-        enc(|w| {
+        encode(|w| {
             w.array(3);
             w.uint(1);
             w.uint(2);
@@ -358,8 +358,8 @@ fn cadenas_arreglos_y_simples_como_manda_el_rfc() {
 
 /// Lo que hace posible leer del UART de a un byte sin saber cuanto viene.
 #[test]
-fn un_mensaje_a_medias_se_reconoce_como_incompleto() {
-    let entero = enc(|w| {
+fn a_half_message_is_recognized_as_incomplete() {
+    let encoded = encode(|w| {
         w.array(3);
         w.uint(7);
         w.text("describe");
@@ -367,33 +367,33 @@ fn un_mensaje_a_medias_se_reconoce_como_incompleto() {
     });
 
     // Cada prefijo estricto tiene que decir "falta mas", nunca "listo".
-    for corte in 0..entero.len() {
+    for corte in 0..encoded.len() {
         assert_eq!(
-            scan(&entero[..corte]),
+            scan(&encoded[..corte]),
             Scan::Incomplete,
             "el prefijo de {corte} bytes se dio por completo"
         );
     }
-    assert_eq!(scan(&entero), Scan::Complete(entero.len()));
+    assert_eq!(scan(&encoded), Scan::Complete(encoded.len()));
 }
 
 /// Si vienen dos pedidos pegados, el primero tiene que medirse solo.
 #[test]
-fn dos_mensajes_pegados_no_se_confunden() {
-    let mut flujo = enc(|w| {
+fn two_glued_messages_are_not_confused() {
+    let mut flow = encode(|w| {
         w.array(3);
         w.uint(1);
         w.text("describe");
         w.map(0);
     });
-    let primero = flujo.len();
-    flujo.extend_from_slice(&enc(|w| w.uint(42)));
+    let first = flow.len();
+    flow.extend_from_slice(&encode(|w| w.uint(42)));
 
-    assert_eq!(scan(&flujo), Scan::Complete(primero));
+    assert_eq!(scan(&flow), Scan::Complete(first));
 }
 
 #[test]
-fn lo_que_no_es_cbor_se_rechaza_sin_esperar_mas() {
+fn what_is_not_cbor_is_rejected_without_waiting_for_more() {
     // 0x1c, 0x1d y 0x1e no existen en la especificacion.
     assert_eq!(scan(&[0x1c]), Scan::Malformed);
     // 0x1f es largo indefinido: valido en CBOR, no soportado acá a proposito.
@@ -402,15 +402,15 @@ fn lo_que_no_es_cbor_se_rechaza_sin_esperar_mas() {
 
 /// Un mensaje hostil no puede hacer que el kernel se quede sin pila.
 #[test]
-fn el_anidamiento_tiene_techo() {
+fn nesting_has_a_ceiling() {
     // 20 arreglos de un elemento, uno adentro del otro.
-    let hondo = vec![0x81u8; 20];
-    assert_eq!(scan(&hondo), Scan::Malformed);
+    let deep = vec![0x81u8; 20];
+    assert_eq!(scan(&deep), Scan::Malformed);
 }
 
 #[test]
-fn se_lee_lo_que_se_escribio() {
-    let msg = enc(|w| {
+fn what_was_written_is_read_back() {
+    let msg = encode(|w| {
         w.array(3);
         w.uint(9);
         w.text("describe");
@@ -433,8 +433,8 @@ fn se_lee_lo_que_se_escribio() {
 /// Pedir el tipo equivocado no puede mover el cursor: si lo moviera, el resto
 /// del mensaje se leeria corrido y el kernel contestaria cualquier cosa.
 #[test]
-fn pedir_el_tipo_equivocado_no_pierde_el_hilo() {
-    let msg = enc(|w| w.text("hola"));
+fn asking_for_the_wrong_type_does_not_lose_the_thread() {
+    let msg = encode(|w| w.text("hola"));
     let mut r = Reader::new(&msg);
 
     assert_eq!(r.uint(), None);
@@ -445,8 +445,8 @@ fn pedir_el_tipo_equivocado_no_pierde_el_hilo() {
 /// Saltear una clave desconocida es lo que permite agregar argumentos nuevos
 /// sin romper a un kernel viejo.
 #[test]
-fn se_puede_saltear_un_valor_cualquiera() {
-    let msg = enc(|w| {
+fn any_value_can_be_skipped() {
+    let msg = encode(|w| {
         w.array(2);
         w.map(1);
         w.text("adentro");
@@ -464,15 +464,15 @@ fn se_puede_saltear_un_valor_cualquiera() {
 
 /// Que no entre en el buffer no puede ser un panico ni una escritura afuera.
 #[test]
-fn si_no_entra_se_avisa_en_vez_de_romper() {
-    let mut chico = [0u8; 4];
-    let mut w = Writer::new(&mut chico);
+fn if_it_does_not_fit_it_says_so_instead_of_breaking() {
+    let mut small = [0u8; 4];
+    let mut w = Writer::new(&mut small);
     w.text("esto es mucho mas largo que cuatro bytes");
     assert!(w.finish().is_none());
 }
 
 #[test]
-fn el_texto_invalido_en_utf8_se_rechaza() {
+fn invalid_utf8_text_is_rejected() {
     // Encabezado de texto de 2 bytes, seguido de una secuencia UTF-8 rota.
     let msg = [0x62u8, 0xff, 0xfe];
     let mut r = Reader::new(&msg);
@@ -485,20 +485,20 @@ fn el_texto_invalido_en_utf8_se_rechaza() {
 
 /// Dos regiones del kernel PEGADAS, una libre en el medio del mapa, y un hueco
 /// sin mapear a partir de 0x5000.
-static MAPA: [Region; 4] = [
+static MAP: [Region; 4] = [
     Region { start: 0x1000, bytes: 0x1000, kind: Kind::Kernel },
     Region { start: 0x2000, bytes: 0x1000, kind: Kind::Kernel },
     Region { start: 0x3000, bytes: 0x1000, kind: Kind::Free },
     Region { start: 0x4000, bytes: 0x1000, kind: Kind::Firmware },
 ];
 
-fn maquina() -> Machine {
-    Machine { regions: &MAPA, tables: Tables::default(), failure: None }
+fn machine() -> Machine {
+    Machine { regions: &MAP, tables: Tables::default(), failure: None }
 }
 
 #[test]
-fn se_encuentra_la_region_de_una_direccion() {
-    let m = maquina();
+fn the_region_of_an_address_is_found() {
+    let m = machine();
     assert_eq!(m.region_containing(0x1000).map(|r| r.kind), Some(Kind::Kernel));
     assert_eq!(m.region_containing(0x1fff).map(|r| r.kind), Some(Kind::Kernel));
     assert_eq!(m.region_containing(0x3500).map(|r| r.kind), Some(Kind::Free));
@@ -507,8 +507,8 @@ fn se_encuentra_la_region_de_una_direccion() {
 }
 
 #[test]
-fn lo_que_esta_entero_en_memoria_del_kernel_es_nuestro() {
-    let m = maquina();
+fn what_is_wholly_in_kernel_memory_is_ours() {
+    let m = machine();
     assert!(m.is_ours(0x1000, 0x1000));
     // A caballo de dos regiones del kernel pegadas: sigue siendo nuestro.
     assert!(m.is_ours(0x1800, 0x1000));
@@ -518,23 +518,23 @@ fn lo_que_esta_entero_en_memoria_del_kernel_es_nuestro() {
 /// Este es el caso que motiva todo: una pila que empieza en memoria nuestra
 /// pero se pasa a memoria que `mem.claim` podria entregar.
 #[test]
-fn lo_que_se_pasa_a_memoria_reclamable_no_es_nuestro() {
-    let m = maquina();
+fn what_crosses_into_claimable_memory_is_not_ours() {
+    let m = machine();
     assert!(!m.is_ours(0x2800, 0x1000), "se metio en la region libre");
     assert!(!m.is_ours(0x3000, 0x100), "arranca en memoria libre");
     assert!(!m.is_ours(0x4000, 0x100), "arranca en memoria del firmware");
 }
 
 #[test]
-fn un_hueco_sin_mapear_tampoco_es_nuestro() {
-    let m = maquina();
+fn an_unmapped_gap_is_not_ours_either() {
+    let m = machine();
     assert!(!m.is_ours(0x9000, 0x100));
     // Empieza bien y se cae por un hueco.
     assert!(!m.is_ours(0x4f00, 0x1000));
 }
 
 #[test]
-fn sin_mapa_no_hay_nada_nuestro() {
+fn without_a_map_nothing_is_ours() {
     // Una maquina muda no puede afirmar que algo sea suyo.
     assert!(!Machine::mute("sin datos").is_ours(0x1000, 0x10));
 }
@@ -543,84 +543,84 @@ fn sin_mapa_no_hay_nada_nuestro() {
 // El plan de mapeo (D12)
 // ---------------------------------------------------------------------------
 
-fn con(regiones: &'static [Region]) -> Machine {
-    Machine { regions: regiones, tables: Tables::default(), failure: None }
+fn from_regions(regions: &'static [Region]) -> Machine {
+    Machine { regions: regions, tables: Tables::default(), failure: None }
 }
 
 #[test]
-fn se_cubre_hasta_la_region_mas_alta_redondeando_para_arriba() {
+fn coverage_reaches_the_highest_region_rounding_up() {
     // Un solo byte pasado el GiB obliga a mapear el GiB siguiente entero.
-    static UNO: [Region; 1] = [Region { start: 0, bytes: GIB + 1, kind: Kind::Free }];
-    assert_eq!(span_gib(&con(&UNO)), 2);
+    static OVER_A_GIB: [Region; 1] = [Region { start: 0, bytes: GIB + 1, kind: Kind::Free }];
+    assert_eq!(span_gib(&from_regions(&OVER_A_GIB)), 2);
 
     // Justo en el limite no hace falta uno mas.
-    static JUSTO: [Region; 1] = [Region { start: 0, bytes: GIB, kind: Kind::Free }];
-    assert_eq!(span_gib(&con(&JUSTO)), 1);
+    static EXACTLY_A_GIB: [Region; 1] = [Region { start: 0, bytes: GIB, kind: Kind::Free }];
+    assert_eq!(span_gib(&from_regions(&EXACTLY_A_GIB)), 1);
 
     // Se cubre hasta arriba de todo, no hasta donde llega la RAM: ahi viven los
     // BARs de PCIe.
-    static ALTO: [Region; 2] = [
+    static HIGH_REGION: [Region; 2] = [
         Region { start: 0, bytes: GIB, kind: Kind::Free },
         Region { start: 100 * GIB, bytes: GIB, kind: Kind::Mmio },
     ];
-    assert_eq!(span_gib(&con(&ALTO)), 101);
+    assert_eq!(span_gib(&from_regions(&HIGH_REGION)), 101);
 }
 
 #[test]
-fn una_pagina_con_ram_es_cacheable() {
+fn a_page_with_ram_is_cacheable() {
     static RAM: [Region; 1] = [Region { start: 0, bytes: GIB, kind: Kind::Free }];
-    assert_eq!(attr_of(&con(&RAM), 0), Attr::Memory);
+    assert_eq!(attr_of(&from_regions(&RAM), 0), Attr::Memory);
 }
 
 /// El error caro y el barato no son simetricos: cachear un registro rompe el
 /// dispositivo, no cachear RAM solo la hace lenta.
 #[test]
-fn un_solo_registro_vuelve_toda_la_pagina_no_cacheable() {
-    static MIXTA: [Region; 2] = [
+fn a_single_register_makes_the_whole_page_uncacheable() {
+    static MIXED: [Region; 2] = [
         Region { start: 0, bytes: GIB - 4096, kind: Kind::Free },
         // Una sola pagina de MMIO al final del GiB.
         Region { start: GIB - 4096, bytes: 4096, kind: Kind::Mmio },
     ];
-    assert_eq!(attr_of(&con(&MIXTA), 0), Attr::Device);
+    assert_eq!(attr_of(&from_regions(&MIXED), 0), Attr::Device);
 }
 
 #[test]
-fn un_hueco_sin_nada_se_trata_como_dispositivo() {
-    static LEJOS: [Region; 1] = [Region { start: 0, bytes: GIB, kind: Kind::Free }];
+fn an_empty_gap_is_treated_as_a_device() {
+    static FAR_OFF: [Region; 1] = [Region { start: 0, bytes: GIB, kind: Kind::Free }];
     // La pagina 5 no la menciona nadie: puede haber un dispositivo que este
     // kernel todavia no sabe que existe.
-    assert_eq!(attr_of(&con(&LEJOS), 5), Attr::Device);
+    assert_eq!(attr_of(&from_regions(&FAR_OFF), 5), Attr::Device);
 }
 
 #[test]
-fn lo_que_la_maquina_no_supo_explicar_no_se_asume_ram() {
-    static RARAS: [Region; 3] = [
+fn what_the_machine_could_not_explain_is_not_assumed_ram() {
+    static UNUSUAL: [Region; 3] = [
         Region { start: 0, bytes: 4096, kind: Kind::Reserved },
         Region { start: 4096, bytes: 4096, kind: Kind::Broken },
         Region { start: 8192, bytes: 4096, kind: Kind::Other(77) },
     ];
-    assert_eq!(attr_of(&con(&RARAS), 0), Attr::Device);
+    assert_eq!(attr_of(&from_regions(&UNUSUAL), 0), Attr::Device);
 }
 
 #[test]
-fn el_firmware_y_las_tablas_de_acpi_son_memoria() {
+fn firmware_and_acpi_tables_are_memory() {
     static FW: [Region; 2] = [
         Region { start: 0, bytes: 4096, kind: Kind::Firmware },
         Region { start: 4096, bytes: 4096, kind: Kind::AcpiTables },
     ];
-    assert_eq!(attr_of(&con(&FW), 0), Attr::Memory);
+    assert_eq!(attr_of(&from_regions(&FW), 0), Attr::Memory);
 }
 
 /// Una region que arranca en una pagina y termina en la siguiente tiene que
 /// contar para las dos.
 #[test]
-fn una_region_a_caballo_afecta_a_las_dos_paginas() {
-    static CABALLO: [Region; 1] = [Region {
+fn a_straddling_region_affects_both_pages() {
+    static STRADDLING: [Region; 1] = [Region {
         start: GIB - 4096,
         bytes: 8192,
         kind: Kind::Mmio,
     }];
-    let m = con(&CABALLO);
+    let m = from_regions(&STRADDLING);
     assert_eq!(attr_of(&m, 0), Attr::Device);
     assert_eq!(attr_of(&m, 1), Attr::Device);
 }
@@ -632,7 +632,7 @@ fn una_region_a_caballo_afecta_a_las_dos_paginas() {
 /// Un breakpoint es un alto pedido: se sigue en la instruccion de al lado.
 /// Cualquier otra cosa volveria a fallar en la misma instruccion, para siempre.
 #[test]
-fn solo_el_breakpoint_se_puede_retomar() {
+fn only_the_breakpoint_can_be_resumed() {
     assert!(Cause::Breakpoint.resumable());
     for c in [
         Cause::PageFault,
@@ -649,8 +649,8 @@ fn solo_el_breakpoint_se_puede_retomar() {
 }
 
 #[test]
-fn cada_causa_tiene_su_codigo_y_no_se_repiten() {
-    let todas = [
+fn each_cause_has_its_code_and_they_do_not_repeat() {
+    let all_of = [
         Cause::Breakpoint,
         Cause::DivideByZero,
         Cause::InvalidOpcode,
@@ -661,31 +661,31 @@ fn cada_causa_tiene_su_codigo_y_no_se_repiten() {
         Cause::Double,
         Cause::Unknown,
     ];
-    let mut vistos = std::collections::HashSet::new();
-    for c in todas {
+    let mut seen = std::collections::HashSet::new();
+    for c in all_of {
         assert!(!c.code().is_empty());
-        assert!(vistos.insert(c.code()), "codigo repetido: {}", c.code());
+        assert!(seen.insert(c.code()), "codigo repetido: {}", c.code());
     }
 }
 
-fn texto_del_fault(f: &Fault, nombres: &[&str]) -> String {
+fn fault_text(f: &Fault, names: &[&str]) -> String {
     let mut s = String::new();
-    report(f, nombres, &mut s);
+    report(f, names, &mut s);
     s
 }
 
 #[test]
-fn el_reporte_dice_causa_pc_y_registros() {
-    static VALORES: [u64; 2] = [0xdead, 0xbeef];
+fn the_report_says_cause_pc_and_registers() {
+    static VALUES: [u64; 2] = [0xdead, 0xbeef];
     let f = Fault {
         cause: Cause::PageFault,
         raw: 14,
         detail: 0x2,
         pc: 0x1234,
         address: Some(0xcafe),
-        regs: &VALORES,
+        regs: &VALUES,
     };
-    let t = texto_del_fault(&f, &["uno", "dos"]);
+    let t = fault_text(&f, &["uno", "dos"]);
 
     assert!(t.contains("page-fault"), "{t}");
     // El numero crudo viaja aunque la causa ya este traducida (P4).
@@ -699,9 +699,9 @@ fn el_reporte_dice_causa_pc_y_registros() {
 /// Sin dirección tocada no se inventa una: un `int3` no tiene ninguna, y poner
 /// un cero se leería como "toco la direccion cero".
 #[test]
-fn sin_direccion_no_se_informa_ninguna() {
+fn without_an_address_none_is_reported() {
     let f = Fault { cause: Cause::Breakpoint, raw: 3, detail: 0, pc: 0x99, address: None, regs: &[] };
-    let t = texto_del_fault(&f, &[]);
+    let t = fault_text(&f, &[]);
     assert!(t.contains("breakpoint"), "{t}");
     assert!(!t.contains("direccion tocada"), "{t}");
 }
@@ -709,16 +709,16 @@ fn sin_direccion_no_se_informa_ninguna() {
 /// El reporte lo arma quien tiene los nombres, y este modulo no conoce ninguno
 /// (D3). Si vinieran de más o de menos, no puede quedar leyendo fuera de rango.
 #[test]
-fn nombres_y_valores_descoordinados_no_desbordan() {
-    static TRES: [u64; 3] = [1, 2, 3];
-    let f = Fault { cause: Cause::Unknown, raw: 0, detail: 0, pc: 0, address: None, regs: &TRES };
+fn mismatched_names_and_values_do_not_overflow() {
+    static THREE: [u64; 3] = [1, 2, 3];
+    let f = Fault { cause: Cause::Unknown, raw: 0, detail: 0, pc: 0, address: None, regs: &THREE };
 
     // Más nombres que valores.
-    let t = texto_del_fault(&f, &["a", "b", "c", "d", "e"]);
+    let t = fault_text(&f, &["a", "b", "c", "d", "e"]);
     assert!(t.contains("c=") && !t.contains("d="), "{t}");
 
     // Y menos.
-    let t = texto_del_fault(&f, &["a"]);
+    let t = fault_text(&f, &["a"]);
     assert!(t.contains("a=") && !t.contains("b="), "{t}");
 }
 
@@ -730,33 +730,33 @@ use crate::claims::{self, Error, Request};
 
 /// La tabla de reclamos es un estatico compartido, y los tests corren en
 /// paralelo. Sin serializarlos se pisarian entre ellos y fallarian por turnos.
-static CANDADO: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-fn con_tabla_limpia<T>(f: impl FnOnce() -> T) -> T {
-    let _g = CANDADO.lock().unwrap_or_else(|e| e.into_inner());
+fn with_clean_table<T>(f: impl FnOnce() -> T) -> T {
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     claims::reset();
     f()
 }
 
 /// 0x0000-0x1000 kernel, 0x1000-0x5000 libre, 0x5000-0x6000 mmio.
-static MAQ: [Region; 3] = [
+static SAMPLE_MAP: [Region; 3] = [
     Region { start: 0x0000, bytes: 0x1000, kind: Kind::Kernel },
     Region { start: 0x1000, bytes: 0x4000, kind: Kind::Free },
     Region { start: 0x5000, bytes: 0x1000, kind: Kind::Mmio },
 ];
 
-fn maq() -> Machine {
-    Machine { regions: &MAQ, tables: Tables::default(), failure: None }
+fn sample_machine() -> Machine {
+    Machine { regions: &SAMPLE_MAP, tables: Tables::default(), failure: None }
 }
 
-fn pedir(bytes: u64) -> Request {
+fn request_of(bytes: u64) -> Request {
     Request { bytes, ..Default::default() }
 }
 
 #[test]
-fn solo_se_reparte_memoria_libre() {
-    con_tabla_limpia(|| {
-        let c = claims::claim(&maq(), pedir(0x100)).unwrap();
+fn only_free_memory_is_handed_out() {
+    with_clean_table(|| {
+        let c = claims::claim(&sample_machine(), request_of(0x100)).unwrap();
         assert_eq!(c.kind, Kind::Free);
         // No salio de la region del kernel, que empieza en 0.
         assert!(c.start >= 0x1000, "{:#x}", c.start);
@@ -765,11 +765,11 @@ fn solo_se_reparte_memoria_libre() {
 }
 
 #[test]
-fn dos_reclamos_no_se_pisan() {
-    con_tabla_limpia(|| {
-        let m = maq();
-        let a = claims::claim(&m, pedir(0x1000)).unwrap();
-        let b = claims::claim(&m, pedir(0x1000)).unwrap();
+fn two_claims_do_not_overlap() {
+    with_clean_table(|| {
+        let m = sample_machine();
+        let a = claims::claim(&m, request_of(0x1000)).unwrap();
+        let b = claims::claim(&m, request_of(0x1000)).unwrap();
         assert!(
             a.end() <= b.start || b.end() <= a.start,
             "se pisan: {:#x}..{:#x} y {:#x}..{:#x}",
@@ -779,11 +779,11 @@ fn dos_reclamos_no_se_pisan() {
 }
 
 #[test]
-fn se_respeta_la_alineacion() {
-    con_tabla_limpia(|| {
-        let m = maq();
+fn alignment_is_respected() {
+    with_clean_table(|| {
+        let m = sample_machine();
         // Primero algo chico para desalinear el hueco siguiente.
-        claims::claim(&m, pedir(1)).unwrap();
+        claims::claim(&m, request_of(1)).unwrap();
         let c = claims::claim(&m, Request { bytes: 0x100, align: 0x1000, ..Default::default() })
             .unwrap();
         assert_eq!(c.start % 0x1000, 0, "{:#x}", c.start);
@@ -791,42 +791,42 @@ fn se_respeta_la_alineacion() {
 }
 
 #[test]
-fn una_alineacion_que_no_es_potencia_de_dos_se_rechaza() {
-    con_tabla_limpia(|| {
+fn an_alignment_that_is_not_a_power_of_two_is_rejected() {
+    with_clean_table(|| {
         let r = Request { bytes: 16, align: 3, ..Default::default() };
-        assert_eq!(claims::claim(&maq(), r), Err(Error::BadAlign));
+        assert_eq!(claims::claim(&sample_machine(), r), Err(Error::BadAlign));
     });
 }
 
 /// Existe porque hay dispositivos que solo hacen DMA por debajo de los 4 GiB.
 #[test]
-fn se_respeta_el_tope() {
-    con_tabla_limpia(|| {
+fn the_cap_is_respected() {
+    with_clean_table(|| {
         let r = Request { bytes: 0x100, below: Some(0x2000), ..Default::default() };
-        let c = claims::claim(&maq(), r).unwrap();
+        let c = claims::claim(&sample_machine(), r).unwrap();
         assert!(c.end() <= 0x2000, "{:#x}", c.end());
 
         // Y si no entra debajo del tope, se dice que no hay lugar.
         let r = Request { bytes: 0x100, below: Some(0x1000), ..Default::default() };
-        assert_eq!(claims::claim(&maq(), r), Err(Error::NoRoom));
+        assert_eq!(claims::claim(&sample_machine(), r), Err(Error::NoRoom));
     });
 }
 
 #[test]
-fn no_se_entrega_lo_que_no_entra() {
-    con_tabla_limpia(|| {
-        assert_eq!(claims::claim(&maq(), pedir(0x100000)), Err(Error::NoRoom));
-        assert_eq!(claims::claim(&maq(), pedir(0)), Err(Error::Empty));
+fn what_does_not_fit_is_not_handed_out() {
+    with_clean_table(|| {
+        assert_eq!(claims::claim(&sample_machine(), request_of(0x100000)), Err(Error::NoRoom));
+        assert_eq!(claims::claim(&sample_machine(), request_of(0)), Err(Error::Empty));
     });
 }
 
 /// El MMIO se reclama por direccion exacta: el BAR de un dispositivo esta donde
 /// esta, no donde haya lugar.
 #[test]
-fn el_mmio_se_reclama_por_direccion_exacta() {
-    con_tabla_limpia(|| {
+fn mmio_is_claimed_by_exact_address() {
+    with_clean_table(|| {
         let r = Request { bytes: 0x1000, at: Some(0x5000), ..Default::default() };
-        let c = claims::claim(&maq(), r).unwrap();
+        let c = claims::claim(&sample_machine(), r).unwrap();
         assert_eq!(c.start, 0x5000);
         assert_eq!(c.kind, Kind::Mmio);
     });
@@ -835,30 +835,30 @@ fn el_mmio_se_reclama_por_direccion_exacta() {
 /// Entregar la memoria donde vive la pila del kernel no seria libertad, seria
 /// incoherencia: el kernel es lo que esta prestando el servicio.
 #[test]
-fn la_memoria_del_kernel_no_se_entrega() {
-    con_tabla_limpia(|| {
+fn kernel_memory_is_never_handed_out() {
+    with_clean_table(|| {
         let r = Request { bytes: 0x100, at: Some(0x0), ..Default::default() };
-        assert_eq!(claims::claim(&maq(), r), Err(Error::IsKernel));
+        assert_eq!(claims::claim(&sample_machine(), r), Err(Error::IsKernel));
     });
 }
 
 #[test]
-fn no_se_entrega_lo_que_la_maquina_no_informo() {
-    con_tabla_limpia(|| {
+fn what_the_machine_did_not_report_is_not_handed_out() {
+    with_clean_table(|| {
         let r = Request { bytes: 0x100, at: Some(0x99000), ..Default::default() };
-        assert_eq!(claims::claim(&maq(), r), Err(Error::Unmapped));
+        assert_eq!(claims::claim(&sample_machine(), r), Err(Error::Unmapped));
 
         // Ni un rango que empieza bien y se sale de la region.
         let r = Request { bytes: 0x2000, at: Some(0x5000), ..Default::default() };
-        assert_eq!(claims::claim(&maq(), r), Err(Error::Unmapped));
+        assert_eq!(claims::claim(&sample_machine(), r), Err(Error::Unmapped));
     });
 }
 
 #[test]
-fn lo_ya_reclamado_no_se_reclama_de_nuevo() {
-    con_tabla_limpia(|| {
-        let m = maq();
-        let c = claims::claim(&m, pedir(0x100)).unwrap();
+fn what_is_already_claimed_is_not_claimed_again() {
+    with_clean_table(|| {
+        let m = sample_machine();
+        let c = claims::claim(&m, request_of(0x100)).unwrap();
         let r = Request { bytes: 0x10, at: Some(c.start), ..Default::default() };
         assert_eq!(claims::claim(&m, r), Err(Error::Taken));
     });
@@ -867,12 +867,12 @@ fn lo_ya_reclamado_no_se_reclama_de_nuevo() {
 /// Un handle liberado no se reusa: si se reusara, un pedido que llega tarde con
 /// un handle viejo tocaria lo que otro reclamo despues en el mismo lugar.
 #[test]
-fn los_handles_no_se_reusan() {
-    con_tabla_limpia(|| {
-        let m = maq();
-        let a = claims::claim(&m, pedir(0x100)).unwrap();
+fn handles_are_not_reused() {
+    with_clean_table(|| {
+        let m = sample_machine();
+        let a = claims::claim(&m, request_of(0x100)).unwrap();
         assert!(claims::release(a.handle));
-        let b = claims::claim(&m, pedir(0x100)).unwrap();
+        let b = claims::claim(&m, request_of(0x100)).unwrap();
         assert_ne!(a.handle, b.handle);
         // Y el viejo ya no existe.
         assert!(claims::get(a.handle).is_none());
@@ -881,9 +881,9 @@ fn los_handles_no_se_reusan() {
 }
 
 #[test]
-fn no_se_puede_leer_fuera_del_reclamo() {
-    con_tabla_limpia(|| {
-        let c = claims::claim(&maq(), pedir(0x100)).unwrap();
+fn reading_outside_the_claim_is_not_possible() {
+    with_clean_table(|| {
+        let c = claims::claim(&sample_machine(), request_of(0x100)).unwrap();
         assert_eq!(claims::range_of(c.handle, 0, 0x100), Ok(c.start));
         assert_eq!(claims::range_of(c.handle, 0xFF, 2), Err(Error::OutOfBounds));
         assert_eq!(claims::range_of(c.handle, 0, 0x101), Err(Error::OutOfBounds));
@@ -896,11 +896,11 @@ fn no_se_puede_leer_fuera_del_reclamo() {
 /// D14: el estado de la maquina no es una sesion. Lo reclamado se puede listar,
 /// que es como el agente lo recupera al reconectar.
 #[test]
-fn lo_reclamado_se_puede_listar() {
-    con_tabla_limpia(|| {
-        let m = maq();
-        let a = claims::claim(&m, pedir(0x100)).unwrap();
-        let b = claims::claim(&m, pedir(0x100)).unwrap();
+fn what_is_claimed_can_be_listed() {
+    with_clean_table(|| {
+        let m = sample_machine();
+        let a = claims::claim(&m, request_of(0x100)).unwrap();
+        let b = claims::claim(&m, request_of(0x100)).unwrap();
         assert_eq!(claims::count(), 2);
 
         let handles: Vec<u64> = claims::all().map(|c| c.handle).collect();
@@ -919,12 +919,12 @@ use crate::acpi;
 use crate::tables::Acpi as Rsdp;
 
 /// Arma una tabla de ACPI con la firma pedida y el checksum bien puesto.
-fn tabla_acpi(firma: &[u8; 4], cuerpo: &[u8]) -> Vec<u8> {
+fn acpi_table(signature: &[u8; 4], body: &[u8]) -> Vec<u8> {
     let mut t = vec![0u8; 36];
-    t[..4].copy_from_slice(firma);
-    t.extend_from_slice(cuerpo);
-    let largo = t.len() as u32;
-    t[4..8].copy_from_slice(&largo.to_le_bytes());
+    t[..4].copy_from_slice(signature);
+    t.extend_from_slice(body);
+    let length = t.len() as u32;
+    t[4..8].copy_from_slice(&length.to_le_bytes());
 
     // ACPI manda que la tabla entera sume 0 modulo 256.
     let suma = t.iter().fold(0u8, |a, x| a.wrapping_add(*x));
@@ -933,41 +933,41 @@ fn tabla_acpi(firma: &[u8; 4], cuerpo: &[u8]) -> Vec<u8> {
 }
 
 /// Una entrada de la MADT: tipo, largo, y payload.
-fn entrada(tipo: u8, payload: &[u8]) -> Vec<u8> {
-    let mut e = vec![tipo, (payload.len() + 2) as u8];
+fn entry(kind: u8, payload: &[u8]) -> Vec<u8> {
+    let mut e = vec![kind, (payload.len() + 2) as u8];
     e.extend_from_slice(payload);
     e
 }
 
 /// Arma un XSDT que apunta a las tablas dadas, y devuelve todo junto para que
 /// no se muevan de lugar mientras se lee.
-fn maquina_acpi(tablas: &[Vec<u8>]) -> (Vec<u8>, Vec<Box<[u8]>>) {
+fn machine_with_acpi(tables: &[Vec<u8>]) -> (Vec<u8>, Vec<Box<[u8]>>) {
     // Las tablas van al heap y se quedan quietas ahi; el XSDT guarda punteros.
-    let fijas: Vec<Box<[u8]>> = tablas.iter().map(|t| t.clone().into_boxed_slice()).collect();
-    let mut punteros = Vec::new();
-    for t in &fijas {
-        punteros.extend_from_slice(&(t.as_ptr() as u64).to_le_bytes());
+    let fixed: Vec<Box<[u8]>> = tables.iter().map(|t| t.clone().into_boxed_slice()).collect();
+    let mut pointers = Vec::new();
+    for t in &fixed {
+        pointers.extend_from_slice(&(t.as_ptr() as u64).to_le_bytes());
     }
-    (tabla_acpi(b"XSDT", &punteros), fijas)
+    (acpi_table(b"XSDT", &pointers), fixed)
 }
 
-fn leer(xsdt: &[u8]) -> acpi::Hardware {
+fn read_hw(xsdt: &[u8]) -> acpi::Hardware {
     let rsdp = Rsdp { revision: 2, rsdt: 0, xsdt: Some(xsdt.as_ptr() as u64) };
     unsafe { acpi::read(&rsdp) }
 }
 
 #[test]
-fn se_leen_los_nucleos_de_x86() {
+fn the_x86_cores_are_read() {
     // Tres APICs locales: dos habilitados y uno que no.
-    let mut cuerpo = 0xFEE0_0000u32.to_le_bytes().to_vec(); // direccion del APIC
-    cuerpo.extend_from_slice(&0u32.to_le_bytes()); // banderas
-    cuerpo.extend(entrada(0, &[0, 0, 1, 0, 0, 0])); // uid 0, apic 0, habilitado
-    cuerpo.extend(entrada(0, &[1, 7, 1, 0, 0, 0])); // uid 1, apic 7, habilitado
-    cuerpo.extend(entrada(0, &[2, 9, 0, 0, 0, 0])); // uid 2, apic 9, NO
+    let mut body = 0xFEE0_0000u32.to_le_bytes().to_vec(); // direccion del APIC
+    body.extend_from_slice(&0u32.to_le_bytes()); // banderas
+    body.extend(entry(0, &[0, 0, 1, 0, 0, 0])); // uid 0, apic 0, habilitado
+    body.extend(entry(0, &[1, 7, 1, 0, 0, 0])); // uid 1, apic 7, habilitado
+    body.extend(entry(0, &[2, 9, 0, 0, 0, 0])); // uid 2, apic 9, NO
 
-    let madt = tabla_acpi(b"APIC", &cuerpo);
-    let (xsdt, _fijas) = maquina_acpi(&[madt]);
-    let hw = leer(&xsdt);
+    let madt = acpi_table(b"APIC", &body);
+    let (xsdt, _fixed) = machine_with_acpi(&[madt]);
+    let hw = read_hw(&xsdt);
 
     assert_eq!(hw.cpus.len(), 3, "se perdio algun nucleo");
     assert_eq!(hw.usable_cpus(), 2, "un nucleo deshabilitado no es usable");
@@ -983,24 +983,24 @@ fn se_leen_los_nucleos_de_x86() {
 /// El mismo formato, contenido distinto: un ARM describe GICs donde un x86
 /// describe APICs, y los dos salen normalizados al mismo vocabulario (D24).
 #[test]
-fn se_leen_los_nucleos_de_arm() {
-    let mut cuerpo = vec![0u8; 8];
+fn the_arm_cores_are_read() {
+    let mut body = vec![0u8; 8];
     // GICC: el identificador que sirve para arrancarlo es el MPIDR, en el
     // offset 68 de la entrada.
     let mut gicc = vec![0u8; 74];
     gicc[6..10].copy_from_slice(&5u32.to_le_bytes()); // uid, en el offset 8
     gicc[10..14].copy_from_slice(&1u32.to_le_bytes()); // banderas: habilitado
     gicc[66..74].copy_from_slice(&0x8000_0003u64.to_le_bytes()); // mpidr
-    cuerpo.extend(entrada(11, &gicc));
+    body.extend(entry(11, &gicc));
 
     // GICD: el distribuidor, version 3.
     let mut gicd = vec![0u8; 22];
     gicd[6..14].copy_from_slice(&0x0800_0000u64.to_le_bytes()); // direccion
     gicd[18] = 3; // version
-    cuerpo.extend(entrada(12, &gicd));
+    body.extend(entry(12, &gicd));
 
-    let (xsdt, _fijas) = maquina_acpi(&[tabla_acpi(b"APIC", &cuerpo)]);
-    let hw = leer(&xsdt);
+    let (xsdt, _fixed) = machine_with_acpi(&[acpi_table(b"APIC", &body)]);
+    let hw = read_hw(&xsdt);
 
     assert_eq!(hw.cpus.len(), 1);
     assert_eq!(hw.cpus[0].id, 0x8000_0003, "el id tiene que ser el MPIDR");
@@ -1014,16 +1014,16 @@ fn se_leen_los_nucleos_de_arm() {
 }
 
 #[test]
-fn se_lee_donde_esta_pcie() {
-    let mut cuerpo = vec![0u8; 8]; // reservado
-    cuerpo.extend_from_slice(&0xE000_0000u64.to_le_bytes()); // base
-    cuerpo.extend_from_slice(&0u16.to_le_bytes()); // segmento
-    cuerpo.push(0); // primer bus
-    cuerpo.push(255); // ultimo bus
-    cuerpo.extend_from_slice(&0u32.to_le_bytes());
+fn where_pcie_is_gets_read() {
+    let mut body = vec![0u8; 8]; // reservado
+    body.extend_from_slice(&0xE000_0000u64.to_le_bytes()); // base
+    body.extend_from_slice(&0u16.to_le_bytes()); // segmento
+    body.push(0); // primer bus
+    body.push(255); // ultimo bus
+    body.extend_from_slice(&0u32.to_le_bytes());
 
-    let (xsdt, _fijas) = maquina_acpi(&[tabla_acpi(b"MCFG", &cuerpo)]);
-    let x = leer(&xsdt).pcie.expect("no encontro PCIe");
+    let (xsdt, _fixed) = machine_with_acpi(&[acpi_table(b"MCFG", &body)]);
+    let x = read_hw(&xsdt).pcie.expect("no encontro PCIe");
     assert_eq!(x.base, 0xE000_0000);
     assert_eq!(x.bus_end, 255);
 }
@@ -1031,12 +1031,12 @@ fn se_lee_donde_esta_pcie() {
 /// Informar que existe una tabla que este kernel todavia no lee es mas util que
 /// callarla (P4).
 #[test]
-fn se_informan_las_tablas_que_no_se_interpretan() {
-    let (xsdt, _fijas) = maquina_acpi(&[
-        tabla_acpi(b"FACP", &[0u8; 4]),
-        tabla_acpi(b"DSDT", &[0u8; 4]),
+fn tables_that_are_not_interpreted_are_still_reported() {
+    let (xsdt, _fixed) = machine_with_acpi(&[
+        acpi_table(b"FACP", &[0u8; 4]),
+        acpi_table(b"DSDT", &[0u8; 4]),
     ]);
-    let hw = leer(&xsdt);
+    let hw = read_hw(&xsdt);
     assert_eq!(hw.signatures.len(), 2);
     assert_eq!(&hw.signatures[0], b"FACP");
     assert_eq!(&hw.signatures[1], b"DSDT");
@@ -1046,30 +1046,30 @@ fn se_informan_las_tablas_que_no_se_interpretan() {
 /// Es la razon de ser del checksum: recorriendo memoria cruda, dar con cuatro
 /// bytes que parecen una firma es mas facil de lo que parece.
 #[test]
-fn una_tabla_con_el_checksum_roto_se_ignora() {
-    let mut madt = tabla_acpi(b"APIC", &[0u8; 8]);
+fn a_table_with_a_broken_checksum_is_ignored() {
+    let mut madt = acpi_table(b"APIC", &[0u8; 8]);
     madt[9] = madt[9].wrapping_add(1);
-    let (xsdt, _fijas) = maquina_acpi(&[madt]);
-    let hw = leer(&xsdt);
+    let (xsdt, _fixed) = machine_with_acpi(&[madt]);
+    let hw = read_hw(&xsdt);
     assert!(hw.signatures.is_empty(), "acepto una tabla que no cerraba");
 }
 
 /// Una entrada de largo cero haria girar el recorrido para siempre.
 #[test]
-fn una_entrada_de_largo_imposible_no_cuelga() {
-    let mut cuerpo = vec![0u8; 8];
-    cuerpo.push(0); // tipo
-    cuerpo.push(0); // largo CERO
-    cuerpo.extend_from_slice(&[0u8; 8]);
+fn an_entry_with_an_impossible_length_does_not_hang() {
+    let mut body = vec![0u8; 8];
+    body.push(0); // tipo
+    body.push(0); // largo CERO
+    body.extend_from_slice(&[0u8; 8]);
 
-    let (xsdt, _fijas) = maquina_acpi(&[tabla_acpi(b"APIC", &cuerpo)]);
+    let (xsdt, _fixed) = machine_with_acpi(&[acpi_table(b"APIC", &body)]);
     // Que vuelva ya es la prueba.
-    let hw = leer(&xsdt);
+    let hw = read_hw(&xsdt);
     assert!(hw.cpus.is_empty());
 }
 
 #[test]
-fn sin_raiz_no_se_inventa_nada() {
+fn without_a_root_nothing_is_invented() {
     let rsdp = Rsdp { revision: 2, rsdt: 0, xsdt: Some(0) };
     let hw = unsafe { acpi::read(&rsdp) };
     assert!(hw.cpus.is_empty() && hw.signatures.is_empty());
@@ -1082,15 +1082,15 @@ fn sin_raiz_no_se_inventa_nada() {
 
 use crate::cores;
 
-fn con_nucleos_limpios<T>(f: impl FnOnce() -> T) -> T {
-    let _g = CANDADO.lock().unwrap_or_else(|e| e.into_inner());
+fn with_clean_cores<T>(f: impl FnOnce() -> T) -> T {
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     cores::reset();
     f()
 }
 
 #[test]
-fn un_nucleo_no_esta_vivo_hasta_que_avisa() {
-    con_nucleos_limpios(|| {
+fn a_core_is_not_alive_until_it_says_so() {
+    with_clean_cores(|| {
         let (slot, _) = cores::reserve(7).unwrap();
         // Reservar no es arrancar: son dos CPUs y una no puede afirmar por la
         // otra.
@@ -1103,8 +1103,8 @@ fn un_nucleo_no_esta_vivo_hasta_que_avisa() {
 /// El identificador cero es legitimo, asi que "llego" no se puede representar
 /// guardando el identificador a secas.
 #[test]
-fn el_nucleo_cero_tambien_puede_avisar() {
-    con_nucleos_limpios(|| {
+fn core_zero_can_also_say_so() {
+    with_clean_cores(|| {
         let (slot, _) = cores::reserve(0).unwrap();
         assert!(!cores::has_arrived(slot));
         cores::arrived(slot, 0);
@@ -1113,8 +1113,8 @@ fn el_nucleo_cero_tambien_puede_avisar() {
 }
 
 #[test]
-fn cada_nucleo_tiene_su_ranura_y_su_handle() {
-    con_nucleos_limpios(|| {
+fn each_core_has_its_slot_and_its_handle() {
+    with_clean_cores(|| {
         let (s1, h1) = cores::reserve(1).unwrap();
         let (s2, h2) = cores::reserve(2).unwrap();
         assert_ne!(s1, s2);
@@ -1127,8 +1127,8 @@ fn cada_nucleo_tiene_su_ranura_y_su_handle() {
 }
 
 #[test]
-fn lo_reclamado_se_puede_listar_y_no_se_repite() {
-    con_nucleos_limpios(|| {
+fn what_is_claimed_can_be_listed_without_repeats() {
+    with_clean_cores(|| {
         cores::reserve(3).unwrap();
         assert!(cores::is_claimed(3));
         assert!(!cores::is_claimed(4));
@@ -1137,8 +1137,8 @@ fn lo_reclamado_se_puede_listar_y_no_se_repite() {
 }
 
 #[test]
-fn la_tabla_de_nucleos_tiene_techo() {
-    con_nucleos_limpios(|| {
+fn the_core_table_has_a_ceiling() {
+    with_clean_cores(|| {
         for i in 0..cores::MAX {
             cores::reserve(i as u64).unwrap();
         }
@@ -1147,8 +1147,8 @@ fn la_tabla_de_nucleos_tiene_techo() {
 }
 
 #[test]
-fn el_estado_de_un_nucleo_se_puede_corregir() {
-    con_nucleos_limpios(|| {
+fn the_state_of_a_core_can_be_corrected() {
+    with_clean_cores(|| {
         let (slot, _) = cores::reserve(5).unwrap();
         assert_eq!(cores::all().next().unwrap().state, cores::State::Starting);
         cores::settle(slot, cores::State::Failed);
@@ -1159,23 +1159,23 @@ fn el_estado_de_un_nucleo_se_puede_corregir() {
 /// El controlador que recibe las interrupciones de los aparatos, y las
 /// interrupciones viejas de PC que esta maquina movio de numero.
 #[test]
-fn se_lee_el_ioapic_y_los_numeros_movidos() {
-    let mut cuerpo = vec![0u8; 8];
+fn the_ioapic_and_the_moved_numbers_are_read() {
+    let mut body = vec![0u8; 8];
     // Tipo 1: el IO-APIC. Direccion en el offset 4 de la entrada, primer
     // numero global en el 8.
     let mut ioapic = vec![0u8; 10];
     ioapic[2..6].copy_from_slice(&0xFEC0_0000u32.to_le_bytes());
     ioapic[6..10].copy_from_slice(&0u32.to_le_bytes());
-    cuerpo.extend(entrada(1, &ioapic));
+    body.extend(entry(1, &ioapic));
 
     // Tipo 2: la interrupcion 4 (el serie de la PC) esta en la 20.
     let mut over = vec![0u8; 8];
     over[1] = 4; // source, en el offset 3 de la entrada
     over[2..6].copy_from_slice(&20u32.to_le_bytes());
-    cuerpo.extend(entrada(2, &over));
+    body.extend(entry(2, &over));
 
-    let (xsdt, _fijas) = maquina_acpi(&[tabla_acpi(b"APIC", &cuerpo)]);
-    let hw = leer(&xsdt);
+    let (xsdt, _fixed) = machine_with_acpi(&[acpi_table(b"APIC", &body)]);
+    let hw = read_hw(&xsdt);
 
     let io = hw.ioapic.expect("no encontro el IO-APIC");
     assert_eq!(io.address, 0xFEC0_0000);
@@ -1188,25 +1188,25 @@ fn se_lee_el_ioapic_y_los_numeros_movidos() {
 
 /// La maquina diciendo donde tiene su consola, en vez de que la supongamos.
 #[test]
-fn se_lee_donde_esta_el_puerto_serie() {
-    let mut cuerpo = vec![0u8; 22]; // hasta el offset 58 de la tabla
+fn where_the_serial_port_is_gets_read() {
+    let mut body = vec![0u8; 22]; // hasta el offset 58 de la tabla
     // La direccion vive adentro de una estructura generica que arranca en el
     // offset 40 de la tabla; la direccion misma en el 44, o sea el 8 del cuerpo.
-    cuerpo[8..16].copy_from_slice(&0x0900_0000u64.to_le_bytes());
+    body[8..16].copy_from_slice(&0x0900_0000u64.to_le_bytes());
     // El numero de interrupcion, en el 54 de la tabla = 18 del cuerpo.
-    cuerpo[18..22].copy_from_slice(&33u32.to_le_bytes());
+    body[18..22].copy_from_slice(&33u32.to_le_bytes());
 
-    let (xsdt, _fijas) = maquina_acpi(&[tabla_acpi(b"SPCR", &cuerpo)]);
-    let sp = leer(&xsdt).serial.expect("no encontro el puerto serie");
+    let (xsdt, _fixed) = machine_with_acpi(&[acpi_table(b"SPCR", &body)]);
+    let sp = read_hw(&xsdt).serial.expect("no encontro el puerto serie");
     assert_eq!(sp.address, 0x0900_0000);
     assert_eq!(sp.gsi, 33);
 }
 
 /// Una SPCR mas corta de lo que el campo necesita no se lee a medias.
 #[test]
-fn una_spcr_truncada_no_inventa_nada() {
-    let (xsdt, _fijas) = maquina_acpi(&[tabla_acpi(b"SPCR", &[0u8; 4])]);
-    assert!(leer(&xsdt).serial.is_none());
+fn a_truncated_spcr_invents_nothing() {
+    let (xsdt, _fixed) = machine_with_acpi(&[acpi_table(b"SPCR", &[0u8; 4])]);
+    assert!(read_hw(&xsdt).serial.is_none());
 }
 
 // ---------------------------------------------------------------------------
@@ -1217,24 +1217,24 @@ use crate::channel;
 
 /// Arma un buzon como lo armaria el agente. Devuelve los bytes, que hay que
 /// mantener vivos mientras se use.
-fn buzon(capacidad: u32) -> Vec<u8> {
-    let mut b = vec![0u8; channel::size_for(capacidad) as usize];
+fn mailbox(capacity: u32) -> Vec<u8> {
+    let mut b = vec![0u8; channel::size_for(capacity) as usize];
     b[0..4].copy_from_slice(&channel::EXPECTED_MAGIC.to_le_bytes());
     b[4..8].copy_from_slice(&channel::EXPECTED_VERSION.to_le_bytes());
-    b[8..12].copy_from_slice(&capacidad.to_le_bytes());
+    b[8..12].copy_from_slice(&capacity.to_le_bytes());
     b
 }
 
-fn con_buzon_limpio<T>(f: impl FnOnce() -> T) -> T {
-    let _g = CANDADO.lock().unwrap_or_else(|e| e.into_inner());
+fn with_clean_mailbox<T>(f: impl FnOnce() -> T) -> T {
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     channel::reset();
     f()
 }
 
 #[test]
-fn se_adopta_un_buzon_bien_armado() {
-    con_buzon_limpio(|| {
-        let b = buzon(64);
+fn a_well_built_mailbox_is_adopted() {
+    with_clean_mailbox(|| {
+        let b = mailbox(64);
         let m = unsafe { channel::adopt(7, b.as_ptr() as u64, b.len() as u64) }.unwrap();
         assert_eq!(m.capacity(), 64);
         assert_eq!(m.handle, 7);
@@ -1248,9 +1248,9 @@ fn se_adopta_un_buzon_bien_armado() {
 
 /// Sin la firma, ahi no hay un buzon: hay memoria con lo que hubiera antes.
 #[test]
-fn sin_firma_no_se_adopta() {
-    con_buzon_limpio(|| {
-        let mut b = buzon(64);
+fn without_a_signature_it_is_not_adopted() {
+    with_clean_mailbox(|| {
+        let mut b = mailbox(64);
         b[0] = 0;
         assert_eq!(
             unsafe { channel::adopt(1, b.as_ptr() as u64, b.len() as u64) },
@@ -1261,16 +1261,16 @@ fn sin_firma_no_se_adopta() {
 }
 
 #[test]
-fn una_capacidad_imposible_se_rechaza() {
-    con_buzon_limpio(|| {
+fn an_impossible_capacity_is_rejected() {
+    with_clean_mailbox(|| {
         // Cero.
-        let b = buzon(0);
+        let b = mailbox(0);
         assert_eq!(
             unsafe { channel::adopt(1, b.as_ptr() as u64, b.len() as u64) },
             Err(channel::Error::BadCapacity)
         );
         // Y una que no es potencia de dos: dar la vuelta seria una division.
-        let mut b = buzon(64);
+        let mut b = mailbox(64);
         b[8..12].copy_from_slice(&100u32.to_le_bytes());
         assert_eq!(
             unsafe { channel::adopt(1, b.as_ptr() as u64, b.len() as u64) },
@@ -1282,12 +1282,12 @@ fn una_capacidad_imposible_se_rechaza() {
 /// Si el buzon no entra en lo que el agente reclamo, el kernel escribiria fuera
 /// de lo que le entregaron.
 #[test]
-fn un_buzon_que_no_entra_se_rechaza() {
-    con_buzon_limpio(|| {
-        let b = buzon(64);
-        let corto = b.len() as u64 - 1;
+fn a_mailbox_that_does_not_fit_is_rejected() {
+    with_clean_mailbox(|| {
+        let b = mailbox(64);
+        let short = b.len() as u64 - 1;
         assert_eq!(
-            unsafe { channel::adopt(1, b.as_ptr() as u64, corto) },
+            unsafe { channel::adopt(1, b.as_ptr() as u64, short) },
             Err(channel::Error::TooSmall)
         );
         // Y ni el encabezado solo.
@@ -1299,9 +1299,9 @@ fn un_buzon_que_no_entra_se_rechaza() {
 }
 
 #[test]
-fn lo_que_deja_el_agente_se_lee_en_orden() {
-    con_buzon_limpio(|| {
-        let mut b = buzon(8);
+fn what_the_agent_leaves_is_read_in_order() {
+    with_clean_mailbox(|| {
+        let mut b = mailbox(8);
         let rings = channel::size_for(0) as usize; // el encabezado
         b[rings..rings + 3].copy_from_slice(&[0xAA, 0xBB, 0xCC]);
         // El agente avanza su indice despues de escribir.
@@ -1318,9 +1318,9 @@ fn lo_que_deja_el_agente_se_lee_en_orden() {
 }
 
 #[test]
-fn las_respuestas_se_dejan_para_el_agente() {
-    con_buzon_limpio(|| {
-        let b = buzon(4);
+fn replies_are_left_for_the_agent() {
+    with_clean_mailbox(|| {
+        let b = mailbox(4);
         let m = unsafe { channel::adopt(1, b.as_ptr() as u64, b.len() as u64) }.unwrap();
         unsafe {
             for x in [1u8, 2, 3, 4] {
@@ -1340,9 +1340,9 @@ fn las_respuestas_se_dejan_para_el_agente() {
 
 /// El anillo da la vuelta: es un anillo, no una cinta.
 #[test]
-fn el_anillo_da_la_vuelta() {
-    con_buzon_limpio(|| {
-        let mut b = buzon(4);
+fn the_ring_wraps_around() {
+    with_clean_mailbox(|| {
+        let mut b = mailbox(4);
         let m = unsafe { channel::adopt(1, b.as_ptr() as u64, b.len() as u64) }.unwrap();
         unsafe {
             for x in [1u8, 2, 3, 4] {
@@ -1366,15 +1366,15 @@ fn el_anillo_da_la_vuelta() {
 
 use crate::handlers;
 
-fn con_handlers_limpios<T>(f: impl FnOnce() -> T) -> T {
-    let _g = CANDADO.lock().unwrap_or_else(|e| e.into_inner());
+fn with_clean_handlers<T>(f: impl FnOnce() -> T) -> T {
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     handlers::reset();
     f()
 }
 
 #[test]
-fn se_instala_un_handler_y_se_encuentra_por_su_interrupcion() {
-    con_handlers_limpios(|| {
+fn a_handler_is_installed_and_found_by_its_interrupt() {
+    with_clean_handlers(|| {
         let slot = handlers::reserve(34, 0x1000, false).unwrap();
         assert_eq!(handlers::slot_of(34), Some(slot));
         assert_eq!(handlers::slot_of(35), None);
@@ -1388,16 +1388,16 @@ fn se_instala_un_handler_y_se_encuentra_por_su_interrupcion() {
 /// Dos handlers para la misma interrupcion serian dos codigos peleandose por un
 /// evento: el segundo pediría ganar sin decirlo.
 #[test]
-fn no_se_instalan_dos_para_la_misma_interrupcion() {
-    con_handlers_limpios(|| {
+fn two_are_not_installed_for_the_same_interrupt() {
+    with_clean_handlers(|| {
         handlers::reserve(34, 0x1000, false).unwrap();
         assert_eq!(handlers::reserve(34, 0x2000, false), Err(handlers::Error::Taken));
     });
 }
 
 #[test]
-fn la_tabla_de_handlers_tiene_techo() {
-    con_handlers_limpios(|| {
+fn the_handler_table_has_a_ceiling() {
+    with_clean_handlers(|| {
         for i in 0..handlers::MAX {
             handlers::reserve(100 + i as u32, 0x1000, false).unwrap();
         }
@@ -1411,8 +1411,8 @@ fn la_tabla_de_handlers_tiene_techo() {
 /// Si la arquitectura no pudo instalarlo, la ranura se suelta: dejarla tomada
 /// haria que el proximo intento diga "ya instalado" por nada.
 #[test]
-fn una_ranura_que_no_se_uso_se_suelta() {
-    con_handlers_limpios(|| {
+fn a_slot_that_was_not_used_is_released() {
+    with_clean_handlers(|| {
         let slot = handlers::reserve(34, 0x1000, false).unwrap();
         handlers::release_slot(slot);
         assert!(handlers::at(slot).is_none());
@@ -1425,8 +1425,8 @@ fn una_ranura_que_no_se_uso_se_suelta() {
 /// El agente lee esta cuenta para saber si su aparato esta hablando, sin tener
 /// que instrumentar su propio codigo.
 #[test]
-fn se_cuenta_cada_vez_que_se_atiende() {
-    con_handlers_limpios(|| {
+fn it_is_counted_every_time_it_is_served() {
+    with_clean_handlers(|| {
         let slot = handlers::reserve(34, 0x1000, false).unwrap();
         handlers::served(slot);
         handlers::served(slot);
@@ -1440,14 +1440,14 @@ fn se_cuenta_cada_vez_que_se_atiende() {
 /// Lo que decide si un pedazo se le puede dejar alcanzar al agente cuando corra
 /// sin privilegio (D27).
 #[test]
-fn se_reconoce_que_pedazos_tienen_kernel_adentro() {
+fn which_chunks_have_kernel_inside_is_recognized() {
     // El kernel en 0x1000..0x2000, dentro del primer GiB.
-    static MAPA: [Region; 3] = [
+    static MAP: [Region; 3] = [
         Region { start: 0, bytes: 0x1000, kind: Kind::Free },
         Region { start: 0x1000, bytes: 0x1000, kind: Kind::Kernel },
         Region { start: GIB, bytes: GIB, kind: Kind::Free },
     ];
-    let m = Machine { regions: &MAPA, tables: Tables::default(), failure: None };
+    let m = Machine { regions: &MAP, tables: Tables::default(), failure: None };
 
     assert!(paging_touches(&m, 0x1000, 0x2000), "el rango del kernel mismo");
     assert!(paging_touches(&m, 0, 0x2000), "un rango que lo incluye");
@@ -1464,12 +1464,12 @@ fn se_reconoce_que_pedazos_tienen_kernel_adentro() {
 /// Un pedazo que no tiene ni kernel ni memoria libre no se parte: nadie va a
 /// necesitar decir cosas distintas de sus bloques.
 #[test]
-fn un_pedazo_de_solo_dispositivos_no_se_parte() {
-    static MAPA: [Region; 2] = [
+fn a_chunk_with_only_devices_is_not_split() {
+    static MAP: [Region; 2] = [
         Region { start: 0, bytes: 0x1000, kind: Kind::Kernel },
         Region { start: 3 * GIB, bytes: GIB, kind: Kind::Mmio },
     ];
-    let m = Machine { regions: &MAPA, tables: Tables::default(), failure: None };
+    let m = Machine { regions: &MAP, tables: Tables::default(), failure: None };
     assert!(crate::paging::needs_split(&m, 0), "el del kernel si");
     assert!(!crate::paging::needs_split(&m, 3), "el de puro mmio no");
     assert!(!crate::paging::needs_split(&m, 2), "y uno vacio tampoco");
@@ -1482,15 +1482,15 @@ fn paging_touches(m: &Machine, a: u64, b: u64) -> bool {
 /// El bloque de 2 MiB es el grano fino, y la consecuencia es que memoria del
 /// agente pegada al kernel queda del lado del kernel. Conviene que este escrito.
 #[test]
-fn el_grano_fino_arrastra_lo_que_esta_pegado() {
-    static MAPA: [Region; 2] = [
+fn fine_grain_drags_along_what_is_next_to_it() {
+    static MAP: [Region; 2] = [
         Region { start: 0x1000, bytes: 0x1000, kind: Kind::Kernel },
         Region { start: 0x2000, bytes: 0x1000, kind: Kind::Free },
     ];
-    let m = Machine { regions: &MAPA, tables: Tables::default(), failure: None };
+    let m = Machine { regions: &MAP, tables: Tables::default(), failure: None };
 
     // Las dos caen en el mismo bloque de 2 MiB, asi que el bloque entero queda
     // fuera del alcance del agente aunque una de las dos sea libre.
-    let bloque = crate::paging::BLOQUE;
-    assert!(crate::paging::touches_kernel(&m, 0, bloque));
+    let block = crate::paging::BLOCK;
+    assert!(crate::paging::touches_kernel(&m, 0, block));
 }

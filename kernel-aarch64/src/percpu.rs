@@ -21,10 +21,10 @@ use kernel_core::cores;
 
 /// El nucleo de arranque no esta en la tabla de nucleos reclamados, asi que se
 /// le reserva la ranura de mas arriba.
-pub const RANURA_ARRANQUE: usize = cores::MAX;
+pub const BOOT_SLOT: usize = cores::MAX;
 
 /// Uno por nucleo reclamable, mas el de arranque.
-pub const RANURAS: usize = cores::MAX + 1;
+pub const SLOTS: usize = cores::MAX + 1;
 
 /// Lo privado de cada nucleo.
 ///
@@ -33,52 +33,52 @@ pub const RANURAS: usize = cores::MAX + 1;
 #[repr(C, align(64))]
 pub struct PerCpu {
     /// Hay un `exec` en curso y el punto de recuperacion esta armado.
-    pub armado: u64,
+    pub armed: u64,
     /// Adonde saltar si el codigo del agente falla.
     pub rip: u64,
     /// La pila del kernel de este nucleo, para recuperarla.
     pub sp: u64,
     /// La cima de la pila donde corre el codigo del agente.
-    pub pila: u64,
+    pub stack: u64,
     /// Los registros al terminar un `exec` que volvio solo.
     pub regs: [u64; 33],
     /// Que ranura es esta.
-    pub ranura: u64,
+    pub slot: u64,
 }
 
 impl PerCpu {
-    const fn nuevo() -> Self {
-        Self { armado: 0, rip: 0, sp: 0, pila: 0, regs: [0; 33], ranura: 0 }
+    const fn new() -> Self {
+        Self { armed: 0, rip: 0, sp: 0, stack: 0, regs: [0; 33], slot: 0 }
     }
 }
 
-const _: () = assert!(core::mem::offset_of!(PerCpu, armado) == 0);
+const _: () = assert!(core::mem::offset_of!(PerCpu, armed) == 0);
 const _: () = assert!(core::mem::offset_of!(PerCpu, rip) == 8);
 const _: () = assert!(core::mem::offset_of!(PerCpu, sp) == 16);
-const _: () = assert!(core::mem::offset_of!(PerCpu, pila) == 24);
+const _: () = assert!(core::mem::offset_of!(PerCpu, stack) == 24);
 const _: () = assert!(core::mem::offset_of!(PerCpu, regs) == 32);
-const _: () = assert!(core::mem::offset_of!(PerCpu, ranura) == 296);
+const _: () = assert!(core::mem::offset_of!(PerCpu, slot) == 296);
 
-static mut BLOQUES: [PerCpu; RANURAS] = [const { PerCpu::nuevo() }; RANURAS];
+static mut BLOCKS: [PerCpu; SLOTS] = [const { PerCpu::new() }; SLOTS];
 
 /// Engancha el bloque de esta ranura al nucleo que esta corriendo.
 ///
 /// # Safety
 ///
-/// Se llama una vez por nucleo, y `ranura` tiene que ser suya y de nadie mas.
-pub unsafe fn instalar(ranura: usize) {
-    let b = &mut (*core::ptr::addr_of_mut!(BLOQUES))[ranura];
-    b.ranura = ranura as u64;
+/// Se llama una vez por nucleo, y `slot` tiene que ser suya y de nadie mas.
+pub unsafe fn install_block(slot: usize) {
+    let b = &mut (*core::ptr::addr_of_mut!(BLOCKS))[slot];
+    b.slot = slot as u64;
 
-    let dir = b as *mut PerCpu as u64;
-    core::arch::asm!("msr tpidr_el1, {}", in(reg) dir, options(nomem, nostack));
+    let addr = b as *mut PerCpu as u64;
+    core::arch::asm!("msr tpidr_el1, {}", in(reg) addr, options(nomem, nostack));
     core::arch::asm!("isb", options(nomem, nostack));
 }
 
 /// El bloque del nucleo que esta corriendo.
-fn actual() -> *mut PerCpu {
+fn current() -> *mut PerCpu {
     let p: u64;
-    // SAFETY: `instalar` dejo TPIDR_EL1 apuntando a un bloque valido.
+    // SAFETY: `install_block` dejo TPIDR_EL1 apuntando a un bloque valido.
     unsafe { core::arch::asm!("mrs {}, tpidr_el1", out(reg) p, options(nomem, nostack)) };
     p as *mut PerCpu
 }
@@ -87,19 +87,19 @@ fn actual() -> *mut PerCpu {
 ///
 /// Una sola lectura de un registro, sin tocar memoria compartida: es lo que
 /// permite llamarlo desde adentro de un handler de excepciones.
-pub fn ranura() -> usize {
+pub fn slot() -> usize {
     // SAFETY: el puntero sale de TPIDR_EL1, que apunta a un bloque estatico.
-    unsafe { (*actual()).ranura as usize }
+    unsafe { (*current()).slot as usize }
 }
 
 /// Si hay un `exec` en curso en **este** nucleo.
-pub fn armado() -> u64 {
-    unsafe { (*actual()).armado }
+pub fn armed() -> u64 {
+    unsafe { (*current()).armed }
 }
 
 /// Adonde desviar el regreso si el codigo del agente fallo.
-pub fn punto_de_retorno() -> u64 {
-    unsafe { (*actual()).rip }
+pub fn return_point() -> u64 {
+    unsafe { (*current()).rip }
 }
 
 /// El bloque de esa ranura.
@@ -107,6 +107,6 @@ pub fn punto_de_retorno() -> u64 {
 /// # Safety
 ///
 /// Quien lo use tiene que respetar que es de un solo nucleo.
-pub unsafe fn bloque(ranura: usize) -> *mut PerCpu {
-    core::ptr::addr_of_mut!((*core::ptr::addr_of_mut!(BLOQUES))[ranura])
+pub unsafe fn block(slot: usize) -> *mut PerCpu {
+    core::ptr::addr_of_mut!((*core::ptr::addr_of_mut!(BLOCKS))[slot])
 }

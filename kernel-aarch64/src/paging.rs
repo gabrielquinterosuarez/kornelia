@@ -32,33 +32,33 @@
 use kernel_core::machine::Machine;
 use kernel_core::paging::{self, Attr, Mapping};
 
-const ENTRADAS: usize = 512;
+const ENTRIES: usize = 512;
 
 /// Cada tabla de nivel 1 cubre 512 GiB.
-const MAX_NIVEL1: usize = 8;
+const MAX_LEVEL1: usize = 8;
 
 /// Cuantos pedazos de 1 GiB se pueden partir en bloques de 2 MiB.
 ///
 /// Se parten los que tienen kernel o memoria libre adentro: uno o dos.
-const MAX_NIVEL2: usize = 4;
+const MAX_LEVEL2: usize = 4;
 
 #[repr(C, align(4096))]
-struct Tabla([u64; ENTRADAS]);
+struct Table([u64; ENTRIES]);
 
-static mut NIVEL0: Tabla = Tabla([0; ENTRADAS]);
-static mut NIVEL1: [Tabla; MAX_NIVEL1] = [const { Tabla([0; ENTRADAS]) }; MAX_NIVEL1];
-static mut NIVEL2: [Tabla; MAX_NIVEL2] = [const { Tabla([0; ENTRADAS]) }; MAX_NIVEL2];
+static mut LEVEL0: Table = Table([0; ENTRIES]);
+static mut LEVEL1: [Table; MAX_LEVEL1] = [const { Table([0; ENTRIES]) }; MAX_LEVEL1];
+static mut LEVEL2: [Table; MAX_LEVEL2] = [const { Table([0; ENTRIES]) }; MAX_LEVEL2];
 
 // --- Descriptores -----------------------------------------------------------
 /// Los dos bits de abajo en 0b11: esta entrada apunta a otra tabla.
-const ES_TABLA: u64 = 0b11;
+const IS_TABLE: u64 = 0b11;
 /// En 0b01: esta entrada ES un bloque de memoria.
-const ES_BLOQUE: u64 = 0b01;
+const IS_BLOCK: u64 = 0b01;
 /// Access Flag. Si esta en cero, el primer acceso da fault en vez de andar.
 const AF: u64 = 1 << 10;
 /// Inner shareable: coherente con los otros nucleos. Solo para memoria normal;
 /// la de dispositivo no lo lleva.
-const COMPARTIDA: u64 = 0b11 << 8;
+const SHAREABLE: u64 = 0b11 << 8;
 
 /// Ranura 0 de MAIR: memoria normal, write-back, se cachea.
 const ATTR_NORMAL: u64 = 0 << 2;
@@ -75,7 +75,7 @@ const MAIR: u64 = 0x0000_0000_0000_04FF;
 ///
 /// Solo despues de `ExitBootServices`, y solo desde EL1.
 pub unsafe fn install(m: &Machine) -> Result<Mapping, &'static str> {
-    if nivel_de_excepcion() != 1 {
+    if exception_level() != 1 {
         // A EL2 le corresponden otros registros. UEFI en la maquina `virt` sin
         // virtualizacion entrega en EL1, pero se comprueba en vez de suponerlo.
         return Err("no estamos en EL1");
@@ -85,20 +85,20 @@ pub unsafe fn install(m: &Machine) -> Result<Mapping, &'static str> {
     if total == 0 {
         return Err("el mapa de memoria esta vacio");
     }
-    if total > (MAX_NIVEL1 * ENTRADAS) as u64 {
+    if total > (MAX_LEVEL1 * ENTRIES) as u64 {
         return Err("la maquina direcciona mas de 4 TiB y las tablas no llegan");
     }
 
-    let n0 = &mut *core::ptr::addr_of_mut!(NIVEL0);
-    let n1 = &mut *core::ptr::addr_of_mut!(NIVEL1);
+    let n0 = &mut *core::ptr::addr_of_mut!(LEVEL0);
+    let n1 = &mut *core::ptr::addr_of_mut!(LEVEL1);
 
-    let n2 = &mut *core::ptr::addr_of_mut!(NIVEL2);
+    let n2 = &mut *core::ptr::addr_of_mut!(LEVEL2);
     let mut device_gib = 0;
-    let mut partidos = 0usize;
+    let mut split_count = 0usize;
 
     for gib in 0..total {
-        let cual = (gib / ENTRADAS as u64) as usize;
-        let cual_entrada = (gib % ENTRADAS as u64) as usize;
+        let which = (gib / ENTRIES as u64) as usize;
+        let which_entry = (gib % ENTRIES as u64) as usize;
 
         let device = paging::attr_of(m, gib) == Attr::Device;
         if device {
@@ -108,51 +108,51 @@ pub unsafe fn install(m: &Machine) -> Result<Mapping, &'static str> {
         let attr = if device {
             AF | ATTR_DEVICE
         } else {
-            AF | COMPARTIDA | ATTR_NORMAL
+            AF | SHAREABLE | ATTR_NORMAL
         };
 
         if !paging::needs_split(m, gib) {
             // Nada que distinguir adentro: un bloque de 1 GiB entero, del
             // kernel — de ahi no salen reclamos.
-            n1[cual].0[cual_entrada] =
-                (gib * paging::GIB) | attr | ES_BLOQUE;
+            n1[which].0[which_entry] =
+                (gib * paging::GIB) | attr | IS_BLOCK;
             continue;
         }
 
         // Con kernel o con memoria libre adentro: se parte en bloques de 2 MiB.
-        if partidos >= MAX_NIVEL2 {
+        if split_count >= MAX_LEVEL2 {
             return Err("hay mas pedazos con kernel adentro de los que se pueden partir");
         }
-        let tabla = &mut n2[partidos];
-        for i in 0..ENTRADAS {
-            let base = gib * paging::GIB + i as u64 * paging::BLOQUE;
+        let table = &mut n2[split_count];
+        for i in 0..ENTRIES {
+            let base = gib * paging::GIB + i as u64 * paging::BLOCK;
             // Arrancan siendo del kernel. El permiso se prende bloque por
             // bloque cuando el agente reclama memoria pidiendolo (D27).
-            tabla.0[i] = base | attr | ES_BLOQUE;
+            table.0[i] = base | attr | IS_BLOCK;
         }
-        n1[cual].0[cual_entrada] = (core::ptr::addr_of!(*tabla) as u64) | ES_TABLA;
-        partidos += 1;
+        n1[which].0[which_entry] = (core::ptr::addr_of!(*table) as u64) | IS_TABLE;
+        split_count += 1;
     }
 
-    let usadas = total.div_ceil(ENTRADAS as u64) as usize;
-    for i in 0..usadas {
-        n0.0[i] = (core::ptr::addr_of!(n1[i]) as u64) | ES_TABLA;
+    let used_count = total.div_ceil(ENTRIES as u64) as usize;
+    for i in 0..used_count {
+        n0.0[i] = (core::ptr::addr_of!(n1[i]) as u64) | IS_TABLE;
     }
 
-    let raiz = core::ptr::addr_of!(*n0) as u64;
-    cargar(raiz, tcr());
+    let root = core::ptr::addr_of!(*n0) as u64;
+    load_root(root, tcr());
 
     // Se relee para confirmar que el cambio ocurrio. Los bits de arriba de
     // TTBR0_EL1 llevan el ASID, no direccion.
-    let puesto: u64;
-    core::arch::asm!("mrs {}, ttbr0_el1", out(reg) puesto, options(nomem, nostack));
-    if puesto & 0x0000_FFFF_FFFF_FFFE != raiz {
+    let read_back: u64;
+    core::arch::asm!("mrs {}, ttbr0_el1", out(reg) read_back, options(nomem, nostack));
+    if read_back & 0x0000_FFFF_FFFF_FFFE != root {
         return Err("TTBR0_EL1 no quedo apuntando a nuestras tablas");
     }
 
     // En aarch64 no hay nada que prender: que una pagina alcanzable desde EL0
     // no sea ejecutable desde EL1 viene en el modelo de permisos.
-    Ok(Mapping { gib: total, device_gib, root: raiz, isolation: true })
+    Ok(Mapping { gib: total, device_gib, root: root, isolation: true })
 }
 
 /// El valor de TCR_EL1 para grano de 4 KiB y direcciones de 48 bits.
@@ -172,7 +172,7 @@ fn tcr() -> u64 {
         | (ips << 32)   // IPS
 }
 
-fn nivel_de_excepcion() -> u64 {
+fn exception_level() -> u64 {
     let el: u64;
     unsafe { core::arch::asm!("mrs {}, currentel", out(reg) el, options(nomem, nostack)) };
     (el >> 2) & 0b11
@@ -189,7 +189,7 @@ fn nivel_de_excepcion() -> u64 {
 /// Las tablas que apunta `raiz` tienen que identity-mapear el codigo que esta
 /// corriendo. Si no, la instruccion siguiente al `isb` final se busca en una
 /// direccion que no existe.
-unsafe fn cargar(raiz: u64, tcr: u64) {
+unsafe fn load_root(root: u64, tcr: u64) {
     core::arch::asm!(
         "dsb sy",
         "isb",
@@ -208,7 +208,7 @@ unsafe fn cargar(raiz: u64, tcr: u64) {
 
         "msr mair_el1, {mair}",
         "msr tcr_el1, {tcr}",
-        "msr ttbr0_el1, {raiz}",
+        "msr ttbr0_el1, {root}",
         "dsb sy",
         "isb",
 
@@ -223,7 +223,7 @@ unsafe fn cargar(raiz: u64, tcr: u64) {
         t = out(reg) _,
         mair = in(reg) MAIR,
         tcr = in(reg) tcr,
-        raiz = in(reg) raiz,
+        root = in(reg) root,
         options(nostack, preserves_flags),
     );
 }
@@ -233,51 +233,51 @@ unsafe fn cargar(raiz: u64, tcr: u64) {
 /// `00` es "solo EL1", `01` es "EL1 y EL0". Y marcarlo **deja el bloque fuera
 /// del alcance del kernel para ejecutar**: es la misma regla que SMEP en x86,
 /// pero acá metida en el modelo de permisos y sin forma de apagarla.
-const AP_USUARIO: u64 = 0b01 << 6;
+const AP_USER: u64 = 0b01 << 6;
 
 /// Marca un rango como alcanzable, o no, desde EL0.
 ///
 /// # Safety
 ///
-/// El rango tiene que estar alineado a `BLOQUE` y caer en pedazos ya partidos.
+/// El rango tiene que estar alineado a `BLOCK` y caer en pedazos ya partidos.
 pub unsafe fn set_user_access(
     m: &Machine,
     start: u64,
     bytes: u64,
     user: bool,
 ) -> Result<(), &'static str> {
-    if start % paging::BLOQUE != 0 || bytes % paging::BLOQUE != 0 || bytes == 0 {
+    if start % paging::BLOCK != 0 || bytes % paging::BLOCK != 0 || bytes == 0 {
         return Err("el rango no esta alineado al bloque");
     }
 
-    let n1 = &mut *core::ptr::addr_of_mut!(NIVEL1);
-    let n2 = &mut *core::ptr::addr_of_mut!(NIVEL2);
+    let n1 = &mut *core::ptr::addr_of_mut!(LEVEL1);
+    let n2 = &mut *core::ptr::addr_of_mut!(LEVEL2);
 
-    let mut dir = start;
-    while dir < start + bytes {
-        let gib = dir / paging::GIB;
+    let mut addr = start;
+    while addr < start + bytes {
+        let gib = addr / paging::GIB;
         if !paging::needs_split(m, gib) {
             return Err("ese pedazo no tiene grano fino");
         }
-        let cual = (gib / ENTRADAS as u64) as usize;
-        let entrada = n1[cual].0[(gib % ENTRADAS as u64) as usize];
-        if entrada & 0b11 != ES_TABLA {
+        let which = (gib / ENTRIES as u64) as usize;
+        let entry = n1[which].0[(gib % ENTRIES as u64) as usize];
+        if entry & 0b11 != IS_TABLE {
             return Err("ese pedazo quedo como un bloque entero");
         }
-        let tabla_dir = entrada & 0x0000_FFFF_FFFF_F000;
+        let table_addr = entry & 0x0000_FFFF_FFFF_F000;
 
-        let indice = ((dir % paging::GIB) / paging::BLOQUE) as usize;
-        let tabla = n2
+        let index = ((addr % paging::GIB) / paging::BLOCK) as usize;
+        let table = n2
             .iter_mut()
-            .find(|t| core::ptr::addr_of!(**t) as u64 == tabla_dir)
+            .find(|t| core::ptr::addr_of!(**t) as u64 == table_addr)
             .ok_or("no se encontro la tabla de bloques")?;
 
         if user {
-            tabla.0[indice] |= AP_USUARIO;
+            table.0[index] |= AP_USER;
         } else {
-            tabla.0[indice] &= !AP_USUARIO;
+            table.0[index] &= !AP_USER;
         }
-        dir += paging::BLOQUE;
+        addr += paging::BLOCK;
     }
 
     // Lo que el CPU se acuerde de antes ya no vale.
