@@ -58,9 +58,18 @@ impl Platform for Fake {
         None
     }
 
-    unsafe fn exec(&mut self, _entry: u64, _region: (u64, u64)) -> crate::fault::Outcome {
+    unsafe fn exec(
+        &mut self,
+        _entry: u64,
+        _region: (u64, u64),
+        _supervised: bool,
+    ) -> crate::fault::Outcome {
         crate::fault::Outcome { faulted: false, regs: &[], fault: None }
     }
+
+    /// Una maquina de mentira devuelve bytes de mentira: lo que importa es que
+    /// `describe` los publique, no que sean ejecutables.
+    const EXEC_RETURN: &'static [u8] = &[0x00];
 
     unsafe fn install_serial_interrupt(
         &mut self,

@@ -48,7 +48,7 @@ justificación. No las reabras sin motivo nuevo.** Las más importantes:
 - **D25** Al firmware se le pide todo (mapa de memoria, ACPI/DT, blob) **antes** de `ExitBootServices`, que se llama una sola vez. Después no hay segunda oportunidad, y solo el firmware sabe leer FAT32.
 - **D29** En el núcleo del kernel **manda el kernel**: una interrupción ahí tiene prioridad sobre el código del agente. En un núcleo `dedicated` la prioridad la decide el agente. Implica que en el núcleo del protocolo el agente corre `supervised` — si quiere `raw`, que reclame uno propio.
 - **D28** `listen` es el verbo **once**: el agente arma un buzón en memoria y se lo entrega como segundo canal. Se agregó en vez de esconderlo en un acuerdo implícito — un número redondo no es un principio.
-- **D27** El agente **declara** si su código corre `supervised` (anillo bajo, no puede colgar la máquina) o `raw` (privilegio completo). El kernel ofrece los dos y no elige (P6). **Solo cubre `exec`:** un handler de `irq.install` corre siempre privilegiado porque el hardware no entrega interrupciones sin privilegio.
+- **D27** El agente **declara** si su código corre `supervised` (anillo bajo, no puede colgar la máquina) o `raw` (privilegio completo). El kernel ofrece los dos y no elige (P6): `mode` es obligatorio en `exec`, porque un valor por omisión sería el kernel eligiendo. **Solo cubre `exec`:** un handler de `irq.install` corre siempre privilegiado porque el hardware no entrega interrupciones sin privilegio.
 - **D26** El serie va **crudo**: `-serial stdio`, nunca `mon:stdio`. El multiplexor se come el `0x01` como escape y por ahí viaja CBOR. Se sale de QEMU con `Ctrl-C`.
 
 ## Superficie del kernel
@@ -100,35 +100,38 @@ si falla **el fault vuelve como respuesta en vez de matar la máquina** (P5) —
 ni siquiera destruyendo el puntero de pila, porque las excepciones entran en una
 pila aparte (IST en x86_64, `SP_EL1` en aarch64).
 
+**D27 está entero:** el agente declara con qué privilegio corre y `exec supervised`
+entra a anillo 3 / EL0. Ahora `cli` —lo único de lo que el kernel no podía
+volver— vuelve como fault estructurado. La pila sale del final del reclamo del
+agente y se vuelve por una ventanilla (`int 0x80` / `svc #0`) cuyos bytes
+publica `describe`, así el agente no los tiene horneados (P4).
+
 `describe` sirve mapa de memoria, tablas, reclamos, núcleos, controlador de
-interrupciones y PCIe, leídos de ACPI.
+interrupciones y PCIe, leídos de ACPI — más el acuerdo de `exec`: qué modos hay
+y con qué bytes se vuelve de `supervised`.
 
 `core.claim` arranca los otros núcleos: PSCI en aarch64, INIT/SIPI más un
 trampolín de 16→32→64 bits en x86_64.
 
 Falta uno: `dma.allow`, el IOMMU.
 
-El portón es `./scripts/check.sh`: frontera + 87 tests + compila las dos + las
-bootea en QEMU y les habla el protocolo con `scripts/client.py`. Corrélo antes
-de commitear; CI corre exactamente ese script.
+El portón es `./scripts/check.sh`: frontera + idioma + 87 tests + compila las
+dos + las bootea en QEMU y les habla el protocolo con `scripts/client.py`.
+Corrélo antes de commitear; CI corre exactamente ese script.
 
 ## Lo que sigue
 
-Queda **un solo verbo** sin hacer, más dos deudas grandes. Las preguntas
-abiertas están en `docs/DISENO.md` §8.
+Queda **un solo verbo** sin hacer, más una deuda grande. Las preguntas abiertas
+están en `docs/DISENO.md` §8.
 
-1. **Terminar D27: la transición de privilegio.** La mitad de abajo ya está —
-   `mem.claim {user: true}` entrega memoria del agente y el hardware lo hace
-   cumplir. Falta entrar a anillo 3 / EL0 en `exec supervised`, y la ventanilla
-   (`int` / `svc`) para volver: desde el nivel bajo un `ret` común no vuelve.
-   **La mecánica está resuelta y escrita** en la deuda 12 de `docs/DISENO.md`
-   §7 — selectores, el marco del `iretq`, los dos lugares donde el desvío de
-   faults hay que corregir, y las dos comprobaciones que el verbo debe hacer.
-   Leela antes de empezar: ahorra volver a derivarla.
-2. **Darle trabajo a los núcleos reclamados.** Hoy arrancan y quedan esperando,
+1. **Darle trabajo a los núcleos reclamados.** Hoy arrancan y quedan esperando,
    pero `exec` corre siempre en el que atiende el protocolo. Falta un buzón por
    núcleo y que `exec` acepte a cuál mandárselo (sección 4: `exec(core, ...)`).
-3. **`dma.allow`** — el IOMMU, el único verbo que falta. El más grande del proyecto y el más específico de
+
+   **Destraba además una regla de D29 que quedó pendiente:** en el núcleo del
+   protocolo el agente debería correr siempre `supervised`, pero exigirlo hoy
+   dejaría `raw` sin ningún lugar donde correr — es la deuda 12, ya escrita.
+2. **`dma.allow`** — el IOMMU, el único verbo que falta. El más grande del proyecto y el más específico de
    cada fabricante; es lo que más gana con silicio real.
 
 Deudas anotadas en `docs/DISENO.md` §7. La más viva: **un núcleo reclamado
@@ -141,5 +144,6 @@ esperando, pero `exec` corre siempre en el que atiende el protocolo.
 ./scripts/run-x86_64.sh      # Ctrl-C para salir (NO Ctrl-A X: ver D26)
 ./scripts/run-aarch64.sh
 ./scripts/client.py --what memory   # hablarle el protocolo
+./scripts/client.py --supervised    # D27: correr sin privilegio y ver el fault
 ./scripts/check.sh                  # el porton entero
 ```

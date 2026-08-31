@@ -212,6 +212,8 @@ struct Sections {
     channel: bool,
     /// Los handlers de interrupcion que el agente tiene instalados (D9).
     handlers: bool,
+    /// Con que privilegios se puede correr codigo, y como se vuelve (D27).
+    exec: bool,
     /// Si no vino la clave `what`, se devuelve el indice (D16).
     index: bool,
 }
@@ -249,6 +251,7 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
                     Some("cores") => q.cores = true,
                     Some("channel") => q.channel = true,
                     Some("handlers") => q.handlers = true,
+                    Some("exec") => q.exec = true,
                     // Contestar solo con lo que se reconocio, callado, seria
                     // mentir por omision.
                     Some(_) => return reply_error(p, id, "unknown section in what"),
@@ -278,7 +281,8 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
         if q.claims {
             sections += 1;
         }
-        for extra in [q.cpus, q.interrupts, q.pcie, q.cores, q.channel, q.handlers] {
+        for extra in [q.cpus, q.interrupts, q.pcie, q.cores, q.channel, q.handlers,
+                      q.exec] {
             if extra {
                 sections += 1;
             }
@@ -393,6 +397,10 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
             w.text("channel");
             write_channel(&mut w);
         }
+        if q.exec {
+            w.text("exec");
+            write_exec::<P>(&mut w);
+        }
         if q.pcie {
             w.text("pcie");
             match hw.pcie {
@@ -422,13 +430,13 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
 
 /// El indice: que hay para pedir, y cuanto de cada cosa.
 fn write_index(w: &mut Writer<'_>, m: &Machine, hw: &Hardware, arch: &str) {
-    w.map(11);
+    w.map(12);
 
     w.text("arch");
     w.text(arch);
 
     w.text("sections");
-    w.array(9);
+    w.array(10);
     w.text("memory");
     w.text("tables");
     w.text("claims");
@@ -438,6 +446,7 @@ fn write_index(w: &mut Writer<'_>, m: &Machine, hw: &Hardware, arch: &str) {
     w.text("cores");
     w.text("channel");
     w.text("handlers");
+    w.text("exec");
 
     w.text("memory");
     w.map(2);
@@ -480,6 +489,40 @@ fn write_index(w: &mut Writer<'_>, m: &Machine, hw: &Hardware, arch: &str) {
 
     w.text("handlers");
     w.uint(handlers::count() as u64);
+
+    // Los dos privilegios con los que el agente puede correr codigo (D27). El
+    // como se vuelve de `supervised` esta en la seccion, que es donde entra un
+    // dato que no es un numero.
+    w.text("exec");
+    w.array(2);
+    w.text("supervised");
+    w.text("raw");
+}
+
+/// Con que privilegio puede correr el codigo del agente, y como vuelve (D27).
+///
+/// El kernel ofrece los dos y no elige: elegir es del agente (P6). Lo que si
+/// hace es **publicar el acuerdo**, para que no lo tenga horneado (P4).
+fn write_exec<P: Platform>(w: &mut Writer<'_>) {
+    w.map(3);
+
+    w.text("modes");
+    w.array(2);
+    w.text("supervised");
+    w.text("raw");
+
+    // Como vuelve el codigo supervisado. Desde el nivel de abajo un retorno
+    // comun no vuelve: hay que pasar por una ventanilla, y estos son los bytes
+    // exactos que la abren. Van como codigo maquina y no como el nombre de una
+    // instruccion —`int` en x86_64, `svc` en aarch64— para que el agente los
+    // pegue al final de lo que emite sin saber sobre que silicio corre (D3).
+    w.text("return");
+    w.bytes(P::EXEC_RETURN);
+
+    // Y de donde sale la pila: del final del mismo reclamo. Se dice porque es
+    // memoria que el agente tiene que dejarle libre a su propio codigo.
+    w.text("stack");
+    w.text("claim-end");
 }
 
 /// El mapa de memoria: un arreglo de `[inicio, bytes, clase]`.
@@ -662,6 +705,10 @@ struct Args<'a> {
     core_id: Option<u64>,
     /// El numero de una interrupcion, para `irq.install`.
     interrupt: Option<u64>,
+    /// Con que privilegio corre el codigo, para `exec`. Lo declara el agente
+    /// (D27) y no tiene valor por omision: elegir por el seria justo lo que
+    /// D27 le devuelve.
+    mode: Option<&'a str>,
     /// Prestados del buffer de entrada, no copiados: subir codigo maquina no
     /// puede costar una copia mas. La vida util los ata al pedido, asi que se
     /// dejan de poder usar cuando llega el siguiente — que es exactamente
@@ -681,6 +728,7 @@ fn read_args<'a>(r: &mut Reader<'a>) -> Option<Args<'a>> {
         len: None,
         core_id: None,
         interrupt: None,
+        mode: None,
         data: None,
     };
 
@@ -706,6 +754,7 @@ fn read_args<'a>(r: &mut Reader<'a>) -> Option<Args<'a>> {
             "len" => a.len = Some(r.uint()?),
             "id" => a.core_id = Some(r.uint()?),
             "interrupt" => a.interrupt = Some(r.uint()?),
+            "mode" => a.mode = Some(r.text()?),
             _ => r.skip()?,
         }
     }
@@ -890,16 +939,28 @@ fn finish_reply<P: Platform>(p: &mut P, id: u64, w: Writer<'_>) {
 /// vez de matar la maquina (P5). El kernel no mira ese codigo ni lo valida: no
 /// tiene una opinion sobre lo que el agente deberia hacer (P2).
 ///
-/// Lo que todavia no hace: elegir nucleo —`core.claim` no existe, asi que corre
-/// en este— ni recibir un estado inicial de registros. El codigo recibe en el
-/// primer registro de argumento su propia direccion, para poder encontrar sus
-/// datos sin depender de donde lo hayan cargado.
+/// **El agente declara con que privilegio corre** (D27): `mode` es obligatorio
+/// y vale `supervised` —anillo 3 en x86_64, EL0 en aarch64— o `raw`, que es el
+/// privilegio del kernel. No hay valor por omision a proposito: si faltara y el
+/// kernel eligiera, estaria eligiendo el kernel, que es exactamente lo que D27
+/// le devuelve al agente (P6).
+///
+/// Lo que todavia no hace: elegir nucleo —falta un buzon por nucleo, deuda 9—
+/// ni recibir un estado inicial de registros. El codigo recibe en el primer
+/// registro de argumento su propia direccion, para poder encontrar sus datos sin
+/// depender de donde lo hayan cargado.
 fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
     let Some(a) = read_args(r) else {
         return reply_error(p, id, "malformed arguments");
     };
     let Some(handle) = a.handle else {
         return reply_error(p, id, "exec needs handle");
+    };
+    let supervised = match a.mode {
+        Some("supervised") => true,
+        Some("raw") => false,
+        Some(_) => return reply_error(p, id, "mode must be supervised or raw"),
+        None => return reply_error(p, id, "exec needs mode: supervised or raw"),
     };
     let off = a.off.unwrap_or(0);
 
@@ -909,10 +970,24 @@ fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
         Err(e) => return reply_failure(p, id, e),
         Ok(addr) => addr,
     };
-    // El reclamo entero, para que la arquitectura pueda sincronizar cachés.
+    // El reclamo entero: de ahi sale la pila en `supervised`, y con eso la
+    // arquitectura puede sincronizar cachés.
     let Some(c) = claims::get(handle) else {
         return reply_failure(p, id, claims::Error::NoSuchHandle);
     };
+
+    // El privilegio declarado y el permiso de la memoria tienen que coincidir,
+    // y **la misma pagina no puede ser las dos cosas**: una marcada para el
+    // agente deja de ser ejecutable con privilegio, y una que no lo esta no se
+    // alcanza sin el. Aceptar el pedido igual seria prometer algo que el
+    // hardware va a negar un microsegundo despues, con un fault que no se
+    // parece a la causa.
+    if supervised && !c.user {
+        return reply_error(p, id, "exec supervised needs memory claimed with user");
+    }
+    if !supervised && c.user {
+        return reply_error(p, id, "exec raw needs memory not claimed for the agent");
+    }
 
     // SAFETY: la direccion esta dentro de un reclamo vigente, y el identity map
     // de D12 cubre toda la memoria de la maquina. Lo que haya ahi puede ser
@@ -922,7 +997,7 @@ fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
     // largo no deja al cordon sin atender. El bucle vuelve a apagarlos al salir
     // porque su propio diseno depende de eso.
     p.set_interrupts(true);
-    let outcome = unsafe { p.exec(entry, (c.start, c.bytes)) };
+    let outcome = unsafe { p.exec(entry, (c.start, c.bytes), supervised) };
     p.set_interrupts(false);
 
     let out = unsafe { &mut *core::ptr::addr_of_mut!(OUTBOX) };
@@ -933,7 +1008,12 @@ fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
     // del pedido — es su resultado, y va adentro.
     w.bool(true);
 
-    w.map(3);
+    w.map(4);
+
+    // Con que privilegio corrio de verdad. Se devuelve aunque el agente lo
+    // acabe de mandar: la respuesta tiene que poder leerse sola.
+    w.text("mode");
+    w.text(if supervised { "supervised" } else { "raw" });
 
     w.text("faulted");
     w.bool(outcome.faulted);

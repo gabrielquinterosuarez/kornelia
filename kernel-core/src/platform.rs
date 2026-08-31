@@ -90,12 +90,35 @@ pub trait Platform {
     /// `entry` tiene que apuntar a memoria mapeada y ejecutable. Lo que haya
     /// ahí puede ser cualquier cosa: el kernel no lo mira ni lo valida (P2).
     ///
-    /// `region` es el reclamo entero donde vive ese código. Se pasa porque hay
-    /// arquitecturas donde la caché de instrucciones **no** es coherente con la
-    /// de datos: ahí, código recién escrito por el camino de datos no se ve
-    /// desde el camino de instrucciones hasta que alguien las sincroniza. En
-    /// x86_64 el hardware lo hace solo; en aarch64 hay que pedirlo.
-    unsafe fn exec(&mut self, entry: u64, region: (u64, u64)) -> Outcome;
+    /// `region` es el reclamo entero donde vive ese código, y se pasa por dos
+    /// motivos. Uno: hay arquitecturas donde la caché de instrucciones **no** es
+    /// coherente con la de datos, así que código recién escrito por el camino de
+    /// datos no se ve desde el camino de instrucciones hasta que alguien las
+    /// sincroniza — en x86_64 el hardware lo hace solo, en aarch64 hay que
+    /// pedirlo. Dos: en `supervised` de ahí sale la pila.
+    ///
+    /// `supervised` es lo que **el agente declaró** (D27), no algo que decida el
+    /// kernel. En `false` el código corre con el privilegio del kernel, que es
+    /// lo que había antes de D27. En `true` corre en el nivel de abajo —anillo 3
+    /// en x86_64, EL0 en aarch64—, y ahí cambian dos cosas:
+    ///
+    /// - **la pila es el final de `region`**, porque en ese nivel la del kernel
+    ///   no se puede ni escribir. Todo lo que corre sin privilegio vive en
+    ///   memoria que el agente declaró suya con `mem.claim {user: true}`;
+    /// - **para volver no alcanza un retorno común**: hay que ejecutar
+    ///   `EXEC_RETURN`. Un retorno común salta a lo que haya quedado en la pila
+    ///   y termina en fault — que se captura como cualquier otro (P5).
+    unsafe fn exec(&mut self, entry: u64, region: (u64, u64), supervised: bool) -> Outcome;
+
+    /// Las instrucciones con las que el código `supervised` le devuelve el
+    /// control al kernel.
+    ///
+    /// Se publican como **bytes de código máquina** y no como un número de
+    /// vector o un nombre de instrucción: así el agente no tiene que saber que
+    /// en x86_64 esto es un `int` y en aarch64 un `svc` (D3), y le alcanza con
+    /// pegarlos al final de lo que emite (P4). Es la misma forma en que el
+    /// kernel publica cómo tocar un timbre.
+    const EXEC_RETURN: &'static [u8];
 
     /// Programa el timbre del cable serie y lo enciende (D5, D17).
     ///

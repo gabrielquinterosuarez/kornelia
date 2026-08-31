@@ -81,7 +81,7 @@ algo que la lista de diez no podía pedir — ver D28.
 | `mem.read(handle, off, len)` | Bytes crudos hacia afuera. |
 | `mem.write(handle, off, bytes)` | Bytes crudos hacia adentro. |
 | `core.claim(id, modo)` | Un núcleo físico. En `dedicated` es solo del agente, con el timer enmascarado. En `shared` es el núcleo que atiende el protocolo: el kernel le pide prestados microsegundos cuando llega un pedido. El núcleo del protocolo **nunca** se entrega como `dedicated`, y el kernel lo dice con los datos para que el agente decida (P4). |
-| `exec(core, handle, off, regs)` | Salta a código máquina. Devuelve estado de registros + fault si lo hubo. |
+| `exec(core, handle, off, regs, mode)` | Salta a código máquina. Devuelve estado de registros + fault si lo hubo. `mode` es `supervised` o `raw` y **lo declara el agente** (D27): no tiene valor por omisión, porque elegirlo sería el kernel eligiendo. |
 | `irq.install(interrupt, handle, off)` | Instala un handler. El kernel pone prólogo, epílogo y EOI. El argumento es el número con el que **la máquina** identifica la fuente, no una ranura de tabla: eso último es modelo de x86 y no existe igual en ARM (D3). |
 | `irq.install_raw(interrupt, handle, off)` | Igual, pero el agente hace todo. Sin red de contención. **En aarch64 devuelve error**: el GIC entrega el número y el reparto es en software, así que no hay un camino más crudo que el que ya se usa — decirlo es mejor que aceptar el pedido y dar otra cosa (P4). |
 | `dma.allow(device, handle)` | Declara qué memoria puede tocar un dispositivo. Programa el IOMMU. |
@@ -146,7 +146,8 @@ Lo que sí existe:
 | **El protocolo CBOR** (D6) | Andando. Escrito a mano, sin dependencias; verificado contra los vectores canónicos del RFC 8949. |
 | **`describe`** | Andando: sirve `memory`, `tables`, `claims`, `cpus`, `interrupts` y `pcie`. Sin argumentos devuelve el índice, no un volcado (D16). |
 | **Lectura de ACPI** | Andando en las dos. MADT (núcleos y controlador de interrupciones) y MCFG (PCIe), con el checksum verificado tabla por tabla. |
-| **Permiso de memoria** (D27) | Andando en las dos. `mem.claim {user: true}` entrega memoria alcanzable sin privilegio, y **lo hace cumplir el hardware**: SMEP en x86_64, el modelo de permisos en aarch64. Falta la transición de privilegio en sí. |
+| **Permiso de memoria** (D27) | Andando en las dos. `mem.claim {user: true}` entrega memoria alcanzable sin privilegio, y **lo hace cumplir el hardware**: SMEP en x86_64, el modelo de permisos en aarch64. |
+| **Transición de privilegio** (D27) | Andando en las dos. `exec {mode}` entra a anillo 3 / EL0 y vuelve por una ventanilla —`int 0x80` con `DPL=3`, `svc #0`— cuyos bytes publica `describe`. La pila sale del final del reclamo del agente. **Comprobado por lo que el hardware niega:** apagar las interrupciones desde `supervised` vuelve como fault en vez de dejar la máquina muda. |
 | **`mem.claim` · `mem.read` · `mem.write` · `release`** | Andando. Reclamos por tamaño o por dirección exacta (así se pide MMIO), con alineación y tope. Los handles son de la máquina y no se reusan (D14). |
 | **`irq.install`** | Andando en las dos. El agente pone su código a atender un aparato, y el kernel publica además **cómo hacer sonar esa interrupción a propósito** para que pueda probar su handler sin esperar al aparato. `irq.install_raw` solo en x86_64. |
 | **Timbre del buzón** | Andando en las dos. El agente lo toca con código máquina propio: un IPI por el APIC en x86_64, un SGI por el GIC en aarch64. **Con prioridad más baja que el cable**, así que por más que el agente inunde de llamadas el cordón pasa primero (D17, P6). El kernel cuenta cuántas veces sonó, que es lo que permite comprobarlo. |
@@ -224,7 +225,12 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
 9. **Un núcleo reclamado todavía no puede recibir trabajo.** Arranca, se configura solo y queda
    esperando, pero `exec` corre siempre en el núcleo que atiende el protocolo: falta un buzón por
    núcleo y que `exec` acepte a cuál mandarle el trabajo, que es lo que la sección 4 especifica
-   (`exec(core, handle, off, regs)`).
+   (`exec(core, handle, off, regs, mode)`).
+
+   **Y arrastra una consecuencia de D29** (ver deuda 12): la regla dice que en el núcleo del
+   protocolo el agente corre `supervised` y que si quiere `raw` reclame uno propio. Hoy no se
+   puede reclamar uno propio *para correr ahí*, así que hacerla cumplir dejaría `raw` sin ningún
+   lugar donde existir. Las dos cosas se destraban juntas.
 
 10. **Un test falló una vez y no reprodujo.** Ocurrió una sola vez en la suite de `kernel-core` y
    no se repitió en veinte corridas seguidas. Se auditó lo único que puede causarlo —los tests
@@ -236,10 +242,41 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
    región (`UC`, `WC`, `WT`, `WB`) que son más precisos que esa deducción. Mientras el grano del
    mapeo sea 1 GiB casi no cambia nada; cuando haya que mapear MMIO fino con `mem.claim`, sí.
 
-12. **Falta la transición de privilegio de D27.** La mitad de abajo está: `mem.claim {user: true}`
-    entrega memoria del agente y el hardware lo hace cumplir. Falta que `exec` entre al nivel sin
-    privilegio. **La mecánica ya está resuelta en el papel** — se escribe acá para no volver a
-    derivarla:
+12. **~~Falta la transición de privilegio de D27.~~ RESUELTO.** `exec` toma `mode`, que **declara
+    el agente**: `supervised` entra a anillo 3 en x86_64 y a EL0 en aarch64; `raw` corre con el
+    privilegio del kernel. **No hay valor por omisión** — si falta, el pedido se rechaza. Un
+    default sería el kernel eligiendo, que es exactamente lo que D27 le devuelve al agente (P6).
+
+    La prueba no es lo que el kernel dice sino lo que el hardware hace: el programa que apaga las
+    interrupciones —`cli` en x86_64, `msr daifset` en aarch64, la única cosa de la que el kernel
+    **no podía volver**— ahora vuelve como fault estructurado (`protection` e `invalid-opcode`
+    respectivamente). Está en el portón, en las dos arquitecturas.
+
+    **Tres cosas que la mecánica de abajo no cubría y aparecieron al implementarla:**
+
+    - **La pila.** El código del agente corría sobre un arreglo estático del kernel, que desde
+      anillo 3 no se puede ni escribir: el primer `push` faultea. Se resolvió con que la pila de
+      `supervised` sea **el final del mismo reclamo** — todo lo que corre sin privilegio vive en
+      memoria que el agente declaró suya. Lo publica `describe` como `stack: claim-end`.
+    - **Cómo vuelve.** Desde el nivel de abajo un `ret` no vuelve, así que hay una ventanilla:
+      `int 0x80` con `DPL=3` en x86_64, `svc #0` en aarch64. El agente no la tiene horneada —
+      `describe {what:["exec"]}` publica **los bytes de código máquina** que tiene que emitir,
+      igual que publica cómo tocar un timbre (P4, D3). En x86_64 entra por `TSS.RSP0` y no por la
+      IST, a propósito: así esa pila se ejercita en cada `exec supervised` en vez de ser un campo
+      del TSS que nadie mira.
+    - **La restricción de D29 quedó pendiente, atada a la deuda 9.** Abajo dice que en el núcleo
+      del protocolo solo se admite `supervised` y que no es opcional. Aplicarla hoy haría que
+      `raw` **no exista**: `exec` corre siempre en el núcleo del protocolo, así que el kernel
+      ofrecería dos modos con uno inalcanzable, y eso no es lo que dice D27. Va junto con que
+      `exec` pueda elegir núcleo. Lo que **sí** se hace cumplir son las otras dos comprobaciones:
+      `supervised` exige memoria con `user`, y `raw` exige que no lo sea.
+
+    Y de paso se corrigió algo que estaba mal desde antes: en aarch64 `REGISTERS` tenía `pc` en la
+    posición 31, pero el camino de retorno de `exec` guardaba ahí el **puntero de pila** — el
+    kernel informando un registro con el nombre de otro, que es justo lo que P4 no permite. Ahora
+    `sp` existe como tal, y los faults también lo informan.
+
+    **La mecánica, como estaba escrita antes de implementarla:**
 
     **x86_64.** La GDT necesita dos descriptores más, de anillo 3: código (tipo `0xFA` en vez de
     `0x9A`) y datos (`0xF2` en vez de `0x92`). Hoy la tabla es `0=nulo, 1=código0, 2=datos0,
@@ -293,8 +330,10 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
 1. **Dónde se publica el código.** Hay repositorio git local desde el Hito 1 (rama `main`).
    El alojamiento remoto sigue sin definir: repo aparte, no en empujoneducativo.
 2. **Por dónde seguir.** Queda un solo verbo, `dma.allow` —el IOMMU, el más grande del proyecto
-   y el que más gana con silicio real—, y dos deudas grandes: terminar D27 (la transición de
-   privilegio; la mitad de abajo ya está) y darle trabajo a los núcleos reclamados.
+   y el que más gana con silicio real— y una deuda grande: **darle trabajo a los núcleos
+   reclamados** (deuda 9), que además es lo que destraba la restricción de D29 que quedó
+   pendiente en la deuda 12 — mientras `exec` no pueda elegir núcleo, exigir `supervised` en el
+   del protocolo dejaría `raw` sin ningún lugar donde correr.
 
 3. **Si `exec` debe recibir un estado inicial de registros.** La sección 4 lo especifica
    (`exec(core, handle, off, regs)`) y hoy no lo hace: el código recibe solo su propia

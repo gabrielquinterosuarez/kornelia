@@ -40,15 +40,17 @@ pub struct PerCpu {
     pub sp: u64,
     /// La cima de la pila donde corre el codigo del agente.
     pub stack: u64,
-    /// Los registros al terminar un `exec` que volvio solo.
-    pub regs: [u64; 33],
+    /// Los registros al terminar un `exec` que volvio solo. Son 34: x0 a x30,
+    /// el puntero de pila, el pc y el pstate — los mismos nombres, y en el
+    /// mismo orden, que informa `REGISTERS`.
+    pub regs: [u64; 34],
     /// Que ranura es esta.
     pub slot: u64,
 }
 
 impl PerCpu {
     const fn new() -> Self {
-        Self { armed: 0, rip: 0, sp: 0, stack: 0, regs: [0; 33], slot: 0 }
+        Self { armed: 0, rip: 0, sp: 0, stack: 0, regs: [0; 34], slot: 0 }
     }
 }
 
@@ -57,7 +59,7 @@ const _: () = assert!(core::mem::offset_of!(PerCpu, rip) == 8);
 const _: () = assert!(core::mem::offset_of!(PerCpu, sp) == 16);
 const _: () = assert!(core::mem::offset_of!(PerCpu, stack) == 24);
 const _: () = assert!(core::mem::offset_of!(PerCpu, regs) == 32);
-const _: () = assert!(core::mem::offset_of!(PerCpu, slot) == 296);
+const _: () = assert!(core::mem::offset_of!(PerCpu, slot) == 304);
 
 static mut BLOCKS: [PerCpu; SLOTS] = [const { PerCpu::new() }; SLOTS];
 

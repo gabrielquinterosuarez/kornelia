@@ -36,12 +36,21 @@ struct AgentStacks([[u8; AGENT_STACK_SIZE]; crate::percpu::SLOTS]);
 static mut AGENT_STACKS: AgentStacks =
     AgentStacks([[0; AGENT_STACK_SIZE]; crate::percpu::SLOTS]);
 
+/// Los bytes de `svc #0`, que es lo que `describe` publica como la forma de
+/// volver desde `supervised` (D27).
+///
+/// Desde EL0 un `ret` comun no vuelve al kernel: salta adentro del mismo nivel,
+/// a donde diga x30, y ahi no hay codigo del kernel alcanzable. Subir de nivel
+/// es una excepcion, y `svc` es la que existe para pedirla a proposito.
+pub const RETURN_BYTES: &[u8] = &[0x01, 0x00, 0x00, 0xD4];
+
 core::arch::global_asm!(
     r#"
 .section .text
 .globl exec_trampoline
 
-// x0 = direccion de entrada. Devuelve 0 si volvio solo, 1 si hubo fault.
+// x0 = direccion de entrada, x1 = 1 si va supervisado.
+// Devuelve 0 si volvio solo, 1 si hubo fault.
 //
 // Todo lo que toca esta en el bloque privado de este nucleo, que sale de
 // TPIDR_EL1. Los offsets son los del struct `PerCpu`, verificados al compilar.
@@ -68,6 +77,8 @@ exec_trampoline:
     // vuelta, `sp` es la suya; la nuestra queda intacta en SP_EL1.
     ldr  x9,  [x20, #24]
     msr  sp_el0, x9
+
+    cbnz x1,  exec_supervised
     msr  spsel, #0
 
     // El codigo recibe en x0 su propia direccion.
@@ -95,8 +106,10 @@ exec_trampoline:
     stp  x29, x30, [x10, #(29 * 8)]
     mov  x9,  sp
     str  x9,       [x10, #(31 * 8)]   // el sp del agente, que es SP_EL0
+    // Ya volvio: no hay un "donde estaba ejecutando" que informar.
+    str  xzr,      [x10, #(32 * 8)]   // pc
     mrs  x9,  nzcv
-    str  x9,       [x10, #(32 * 8)]
+    str  x9,       [x10, #(33 * 8)]   // pstate
 
     // Recien ahora se vuelve a la pila del kernel y se desarma.
     msr  spsel, #1
@@ -104,6 +117,74 @@ exec_trampoline:
 
     mov  x0,  #0
     b    exec_exit
+
+exec_supervised:
+    // Bajar a EL0 es volver de una excepcion que nunca ocurrio: se le dice al
+    // hardware donde seguir, con que estado, y se hace `eret` (D27).
+    msr  elr_el1, x0
+    // El estado: el modo va en los cuatro bits de abajo, y 0b0000 es EL0 con
+    // SP_EL0 — que es la pila que se acaba de poner. El resto se toma del DAIF
+    // de ahora, o sea las mismas mascaras con las que corre el kernel en este
+    // momento: como `exec` se llama con los timbres abiertos (D29), el agente
+    // arranca con las interrupciones abiertas y **sin poder cerrarlas**, que es
+    // el punto de todo esto.
+    mrs  x9,  daif
+    msr  spsr_el1, x9
+    // x0 sigue siendo su propia direccion, igual que en el camino de `raw`.
+    eret
+
+.globl exec_window
+// La ventanilla: el codigo del agente hizo `svc` desde EL0.
+//
+// Llega desde `vec_lower`, que ya distinguio esto de un fault, con los x9 y x10
+// originales apilados en SP_EL1. El hardware ya puso SPSel=1, asi que `sp` es
+// la del kernel y la del agente quedo intacta en SP_EL0.
+exec_window:
+    mrs  x10, tpidr_el1
+    ldr  x9,  [x10, #0]
+    // Sin `exec` en curso no hay a donde volver: puede llegar desde un handler
+    // del agente, que corre privilegiado (D27). Se vuelve como si nada.
+    cbz  x9,  exec_window_ignore
+
+    // Los originales de x9 y x10 estan en la pila; se copian antes de usarlos.
+    ldr  x9,  [sp]
+    str  x9,  [x10, #(32 + 9 * 8)]
+    ldr  x9,  [sp, #8]
+    str  x9,  [x10, #(32 + 10 * 8)]
+
+    add  x10, x10, #32                // ahora x10 es la base de regs
+    stp  x0,  x1,  [x10, #(0 * 8)]
+    stp  x2,  x3,  [x10, #(2 * 8)]
+    stp  x4,  x5,  [x10, #(4 * 8)]
+    stp  x6,  x7,  [x10, #(6 * 8)]
+    str  x8,       [x10, #(8 * 8)]
+    stp  x11, x12, [x10, #(11 * 8)]
+    stp  x13, x14, [x10, #(13 * 8)]
+    stp  x15, x16, [x10, #(15 * 8)]
+    stp  x17, x18, [x10, #(17 * 8)]
+    stp  x19, x20, [x10, #(19 * 8)]
+    stp  x21, x22, [x10, #(21 * 8)]
+    stp  x23, x24, [x10, #(23 * 8)]
+    stp  x25, x26, [x10, #(25 * 8)]
+    stp  x27, x28, [x10, #(27 * 8)]
+    stp  x29, x30, [x10, #(29 * 8)]
+    mrs  x9,  sp_el0
+    str  x9,       [x10, #(31 * 8)]   // el sp con el que quedo el agente
+    str  xzr,      [x10, #(32 * 8)]   // pc: ya volvio
+    mrs  x9,  spsr_el1
+    str  x9,       [x10, #(33 * 8)]   // el pstate con el que llego al `svc`
+
+    // Y de vuelta a la pila del kernel, que es donde `exec_exit` espera estar.
+    sub  x10, x10, #32
+    ldr  x9,  [x10, #16]
+    mov  sp,  x9
+    str  xzr, [x10, #0]
+    mov  x0,  #0
+    b    exec_exit
+
+exec_window_ignore:
+    ldp  x9, x10, [sp], #16
+    eret
 
 exec_recovery:
     // Aca aterriza el `eret` del handler cuando hubo fault. Ya llega con
@@ -126,7 +207,7 @@ exec_exit:
 );
 
 extern "C" {
-    fn exec_trampoline(entry: u64) -> u64;
+    fn exec_trampoline(entry: u64, supervised: u64) -> u64;
 }
 
 /// Salta al codigo y vuelve con lo que haya pasado.
@@ -134,15 +215,20 @@ extern "C" {
 /// # Safety
 ///
 /// `entry` tiene que apuntar a memoria mapeada y ejecutable.
-pub unsafe fn run(entry: u64) -> Outcome {
+pub unsafe fn run(entry: u64, region: (u64, u64), supervised: bool) -> Outcome {
     let slot = crate::percpu::slot();
     let block = crate::percpu::block(slot);
 
-    // La pila de agente de este nucleo.
-    (*block).stack =
-        core::ptr::addr_of!(AGENT_STACKS) as u64 + ((slot + 1) * AGENT_STACK_SIZE) as u64;
+    // De donde sale la pila. En EL0 la del kernel no se puede ni escribir, asi
+    // que corriendo supervisado la pila es el final del reclamo del propio
+    // agente (D27), alineada a 16 como pide la arquitectura.
+    (*block).stack = if supervised {
+        region.0.saturating_add(region.1) & !0xF
+    } else {
+        core::ptr::addr_of!(AGENT_STACKS) as u64 + ((slot + 1) * AGENT_STACK_SIZE) as u64
+    };
 
-    let had_fault = exec_trampoline(entry) != 0;
+    let had_fault = exec_trampoline(entry, supervised as u64) != 0;
 
     if had_fault {
         // El handler ya dejo anotado el fault, con los registros del momento
@@ -154,7 +240,7 @@ pub unsafe fn run(entry: u64) -> Outcome {
             faulted: false,
             regs: core::slice::from_raw_parts(
                 core::ptr::addr_of!((*block).regs) as *const u64,
-                33,
+                34,
             ),
             fault: None,
         }

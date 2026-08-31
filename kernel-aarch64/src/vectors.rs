@@ -25,18 +25,32 @@ use kernel_core::fault::{Cause, Fault};
 pub struct Frame {
     /// x0 a x30.
     x: [u64; 31],
+    /// El puntero de pila de quien fallo. Ocupa el hueco que antes era relleno
+    /// —el marco necesita un largo par para quedar alineado a 16— asi que no
+    /// cuesta nada, y evita que el reporte tenga que callarse un registro.
+    ///
+    /// Va **antes** que los otros dos porque el orden de este struct es el
+    /// orden en que el ensamblador de abajo deja las cosas en la pila, y es
+    /// tambien el orden de `REGISTERS`.
+    sp: u64,
     /// Donde volver. En una excepcion sincronica apunta a la instruccion que
     /// fallo, no a la siguiente.
     elr: u64,
     /// El estado del procesador al momento de fallar.
     spsr: u64,
-    _relleno: u64,
 }
 
+/// Los nombres de esta maquina, en el orden en que vienen los valores (D3).
+///
+/// `sp` esta aparte de x0-x30 porque en aarch64 no es uno de ellos: es un
+/// registro propio, y ademas bancado por nivel de excepcion. Antes no figuraba
+/// y el camino de retorno de `exec` guardaba el puntero de pila en la posicion
+/// de `pc` — el kernel informando un registro con el nombre de otro, que es
+/// exactamente lo que P4 no permite.
 pub const REGISTERS: &[&str] = &[
     "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13",
     "x14", "x15", "x16", "x17", "x18", "x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26",
-    "x27", "x28", "x29", "x30", "pc", "pstate",
+    "x27", "x28", "x29", "x30", "sp", "pc", "pstate",
 ];
 
 /// Uno por nucleo: dos que fallan a la vez no se pisan el reporte.
@@ -69,7 +83,7 @@ VECTORES:
     ENTRY vec_irq      //                 IRQ  <- y aca si corre el kernel
     ENTRY vec_common   //                 FIQ
     ENTRY vec_common   //                 SError
-    ENTRY vec_common   // EL mas bajo, 64 bits: sincronica
+    ENTRY vec_lower    // EL mas bajo, 64 bits: sincronica  <- la ventanilla
     ENTRY vec_irq      //                       IRQ
     ENTRY vec_common   //                       FIQ
     ENTRY vec_common   //                       SError
@@ -78,9 +92,30 @@ VECTORES:
     ENTRY vec_common   //                       FIQ
     ENTRY vec_common   //                       SError
 
+// Una excepcion sincronica que llega desde EL0 puede ser dos cosas muy
+// distintas: el codigo `supervised` del agente abriendo la ventanilla para
+// volver (D27), o ese mismo codigo fallando. Las dos entran por el mismo lugar
+// —la posicion en la tabla solo dice de donde vino, no que paso— asi que hay
+// que preguntarle al ESR, cuyos 6 bits de arriba son la clase: 0x15 es `svc`
+// desde 64 bits.
+//
+// El andamio va a la pila del kernel y no a un registro: en este punto todos
+// los registros son del agente, y pisarle uno seria informarle mal el estado
+// con el que volvio.
+vec_lower:
+    stp x9, x10, [sp, #-16]!
+    mrs x9, esr_el1
+    lsr x9, x9, #26
+    cmp x9, #0x15
+    b.eq exec_window
+    ldp x9, x10, [sp], #16
+    // No era la ventanilla: es un fault de verdad, y sigue el camino de todos.
+    b vec_common
+
 vec_common:
-    // 34 huecos de 8 bytes: 31 registros, ELR, SPSR y uno de relleno para que
-    // la pila quede alineada a 16, que ARM exige.
+    // 34 huecos de 8 bytes: 31 registros, el puntero de pila, ELR y SPSR. El
+    // largo es par, que es lo que ARM exige para que la pila quede alineada
+    // a 16.
     sub sp, sp, #(34 * 8)
 
     stp x0,  x1,  [sp, #(0 * 8)]
@@ -102,13 +137,22 @@ vec_common:
 
     mrs x0, elr_el1
     mrs x1, spsr_el1
-    stp x0, x1,   [sp, #(31 * 8)]
+    stp x0, x1,   [sp, #(32 * 8)]
+
+    // Y el puntero de pila de quien fallo. Cual es depende de donde venia: si
+    // el SPSR dice EL0 es SP_EL0 —el agente corriendo supervisado—, y si no es
+    // este mismo sp, pero antes de que el marco lo bajara.
+    tst  x1, #0xF
+    mrs  x0, sp_el0
+    add  x2, sp, #(34 * 8)
+    csel x0, x0, x2, eq
+    str  x0,      [sp, #(31 * 8)]
 
     mov x0, sp
     bl fault_rust
 
     // El handler puede haber corrido ELR para saltearse la instruccion.
-    ldp x0, x1,   [sp, #(31 * 8)]
+    ldp x0, x1,   [sp, #(32 * 8)]
     msr elr_el1, x0
     msr spsr_el1, x1
 
@@ -207,8 +251,9 @@ extern "C" fn fault_rust(m: &mut Frame) {
     let regs = unsafe {
         let v = &mut (*core::ptr::addr_of_mut!(VALUES))[slot];
         v[..31].copy_from_slice(&m.x);
-        v[31] = m.elr;
-        v[32] = m.spsr;
+        v[31] = m.sp;
+        v[32] = m.elr;
+        v[33] = m.spsr;
         &(*core::ptr::addr_of!(VALUES))[slot]
     };
 
@@ -229,10 +274,15 @@ extern "C" fn fault_rust(m: &mut Frame) {
     // kernel.
     if crate::percpu::armed() != 0 {
         m.elr = crate::percpu::return_point();
-        // El codigo del agente corria sobre SP_EL0, asi que el SPSR guardado
-        // dice que hay que volver ahi. Se le prende el bit para volver a
-        // SP_EL1: la pila del agente puede ser justo lo que se rompio.
-        m.spsr |= 1;
+        // Y con que estado volver. Los cuatro bits de abajo del SPSR son el
+        // modo: 0b0000 es EL0 —el agente corriendo supervisado (D27)— y 0b0100
+        // es EL1 sobre SP_EL0, que es como corre el codigo `raw`. Los dos hay
+        // que llevarlos a 0b0101, EL1 con SP_EL1: la pila del kernel.
+        //
+        // Se pone el campo entero y no se prende un bit: desde EL0 prender el
+        // de abajo daria 0b0001, que no es un modo valido, y el `eret` tomaria
+        // el camino de estado de ejecucion ilegal en vez de volver.
+        m.spsr = (m.spsr & !0xF) | 0b0101;
         return;
     }
 

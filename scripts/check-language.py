@@ -23,6 +23,8 @@ from pathlib import Path
 # normal, real, no, id) quedan afuera a proposito: marcarlas seria ruido.
 FORBIDDEN = set("""
 abajo abrir acepta actualizar acuerdo adelante adentro afuera agente agregar
+cadena cadenas carga humano incompleta incompleto linea listo mayor mensaje
+patron pedazo pedazos texto trozo unidad volver
 ahora algo alguien alineacion alineado alto ancho anillo anotar antes anterior
 apagar aparato aparatos apilar aqui arrancar arreglar arriba asi atender
 atras aunque avisar bajo bandera banderas bloque bloques borrar buscar buzon

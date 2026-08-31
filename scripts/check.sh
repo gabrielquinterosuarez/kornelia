@@ -59,7 +59,7 @@ elif ! command -v python3 >/dev/null; then
 else
     for arch in x86_64 aarch64; do
         step "arranca $arch y contesta el protocolo"
-        output=$(timeout 240 ./scripts/client.py --arch "$arch" --smp 4 --what memory,tables --memory --exec --cores --mailbox --doorbell --handler --during --permission 2>&1 || true)
+        output=$(timeout 240 ./scripts/client.py --arch "$arch" --smp 4 --what memory,tables --memory --exec --cores --mailbox --doorbell --handler --during --permission --supervised 2>&1 || true)
 
         # Lo que tiene que haber dicho en el banner de texto.
         for expected in "arquitectura: $arch" "memoria:" "tablas:" \
@@ -133,6 +133,15 @@ else
         fi
         grep -qFe "separacion kernel/agente: la hace cumplir el hardware" <<<"$output" \
             || bad "$arch no informa que el hardware haga cumplir la separacion"
+
+        # Y la mitad de arriba de D27: el agente declara con que privilegio
+        # corre, y el hardware lo hace cumplir. La prueba no es lo que el kernel
+        # dice: es que la instruccion que apaga las interrupciones —la unica de
+        # la que el kernel no podia volver— vuelva como fault estructurado.
+        if ! grep -qFe "supervisado: ok" <<<"$output"; then
+            bad "$arch no hace cumplir el privilegio declarado"
+            printf '%s\n' "$output" | grep -E "FALLA:|supervis|mode=" | head -10
+        fi
 
         n=$(grep -cE '^ +0x[0-9a-f]{16} ' <<<"$output" || true)
         if [ "$n" -lt 5 ]; then

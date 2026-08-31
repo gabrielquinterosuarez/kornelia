@@ -44,12 +44,28 @@ struct Stacks([[u8; STACK_SIZE]; crate::percpu::SLOTS]);
 
 static mut AGENT_STACKS: Stacks = Stacks([[0; STACK_SIZE]; crate::percpu::SLOTS]);
 
+/// El vector de la ventanilla: la puerta por la que el codigo `supervised`
+/// vuelve al kernel (D27).
+///
+/// Desde anillo 3 un `ret` no vuelve — no hay a donde: se entro por un `iretq`
+/// y no por un `call`. La unica forma de subir de privilegio es un trap, asi
+/// que se le deja una compuerta con `DPL=3` para que el agente pueda invocarla
+/// con `int`. Cual es el numero no lo tiene que saber: lo publica `describe`
+/// como los bytes exactos a emitir (P4).
+///
+/// El 0x80 esta lejos de los que reparte `irq`, que van del 0x30 para arriba.
+pub const WINDOW_VECTOR: usize = 0x80;
+
+/// Los bytes de `int 0x80`, que es lo que `describe` publica.
+pub const RETURN_BYTES: &[u8] = &[0xCD, 0x80];
+
 core::arch::global_asm!(
     r#"
 .section .text
 .globl exec_trampoline
 
-// rdi = direccion de entrada. Devuelve 0 si volvio solo, 1 si hubo fault.
+// rdi = direccion de entrada, rsi = 1 si va supervisado.
+// Devuelve 0 si volvio solo, 1 si hubo fault.
 //
 // Todo lo que toca esta en el bloque privado de este nucleo, que se alcanza con
 // el prefijo `gs:`. Los numeros son los offsets del struct `PerCpu`, y estan
@@ -72,6 +88,9 @@ exec_trampoline:
     mov gs:[8], rax                    // rip
     mov gs:[16], rsp                   // rsp del kernel
     mov qword ptr gs:[0], 1            // armado
+
+    test rsi, rsi
+    jnz exec_supervised
 
     // El codigo recibe en rdi su propia direccion, para poder encontrar sus
     // datos sin depender de donde lo hayan cargado.
@@ -111,6 +130,72 @@ exec_trampoline:
     xor eax, eax
     jmp exec_exit
 
+exec_supervised:
+    // Bajar de privilegio no es un salto: es volver de una interrupcion que
+    // nunca ocurrio. Asi que se arma a mano el marco que el `iretq` consume, y
+    // el CPU "vuelve" a anillo 3 (D27).
+    //
+    // El orden es el que el hardware desapila: SS y RSP arriba de todo, y la
+    // direccion de entrada al final.
+    push 0x23                          // SS  = datos de anillo 3
+    push qword ptr gs:[24]             // el puntero de pila del agente
+    push 0x202                         // RFLAGS: bit 1 fijo en uno, y el 9
+                                       // —interrupciones— prendido (D29). IOPL
+                                       // queda en cero: sin puertos de E/S.
+    push 0x1b                          // CS  = codigo de anillo 3
+    push rdi                           // la direccion de entrada
+    // Y en rdi, su propia direccion, igual que en `raw`. Lo demas queda como
+    // este: el agente no puede leer memoria del kernel aunque le sobre un
+    // puntero en un registro, porque las tablas de paginas no lo dejan.
+    iretq
+
+.globl exec_window
+// La ventanilla: llega un `int 0x80` desde el codigo del agente. Ya corre en
+// anillo 0, sobre la pila de `RSP0`, y con las interrupciones cerradas porque
+// la compuerta es de interrupcion y no de trap.
+//
+// No vuelve por `iretq`: salta al mismo lugar donde termina un `exec` que
+// volvio solo. La pila de la ventanilla se abandona, que no cuesta nada — el
+// CPU la vuelve a tomar desde arriba la proxima vez.
+exec_window:
+    // Sin `exec` en curso no hay a donde volver. Puede pasar: un handler del
+    // agente corre privilegiado (D27) y podria ejecutar esto. Se vuelve como si
+    // nada en vez de saltar a una pila vieja.
+    cmp qword ptr gs:[0], 0
+    je 3f
+
+    mov gs:[32],  rax                  // regs[0]
+    mov gs:[40],  rbx
+    mov gs:[48],  rcx
+    mov gs:[56],  rdx
+    mov gs:[64],  rsi
+    mov gs:[72],  rdi
+    mov gs:[80],  rbp
+    mov gs:[96],  r8
+    mov gs:[104], r9
+    mov gs:[112], r10
+    mov gs:[120], r11
+    mov gs:[128], r12
+    mov gs:[136], r13
+    mov gs:[144], r14
+    mov gs:[152], r15
+    // El codigo ya volvio: no hay un "donde estaba ejecutando" que informar.
+    mov qword ptr gs:[160], 0
+    // El puntero de pila y las banderas del agente no estan en sus registros:
+    // los tiene el marco que apilo el CPU al entrar. Desde rsp: rip, cs,
+    // rflags, rsp, ss.
+    mov rax, [rsp + 16]
+    mov gs:[168], rax                  // regs[17] = rflags
+    mov rax, [rsp + 24]
+    mov gs:[88], rax                   // regs[7]  = el rsp del agente
+
+    mov rsp, gs:[16]
+    mov qword ptr gs:[0], 0
+    xor eax, eax
+    jmp exec_exit
+3:
+    iretq
+
 exec_recovery:
     // Aca aterriza el `iretq` del handler cuando hubo fault. La pila del agente
     // puede estar rota, asi que lo primero es recuperar la nuestra — y eso se
@@ -131,25 +216,41 @@ exec_exit:
 );
 
 extern "sysv64" {
-    fn exec_trampoline(entry: u64) -> u64;
+    fn exec_trampoline(entry: u64, supervised: u64) -> u64;
+    /// La ventanilla. La engancha `idt` con una compuerta de `DPL=3`.
+    pub fn exec_window();
 }
+
+// El ensamblador de arriba lleva los selectores escritos a mano, porque un
+// `push` no toma una constante de Rust. Esto los ata a la GDT: si alguien
+// mueve un descriptor, no compila en vez de saltar a anillo 3 con un selector
+// que apunta a otra cosa.
+const _: () = assert!(crate::gdt::CODE_USER == 0x1b);
+const _: () = assert!(crate::gdt::DATA_USER == 0x23);
 
 /// Salta al codigo y vuelve con lo que haya pasado.
 ///
 /// # Safety
 ///
 /// `entry` tiene que apuntar a memoria mapeada y ejecutable. Corre en el nucleo
-/// que la llama, sobre la pila de agente de ese nucleo.
-pub unsafe fn run(entry: u64) -> Outcome {
+/// que la llama, sobre la pila de agente de ese nucleo — o, si va supervisado,
+/// sobre el final de `region`.
+pub unsafe fn run(entry: u64, region: (u64, u64), supervised: bool) -> Outcome {
     let slot = crate::percpu::slot();
     let block = crate::percpu::block(slot);
 
-    // La pila de agente de este nucleo. Se pone en cada llamada y no una vez al
-    // arrancar: es barato, y asi no hay un orden de inicializacion que recordar.
-    (*block).stack =
-        core::ptr::addr_of!(AGENT_STACKS) as u64 + ((slot + 1) * STACK_SIZE) as u64;
+    // De donde sale la pila. Se pone en cada llamada y no una vez al arrancar:
+    // es barato, y asi no hay un orden de inicializacion que recordar.
+    (*block).stack = if supervised {
+        // En anillo 3 la pila del kernel no se puede ni escribir, asi que la
+        // pila es el final del reclamo del propio agente (D27). Alineada a 16,
+        // que es lo que pide la ABI.
+        region.0.saturating_add(region.1) & !0xF
+    } else {
+        core::ptr::addr_of!(AGENT_STACKS) as u64 + ((slot + 1) * STACK_SIZE) as u64
+    };
 
-    let had_fault = exec_trampoline(entry) != 0;
+    let had_fault = exec_trampoline(entry, supervised as u64) != 0;
 
     if had_fault {
         // El handler ya dejo anotado el fault, con los registros del momento

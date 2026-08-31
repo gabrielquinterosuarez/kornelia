@@ -30,17 +30,17 @@ MARKER = b"-- CBOR --"
 # CBOR minimo
 # --------------------------------------------------------------------------
 
-class Incompleto(Exception):
+class Incomplete(Exception):
     """Todavia no llegaron todos los bytes."""
 
 
-def enc_head(mayor, value):
+def enc_head(major, value):
     if value < 24:
-        return bytes([mayor << 5 | value])
+        return bytes([major << 5 | value])
     for cap, ai, length in ((0x100, 24, 1), (0x10000, 25, 2),
                               (0x100000000, 26, 4), (1 << 64, 27, 8)):
         if value < cap:
-            return bytes([mayor << 5 | ai]) + value.to_bytes(length, "big")
+            return bytes([major << 5 | ai]) + value.to_bytes(length, "big")
     raise ValueError("valor fuera de rango")
 
 
@@ -66,9 +66,9 @@ def enc(v):
 def dec(b, i=0):
     """Devuelve (valor, posicion_siguiente). Levanta Incompleto si falta."""
     if i >= len(b):
-        raise Incompleto
+        raise Incomplete
     ib = b[i]
-    mayor, ai = ib >> 5, ib & 0x1F
+    major, ai = ib >> 5, ib & 0x1F
     i += 1
 
     if ai < 24:
@@ -76,37 +76,37 @@ def dec(b, i=0):
     elif ai in (24, 25, 26, 27):
         length = {24: 1, 25: 2, 26: 4, 27: 8}[ai]
         if i + length > len(b):
-            raise Incompleto
+            raise Incomplete
         value = int.from_bytes(b[i:i + length], "big")
         i += length
     else:
         raise ValueError(f"cbor invalido: 0x{ib:02x}")
 
-    if mayor == 0:
+    if major == 0:
         return value, i
-    if mayor == 1:
+    if major == 1:
         return -1 - value, i
-    if mayor in (2, 3):
+    if major in (2, 3):
         if i + value > len(b):
-            raise Incompleto
+            raise Incomplete
         raw = b[i:i + value]
-        return (raw if mayor == 2 else raw.decode()), i + value
-    if mayor == 4:
+        return (raw if major == 2 else raw.decode()), i + value
+    if major == 4:
         output = []
         for _ in range(value):
             x, i = dec(b, i)
             output.append(x)
         return output, i
-    if mayor == 5:
+    if major == 5:
         output = {}
         for _ in range(value):
             k, i = dec(b, i)
             v, i = dec(b, i)
             output[k] = v
         return output, i
-    if mayor == 7:
+    if major == 7:
         return {20: False, 21: True, 22: None}.get(value, f"simple({value})"), i
-    raise ValueError(f"tipo mayor no soportado: {mayor}")
+    raise ValueError(f"tipo mayor no soportado: {major}")
 
 
 # --------------------------------------------------------------------------
@@ -117,8 +117,8 @@ def read_until_marker(proc, timeout, show):
     """Consume la salida de texto del arranque hasta que empieza el binario."""
     buf = b""
     while MARKER not in buf:
-        listo, _, _ = select.select([proc.stdout], [], [], timeout)
-        if not listo:
+        ready, _, _ = select.select([proc.stdout], [], [], timeout)
+        if not ready:
             raise TimeoutError("el kernel nunca llego a la marca del protocolo")
         c = proc.stdout.read(1)
         if not c:
@@ -129,31 +129,31 @@ def read_until_marker(proc, timeout, show):
         buf += proc.stdout.read(1)
 
     if show:
-        texto = buf.decode(errors="replace").replace("\r", "")
-        for linea in texto.splitlines():
-            if linea.strip():
-                print(f"  {linea}")
+        text = buf.decode(errors="replace").replace("\r", "")
+        for line in text.splitlines():
+            if line.strip():
+                print(f"  {line}")
     return buf
 
 
-def ask(proc, mensaje, timeout):
+def ask(proc, message, timeout):
     """Manda un pedido y espera una respuesta completa."""
-    proc.stdin.write(enc(mensaje))
+    proc.stdin.write(enc(message))
     proc.stdin.flush()
 
     buf = b""
     while True:
-        listo, _, _ = select.select([proc.stdout], [], [], timeout)
-        if not listo:
+        ready, _, _ = select.select([proc.stdout], [], [], timeout)
+        if not ready:
             raise TimeoutError(f"sin respuesta (llegaron {len(buf)} bytes: {buf.hex()})")
-        trozo = proc.stdout.read(1)
-        if not trozo:
+        chunk = proc.stdout.read(1)
+        if not chunk:
             raise EOFError("QEMU se cerro")
-        buf += trozo
+        buf += chunk
         try:
             value, end = dec(buf)
             return value, buf[:end]
-        except Incompleto:
+        except Incomplete:
             continue
 
 
@@ -161,23 +161,23 @@ def ask(proc, mensaje, timeout):
 # Presentacion
 # --------------------------------------------------------------------------
 
-def humano(n):
-    for unidad, tam in (("GiB", 1 << 30), ("MiB", 1 << 20), ("KiB", 1 << 10)):
-        if n >= tam and n % tam == 0:
-            return f"{n // tam} {unidad}"
+def human(n):
+    for unit, size in (("GiB", 1 << 30), ("MiB", 1 << 20), ("KiB", 1 << 10)):
+        if n >= size and n % size == 0:
+            return f"{n // size} {unit}"
     return f"{n} B"
 
 
-def show(carga):
-    if "memory" in carga and isinstance(carga["memory"], list):
-        regions = carga["memory"]
+def show(load):
+    if "memory" in load and isinstance(load["memory"], list):
+        regions = load["memory"]
         print(f"\n  memory: {len(regions)} regiones")
         for r in regions:
             raw = f"  (tipo crudo {r[3]})" if len(r) > 3 else ""
-            print(f"    {r[0]:#018x}  {humano(r[1]):>10}  {r[2]}{raw}")
-        carga = {k: v for k, v in carga.items() if k != "memory"}
+            print(f"    {r[0]:#018x}  {human(r[1]):>10}  {r[2]}{raw}")
+        load = {k: v for k, v in load.items() if k != "memory"}
 
-    for key, value in carga.items():
+    for key, value in load.items():
         print(f"\n  {key}: {value}")
 
 
@@ -190,9 +190,9 @@ def test_memory(proc, timeout):
 
     def ask_verb(n, verb, args):
         resp, _ = ask(proc, [n, verb, args], timeout)
-        _, ok, carga = resp
-        print(f"  {verb:<10} {'ok ' if ok else 'ERROR'} {carga}")
-        return ok, carga
+        _, ok, load = resp
+        print(f"  {verb:<10} {'ok ' if ok else 'ERROR'} {load}")
+        return ok, load
 
     # 1. Reclamar 4 KiB alineados a 4 KiB.
     ok, c = ask_verb(1, "mem.claim", {"bytes": 4096, "align": 4096})
@@ -205,14 +205,14 @@ def test_memory(proc, timeout):
         failures.append(f"entrego memoria que no es libre: {c['kind']}")
 
     # 2. Escribir un patron reconocible.
-    patron = bytes([0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x11, 0x22, 0x33])
-    ok, w = ask_verb(2, "mem.write", {"handle": h, "off": 16, "bytes": patron})
-    if not ok or w.get("written") != len(patron):
+    pattern = bytes([0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x11, 0x22, 0x33])
+    ok, w = ask_verb(2, "mem.write", {"handle": h, "off": 16, "bytes": pattern})
+    if not ok or w.get("written") != len(pattern):
         failures.append("la escritura no informo lo que se escribio")
 
     # 3. Leerlo de vuelta del mismo lugar.
-    ok, rd = ask_verb(3, "mem.read", {"handle": h, "off": 16, "len": len(patron)})
-    if not ok or rd.get("bytes") != patron:
+    ok, rd = ask_verb(3, "mem.read", {"handle": h, "off": 16, "len": len(pattern)})
+    if not ok or rd.get("bytes") != pattern:
         failures.append(f"lo leido no es lo escrito: {rd}")
 
     # 4. Fuera del reclamo tiene que fallar, no leer memoria ajena.
@@ -294,8 +294,8 @@ def test_exec(proc, timeout, arch):
 
     def ask_verb(n, verb, args):
         resp, _ = ask(proc, [n, verb, args], timeout)
-        _, ok, carga = resp
-        return ok, carga
+        _, ok, load = resp
+        return ok, load
 
     for name, code, expects_fault in (
         ("un programa que anda", prog["ok"], False),
@@ -314,7 +314,7 @@ def test_exec(proc, timeout, arch):
             continue
 
         print(f"  {name}: {code.hex()}")
-        ok, r = ask_verb(12, "exec", {"handle": h})
+        ok, r = ask_verb(12, "exec", {"handle": h, "mode": "raw"})
         if not ok:
             failures.append(f"{name}: exec fallo: {r}")
             continue
@@ -361,8 +361,8 @@ def test_cores(proc, timeout):
 
     def ask_verb(n, verb, args):
         resp, _ = ask(proc, [n, verb, args], timeout)
-        _, ok, carga = resp
-        return ok, carga
+        _, ok, load = resp
+        return ok, load
 
     ok, d = ask_verb(20, "describe", {"what": ["cpus"]})
     if not ok:
@@ -425,11 +425,11 @@ def mov_reg_imm64(reg, v):
     out = b""
     first = True
     for hw in range(4):
-        trozo = (v >> (16 * hw)) & 0xFFFF
-        if trozo == 0 and not first:
+        chunk = (v >> (16 * hw)) & 0xFFFF
+        if chunk == 0 and not first:
             continue
         base = 0xD2800000 if first else 0xF2800000
-        out += (base | (hw << 21) | (trozo << 5) | reg).to_bytes(4, "little")
+        out += (base | (hw << 21) | (chunk << 5) | reg).to_bytes(4, "little")
         first = False
     return out or (0xD2800000 | reg).to_bytes(4, "little")
 
@@ -452,11 +452,11 @@ def emit_writes(arch, writes, con_ret=True):
         out = b""
         first = True
         for hw in range(4):
-            trozo = (v >> (16 * hw)) & 0xFFFF
-            if trozo == 0 and not first:
+            chunk = (v >> (16 * hw)) & 0xFFFF
+            if chunk == 0 and not first:
                 continue
             base = 0xD2800000 if first else 0xF2800000
-            out += (base | (hw << 21) | (trozo << 5) | 0).to_bytes(4, "little")
+            out += (base | (hw << 21) | (chunk << 5) | 0).to_bytes(4, "little")
             first = False
         return out or (0xD2800000).to_bytes(4, "little")
 
@@ -464,11 +464,11 @@ def emit_writes(arch, writes, con_ret=True):
         out = b""
         first = True
         for hw in range(2):
-            trozo = (v >> (16 * hw)) & 0xFFFF
-            if trozo == 0 and not first:
+            chunk = (v >> (16 * hw)) & 0xFFFF
+            if chunk == 0 and not first:
                 continue
             base = 0x52800000 if first else 0x72800000
-            out += (base | (hw << 21) | (trozo << 5) | 1).to_bytes(4, "little")
+            out += (base | (hw << 21) | (chunk << 5) | 1).to_bytes(4, "little")
             first = False
         return out or (0x52800000 | 1).to_bytes(4, "little")
 
@@ -488,8 +488,8 @@ def test_doorbell(proc, timeout, arch):
 
     def ask_verb(n, verb, args):
         resp, _ = ask(proc, [n, verb, args], timeout)
-        _, ok, carga = resp
-        return ok, carga
+        _, ok, load = resp
+        return ok, load
 
     ok, d = ask_verb(40, "describe", {"what": ["channel"]})
     if not ok:
@@ -517,7 +517,7 @@ def test_doorbell(proc, timeout, arch):
     ask_verb(42, "mem.write", {"handle": h, "bytes": code})
 
     print(f"  el agente toca el timbre: {code.hex()}")
-    ok, r = ask_verb(43, "exec", {"handle": h})
+    ok, r = ask_verb(43, "exec", {"handle": h, "mode": "raw"})
     if not ok or r.get("faulted"):
         failures.append(f"el codigo del timbre fallo: {r}")
 
@@ -551,8 +551,8 @@ def test_permission(proc, timeout, arch):
 
     def ask_verb(n, verb, args):
         resp, _ = ask(proc, [n, verb, args], timeout)
-        _, ok, carga = resp
-        return ok, carga
+        _, ok, load = resp
+        return ok, load
 
     ret = (0xD65F03C0).to_bytes(4, "little") if arch == "aarch64" else b"\xc3"
 
@@ -565,7 +565,7 @@ def test_permission(proc, timeout, arch):
     if c["user"]:
         failures.append("una memoria que no se pidio para el agente vino marcada")
     ask_verb(81, "mem.write", {"handle": c["handle"], "bytes": ret})
-    ok, r = ask_verb(82, "exec", {"handle": c["handle"]})
+    ok, r = ask_verb(82, "exec", {"handle": c["handle"], "mode": "raw"})
     if not ok or r.get("faulted"):
         failures.append(f"no se pudo correr codigo en memoria comun: {r}")
     else:
@@ -586,21 +586,22 @@ def test_permission(proc, timeout, arch):
         failures.append(f"no quedo alineada al bloque: {u['start']:#x}")
 
     ask_verb(84, "mem.write", {"handle": u["handle"], "bytes": ret})
-    ok, r = ask_verb(85, "exec", {"handle": u["handle"]})
-    if ok and not r.get("faulted"):
-        failures.append("el kernel pudo correr codigo en memoria del agente: el bit NO se puso")
+    # Desde que existe la transicion de privilegio, el kernel ni lo intenta:
+    # `raw` sobre memoria del agente se rechaza **antes** de correr nada. La
+    # misma pagina no puede ser las dos cosas, y aceptar el pedido seria
+    # prometer algo que el hardware niega un microsegundo despues.
+    ok, r = ask_verb(85, "exec", {"handle": u["handle"], "mode": "raw"})
+    if ok:
+        failures.append("el kernel acepto correr privilegiado en memoria del agente")
     else:
-        # Cada arquitectura lo cuenta a su manera: aarch64 dice que no pudo
-        # buscar la instruccion, x86 lo reporta como fault de pagina.
-        cause = r.get("fault", {}).get("cause") if ok else "?"
-        print(f"    y el kernel YA NO puede correr codigo ahi: {cause}")
+        print(f"    y el kernel ya no acepta correr privilegiado ahi: {r}")
 
     # Y al soltarla, el permiso se saca: si quedara, seria un agujero silencioso.
     ask_verb(86, "release", {"handle": u["handle"]})
     ok, v = ask_verb(87, "mem.claim", {"at": u["start"], "bytes": 4096})
     if ok:
         ask_verb(88, "mem.write", {"handle": v["handle"], "bytes": ret})
-        ok2, r2 = ask_verb(89, "exec", {"handle": v["handle"]})
+        ok2, r2 = ask_verb(89, "exec", {"handle": v["handle"], "mode": "raw"})
         if not ok2 or r2.get("faulted"):
             failures.append("al soltarla no se le saco el permiso")
         else:
@@ -612,6 +613,123 @@ def test_permission(proc, timeout, arch):
             print(f"  FALLA: {f}")
         return 1
     print("  permiso: ok")
+    return 0
+
+
+# Los dos programas que prueban `supervised`. El segundo es el que le da sentido
+# a D27: una sola instruccion privilegiada, la que hoy puede dejar la maquina
+# muda sin recuperacion posible.
+SUPERVISED = {
+    "x86_64": {
+        # mov rax, 0x00C0FFEE
+        "ok": bytes([0x48, 0xC7, 0xC0, 0xEE, 0xFF, 0xC0, 0x00]),
+        # cli — apagar las interrupciones. En anillo 0 se lleva el cordon
+        # umbilical puesto; en anillo 3 es proteccion general.
+        "privilegiada": bytes([0xFA]),
+        "register": "rax",
+    },
+    "aarch64": {
+        # movz x0, #0xFFEE ; movk x0, #0xC0, lsl #16
+        "ok": bytes([0xC0, 0xFD, 0x9F, 0xD2, 0x00, 0x18, 0xA0, 0xF2]),
+        # msr daifset, #2 — lo mismo, del otro lado.
+        "privilegiada": bytes([0xDF, 0x42, 0x03, 0xD5]),
+        "register": "x0",
+    },
+}
+
+
+def test_supervised(proc, timeout, arch):
+    """El agente declara con que privilegio corre, y lo hace cumplir el hardware.
+
+    Es la mitad de arriba de D27. Lo que se prueba no es que el kernel diga que
+    bajo de privilegio, sino las dos consecuencias observables:
+
+      1. el codigo corre y vuelve — o sea que entro a anillo 3 / EL0, que la
+         memoria estaba de verdad marcada para el agente (si no, ni la
+         instruccion se podria buscar) y que la ventanilla de vuelta funciona;
+      2. la instruccion que podia dejar la maquina muda **vuelve como fault**.
+
+    La segunda es la unica que importa de verdad: es lo que el kernel no podia
+    recuperar antes de D27.
+    """
+    prog = SUPERVISED[arch]
+    failures = []
+
+    def ask_verb(n, verb, args):
+        resp, _ = ask(proc, [n, verb, args], timeout)
+        _, ok, load = resp
+        return ok, load
+
+    # El acuerdo lo publica la maquina: como se vuelve no se hornea (P4).
+    ok, d = ask_verb(90, "describe", {"what": ["exec"]})
+    if not ok:
+        print(f"  el kernel no publica la seccion exec: {d}")
+        return 1
+    agreement = d["exec"]
+    back_bytes = agreement["return"]
+    print(f"  modos: {agreement['modes']}, pila: {agreement['stack']}")
+    print(f"  para volver hay que emitir: {back_bytes.hex()}")
+    if "supervised" not in agreement["modes"] or "raw" not in agreement["modes"]:
+        failures.append(f"el kernel no ofrece los dos modos: {agreement['modes']}")
+
+    ok, u = ask_verb(91, "mem.claim", {"bytes": 4096, "user": True})
+    if not ok:
+        print(f"  no se pudo reclamar para el agente: {u}")
+        return 1
+    h = u["handle"]
+
+    # 1. Corre sin privilegio y vuelve por la ventanilla.
+    code = prog["ok"] + back_bytes
+    ask_verb(92, "mem.write", {"handle": h, "bytes": code})
+    print(f"  codigo supervisado: {code.hex()}")
+    ok, r = ask_verb(93, "exec", {"handle": h, "mode": "supervised"})
+    if not ok:
+        failures.append(f"exec supervised fallo: {r}")
+    elif r.get("faulted"):
+        failures.append(f"el codigo supervisado fallo: {r['fault']}")
+    else:
+        value = r["registers"].get(prog["register"])
+        print(f"    volvio: mode={r['mode']}, {prog['register']}={value:#x}")
+        if value != 0xC0FFEE:
+            failures.append(f"{prog['register']}={value:#x}, se esperaba 0xc0ffee")
+        if r.get("mode") != "supervised":
+            failures.append(f"el kernel dice que corrio {r.get('mode')}")
+
+    # 2. Y la instruccion privilegiada vuelve como dato, no como muerte.
+    code = prog["privilegiada"] + back_bytes
+    ask_verb(94, "mem.write", {"handle": h, "bytes": code})
+    print(f"  y ahora una instruccion privilegiada: {code.hex()}")
+    ok, r = ask_verb(95, "exec", {"handle": h, "mode": "supervised"})
+    if not ok:
+        failures.append(f"exec supervised fallo: {r}")
+    elif not r.get("faulted"):
+        failures.append("apago las interrupciones sin privilegio: NO bajo de anillo")
+    else:
+        print(f"    volvio como fault: {r['fault']['cause']}")
+
+    # 3. Y los dos pedidos que el kernel tiene que rechazar.
+    ok, r = ask_verb(96, "exec", {"handle": h, "mode": "raw"})
+    if ok:
+        failures.append("acepto raw sobre memoria del agente")
+    ok, r = ask_verb(97, "exec", {"handle": h})
+    if ok:
+        failures.append("acepto un exec sin modo: el kernel eligio por el agente")
+    else:
+        print(f"    y sin declarar modo no corre: {r}")
+
+    ask_verb(98, "release", {"handle": h})
+
+    # Lo de siempre: la maquina sigue contestando.
+    ok, _ = ask_verb(99, "describe", {})
+    if not ok:
+        failures.append("la maquina dejo de contestar")
+
+    print()
+    if failures:
+        for f in failures:
+            print(f"  FALLA: {f}")
+        return 1
+    print("  supervisado: ok")
     return 0
 
 
@@ -627,8 +745,8 @@ def test_handler_during_exec(proc, timeout, arch):
 
     def ask_verb(n, verb, args):
         resp, _ = ask(proc, [n, verb, args], timeout)
-        _, ok, carga = resp
-        return ok, carga
+        _, ok, load = resp
+        return ok, load
 
     # Otra interrupcion que la que usa --handler: son dos pruebas que pueden
     # correr en el mismo arranque, y un handler ya instalado no se reemplaza.
@@ -684,7 +802,7 @@ def test_handler_during_exec(proc, timeout, arch):
 
     print("  el agente dispara su interrupcion y espera a su propio handler...")
     try:
-        ok, r = ask_verb(77, "exec", {"handle": h2})
+        ok, r = ask_verb(77, "exec", {"handle": h2, "mode": "raw"})
     except TimeoutError:
         print("  FALLA: el exec no volvio — el handler no corrio durante el exec")
         return 1
@@ -718,8 +836,8 @@ def test_handler(proc, timeout, arch):
 
     def ask_verb(n, verb, args):
         resp, _ = ask(proc, [n, verb, args], timeout)
-        _, ok, carga = resp
-        return ok, carga
+        _, ok, load = resp
+        return ok, load
 
     # Un numero de interrupcion que la maquina tenga y que no sea del kernel.
     # 34 en ARM es el reloj de tiempo real; 5 en x86 es un cable libre.
@@ -774,7 +892,7 @@ def test_handler(proc, timeout, arch):
     h2 = c2["handle"]
     ask_verb(58, "mem.write", {"handle": h2, "bytes": code})
     print(f"  el agente la hace sonar: {code.hex()}")
-    ok, r = ask_verb(59, "exec", {"handle": h2})
+    ok, r = ask_verb(59, "exec", {"handle": h2, "mode": "raw"})
     if not ok or r.get("faulted"):
         failures.append(f"el codigo que la hace sonar fallo: {r}")
 
@@ -804,8 +922,8 @@ def test_mailbox(proc, timeout):
 
     def ask_verb(n, verb, args):
         resp, _ = ask(proc, [n, verb, args], timeout)
-        _, ok, carga = resp
-        return ok, carga
+        _, ok, load = resp
+        return ok, load
 
     # El acuerdo lo publica el kernel: no se hornea nada de esto.
     ok, ch = ask_verb(30, "describe", {"what": ["channel"]})
@@ -904,6 +1022,8 @@ def main():
                     help="sube codigo maquina de verdad y lo corre")
     ap.add_argument("--permission", action="store_true",
                     help="pide memoria alcanzable sin privilegio y comprueba que el bit este")
+    ap.add_argument("--supervised", action="store_true",
+                    help="corre codigo sin privilegio y comprueba que no pueda colgar la maquina")
     ap.add_argument("--during", action="store_true",
                     help="el handler del agente corre durante un exec largo")
     ap.add_argument("--handler", action="store_true",
@@ -945,12 +1065,12 @@ def main():
         if args.raw:
             print(f"  <- {raw.hex()}")
 
-        ident, ok, carga = reply
+        ident, ok, load = reply
         print(f"\nrespuesta id={ident} ok={ok}")
         if not ok:
-            print(f"  ERROR: {carga}")
+            print(f"  ERROR: {load}")
             return 1
-        show(carga)
+        show(load)
 
         # El lazo de memoria va en el mismo arranque: cada booteo de QEMU son
         # quince segundos, y el porton hace esto por arquitectura.
@@ -976,6 +1096,9 @@ def main():
         if args.during:
             print()
             rc |= test_handler_during_exec(proc, args.timeout, args.arch)
+        if args.supervised:
+            print("\n== el agente declara con que privilegio corre (D27) ==")
+            rc |= test_supervised(proc, args.timeout, args.arch)
         if args.permission:
             print()
             rc |= test_permission(proc, args.timeout, args.arch)

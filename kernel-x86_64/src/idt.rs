@@ -235,6 +235,19 @@ extern "sysv64" fn fault_rust(m: &mut Frame) {
     // kernel.
     if crate::percpu::armed() != 0 {
         m.rip = crate::percpu::return_point();
+        // Los dos bits de abajo de CS son el anillo desde el que se entro. Si
+        // el codigo venia de anillo 3 (D27), reescribir solo RIP no alcanza:
+        // el `iretq` volveria **a anillo 3** con una direccion del kernel, que
+        // no es alcanzable desde ahi, y fallaria de nuevo — un fault adentro
+        // del mecanismo que existe para capturar faults.
+        //
+        // Se lee del marco y no de una bandera nuestra: es el hardware
+        // diciendo de donde vino (P4).
+        if m.cs & 3 != 0 {
+            m.cs = crate::gdt::CODE as u64;
+            m.ss = crate::gdt::DATA as u64;
+            m.rsp = crate::percpu::kernel_stack();
+        }
         return;
     }
 
@@ -324,6 +337,28 @@ pub unsafe fn install(slot: usize) -> Result<(), &'static str> {
             zero: 0,
         };
     }
+
+    // La ventanilla por la que vuelve el codigo `supervised` (D27). Es la
+    // unica entrada de la tabla con `DPL=3`: las demas son de anillo 0, asi
+    // que el agente no puede invocarlas — un `int 3` desde anillo 3 le da
+    // proteccion, que vuelve como fault y no como breakpoint.
+    //
+    // Y **sin IST**: entra por `RSP0`, que es el camino que el hardware usa
+    // para cualquier trap que sube de privilegio. Asi esa pila se ejercita en
+    // cada `exec supervised` en vez de ser un campo del TSS que nadie mira.
+    let window = crate::exec::exec_window as *const () as u64;
+    idt.0[crate::exec::WINDOW_VECTOR] = Entry {
+        off_low: window as u16,
+        selector: crate::gdt::CODE,
+        ist: 0,
+        // 0xEE: presente, privilegio 3, compuerta de interrupcion de 64 bits.
+        // El 0x8E de las demas con el DPL corrido; sigue siendo de
+        // interrupcion y no de trap, asi que entra con los timbres cerrados.
+        kind: 0xEE,
+        off_mid: (window >> 16) as u16,
+        off_high: (window >> 32) as u32,
+        zero: 0,
+    };
 
     let d = Descriptor {
         limit: (core::mem::size_of::<Idt>() - 1) as u16,

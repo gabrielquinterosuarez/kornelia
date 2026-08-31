@@ -126,11 +126,16 @@ impl Platform for X86_64 {
         smp::start(hw, id, slot)
     }
 
-    unsafe fn exec(&mut self, entry: u64, _region: (u64, u64)) -> Outcome {
+    unsafe fn exec(&mut self, entry: u64, region: (u64, u64), supervised: bool) -> Outcome {
         // x86_64 mantiene coherente la cache de instrucciones con la de datos:
-        // codigo recien escrito se ve sin pedir nada.
-        exec::run(entry)
+        // codigo recien escrito se ve sin pedir nada. La region hace falta
+        // igual: de ahi sale la pila cuando corre supervisado (D27).
+        exec::run(entry, region, supervised)
     }
+
+    /// `int 0x80`. El agente no tiene que saber que es un `int`: los recibe
+    /// como bytes por `describe` y los pega al final de lo que emite (D3).
+    const EXEC_RETURN: &'static [u8] = exec::RETURN_BYTES;
 }
 
 /// Escritor sobre el UART pelado, sin pasar por `Platform`.

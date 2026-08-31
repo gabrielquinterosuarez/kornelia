@@ -24,9 +24,21 @@
 pub const CODE: u16 = 0x08;
 /// Selector del segmento de datos.
 pub const DATA: u16 = 0x10;
+
+/// Los mismos dos, pero de anillo 3: es a donde entra el codigo que el agente
+/// declaro `supervised` (D27).
+///
+/// El `| 3` del final no es parte del indice sino el privilegio que se pide con
+/// el selector, y tiene que coincidir con el del descriptor o el `iretq` falla.
+pub const CODE_USER: u16 = 0x18 | 3;
+/// El de datos de anillo 3, que ademas es el `SS` con el que corre.
+pub const DATA_USER: u16 = 0x20 | 3;
+
 /// El primer selector de TSS. Cada nucleo tiene el suyo, y cada descriptor
 /// ocupa dos entradas porque en 64 bits mide 16 bytes.
-const TSS_BASE: u16 = 0x18;
+///
+/// Arranca en 5 —y no en 3— porque adelante estan los dos de anillo 3.
+const TSS_BASE: u16 = 0x28;
 
 /// El selector del TSS de esa ranura.
 fn tss_selector(slot: usize) -> u16 {
@@ -44,8 +56,9 @@ pub const IST_FAULTS: u8 = 1;
 /// fault le pise el marco.
 pub const IST_IRQ: u8 = 2;
 
-/// Cuantas pilas de la IST se usan.
-const IST_STACKS: usize = 2;
+/// Cuantas pilas propias tiene cada nucleo: las dos de la IST y la de la
+/// ventanilla, que no es de la IST sino la de `RSP0`.
+const IST_STACKS: usize = 3;
 
 /// 16 KiB. Solo tiene que aguantar el marco de excepcion y lo que use el
 /// handler, que trabaja sobre buffers estaticos y no sobre la pila.
@@ -59,21 +72,28 @@ struct Stacks([[u8; STACK_SIZE]; crate::percpu::SLOTS * IST_STACKS]);
 /// mecanismo que existe para que nada se corrompa en silencio.
 static mut EXCEPTION_STACKS: Stacks = Stacks([[0; STACK_SIZE]; crate::percpu::SLOTS * IST_STACKS]);
 
-/// El TSS de 64 bits. De todo lo que tiene, lo unico que se usa es `ist[0]`.
+/// El TSS de 64 bits. De todo lo que tiene se usan `ist[0]`, `ist[1]` y
+/// `rsp[0]`.
 ///
 /// El resto de los campos existen porque el hardware espera esta forma exacta:
 /// no se pueden omitir aunque no se usen.
 #[repr(C, packed)]
 struct Tss {
-    _reservado0: u32,
-    /// Pilas para cuando se baja de nivel de privilegio. No se usan: aca no hay
-    /// anillo 3 (D10: sin procesos, sin usuarios).
+    _reserved0: u32,
+    /// Pilas para cuando se **sube** de nivel de privilegio. `rsp[0]` es la de
+    /// anillo 0, y es donde el CPU aterriza cuando el codigo `supervised` del
+    /// agente abre la ventanilla para volver (D27).
+    ///
+    /// Estuvo en cero mientras no habia anillo 3. Ahora se usa de verdad, y por
+    /// eso vale la pena que la ventanilla **no** sea de la IST: si `RSP0`
+    /// estuviera mal, se notaria enseguida en vez de quedar como un campo
+    /// muerto que un dia alguien necesita.
     rsp: [u64; 3],
-    _reservado1: u64,
+    _reserved1: u64,
     /// Las siete pilas de la IST. La primera es la nuestra.
     ist: [u64; 7],
-    _reservado2: u64,
-    _reservado3: u16,
+    _reserved2: u64,
+    _reserved3: u16,
     /// Donde empieza el mapa de permisos de puertos de E/S. Apuntando mas alla
     /// del propio TSS, queda vacio: sin mapa, ningun puerto se permite desde
     /// anillo 3, que es donde no hay nadie.
@@ -82,18 +102,19 @@ struct Tss {
 
 static mut TSS_PER_CORE: [Tss; crate::percpu::SLOTS] = [const {
     Tss {
-        _reservado0: 0,
+        _reserved0: 0,
         rsp: [0; 3],
-        _reservado1: 0,
+        _reserved1: 0,
         ist: [0; 7],
-        _reservado2: 0,
-        _reservado3: 0,
+        _reserved2: 0,
+        _reserved3: 0,
         iomap: core::mem::size_of::<Tss>() as u16,
     }
 }; crate::percpu::SLOTS];
 
-/// Nulo, codigo, datos, y dos huecos por cada TSS.
-const GDT_ENTRIES: usize = 3 + 2 * crate::percpu::SLOTS;
+/// Nulo, codigo y datos de anillo 0, los mismos dos de anillo 3, y dos huecos
+/// por cada TSS.
+const GDT_ENTRIES: usize = 5 + 2 * crate::percpu::SLOTS;
 
 #[repr(C, align(16))]
 struct Gdt([u64; GDT_ENTRIES]);
@@ -121,12 +142,16 @@ pub unsafe fn install(slot: usize) -> Result<(), &'static str> {
 
     let tss = &mut (*core::ptr::addr_of_mut!(TSS_PER_CORE))[slot];
 
-    // Dos pilas por nucleo, y la IST apunta al final de cada una porque crecen
-    // hacia abajo.
+    // Tres pilas por nucleo, y cada puntero va al final de la suya porque
+    // crecen hacia abajo.
     let stacks = core::ptr::addr_of!(EXCEPTION_STACKS) as u64;
     let mine = slot * IST_STACKS;
     tss.ist[(IST_FAULTS - 1) as usize] = stacks + ((mine + 1) * STACK_SIZE) as u64;
     tss.ist[(IST_IRQ - 1) as usize] = stacks + ((mine + 2) * STACK_SIZE) as u64;
+    // La tercera es la de anillo 0, a la que el CPU cambia solo cuando entra un
+    // trap desde anillo 3 (D27). Sin esto, la ventanilla de vuelta aterrizaria
+    // sobre la pila del agente — que es justo la que puede estar rota.
+    tss.rsp[0] = stacks + ((mine + 3) * STACK_SIZE) as u64;
 
     let gdt = &mut *core::ptr::addr_of_mut!(GDT);
     gdt.0[0] = 0;
@@ -134,6 +159,12 @@ pub unsafe fn install(slot: usize) -> Result<(), &'static str> {
     gdt.0[1] = 0x00AF_9A00_0000_FFFF;
     // Datos: presente, anillo 0, escribible.
     gdt.0[2] = 0x00CF_9200_0000_FFFF;
+    // Y los dos de anillo 3, que son los mismos con el privilegio corrido: el
+    // 0x9A pasa a 0xFA y el 0x92 a 0xF2. Son los dos bits del DPL, nada mas —
+    // el segmento cubre la misma memoria, y lo que decide que alcanza el agente
+    // son las tablas de paginas (D27), no esto.
+    gdt.0[3] = 0x00AF_FA00_0000_FFFF;
+    gdt.0[4] = 0x00CF_F200_0000_FFFF;
 
     // Un descriptor por TSS. Son 16 bytes y llevan la direccion partida en
     // cuatro pedazos salteados: herencia de cuando las direcciones eran de 24
@@ -144,13 +175,13 @@ pub unsafe fn install(slot: usize) -> Result<(), &'static str> {
     for i in 0..crate::percpu::SLOTS {
         let other_one = core::ptr::addr_of!((*core::ptr::addr_of!(TSS_PER_CORE))[i]) as u64;
         let limit = (core::mem::size_of::<Tss>() - 1) as u64;
-        gdt.0[3 + i * 2] = limit & 0xFFFF
+        gdt.0[5 + i * 2] = limit & 0xFFFF
             | (other_one & 0xFF_FFFF) << 16
             // 0x89: presente, anillo 0, TSS de 64 bits disponible.
             | 0x89 << 40
             | ((limit >> 16) & 0xF) << 48
             | ((other_one >> 24) & 0xFF) << 56;
-        gdt.0[4 + i * 2] = other_one >> 32;
+        gdt.0[6 + i * 2] = other_one >> 32;
     }
 
     let d = Descriptor {

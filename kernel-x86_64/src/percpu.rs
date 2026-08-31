@@ -116,6 +116,18 @@ pub fn armed() -> u64 {
     v
 }
 
+/// La pila del kernel de este nucleo, la que `exec` dejo anotada.
+///
+/// La necesita el desvio de faults cuando el codigo venia de anillo 3: ahi el
+/// marco lleva el puntero de pila del agente, y volver con ese seria volver a
+/// la pila de anillo 3 con codigo de anillo 0 (D27).
+pub fn kernel_stack() -> u64 {
+    let v: u64;
+    // SAFETY: offset 16 del bloque, verificado arriba.
+    unsafe { core::arch::asm!("mov {}, gs:[16]", out(reg) v, options(nostack, readonly)) };
+    v
+}
+
 /// Adonde desviar el regreso si el codigo del agente fallo.
 pub fn return_point() -> u64 {
     let v: u64;

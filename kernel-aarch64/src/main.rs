@@ -128,12 +128,16 @@ impl Platform for AArch64 {
         smp::start(hw.psci, id, slot)
     }
 
-    unsafe fn exec(&mut self, entry: u64, region: (u64, u64)) -> Outcome {
+    unsafe fn exec(&mut self, entry: u64, region: (u64, u64), supervised: bool) -> Outcome {
         // En aarch64 las dos caches NO son coherentes: hay que empujar lo
         // escrito hasta donde lo ve el camino de instrucciones.
         exec::sync_cache(region.0, region.1);
-        exec::run(entry)
+        exec::run(entry, region, supervised)
     }
+
+    /// `svc #0`. El agente no tiene que saber que es un `svc`: los recibe como
+    /// bytes por `describe` y los pega al final de lo que emite (D3).
+    const EXEC_RETURN: &'static [u8] = exec::RETURN_BYTES;
 }
 
 /// Escritor sobre el UART pelado, sin pasar por `Platform`.
