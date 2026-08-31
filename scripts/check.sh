@@ -53,7 +53,7 @@ else
         # Lo que tiene que haber dicho en el banner de texto.
         for esperado in "arquitectura: $arq" "memoria:" "tablas:" \
                         "en memoria del kernel" "identity-mapeados" \
-                        "faults: capturados. autotest ok" "-- CBOR --"; do
+                        "faults: capturados. autotest ok" "acpi:" "-- CBOR --"; do
             grep -qFe "$esperado" <<<"$salida" || mal "$arq no dijo: $esperado"
         done
 

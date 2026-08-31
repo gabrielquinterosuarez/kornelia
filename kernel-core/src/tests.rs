@@ -856,3 +856,168 @@ fn lo_reclamado_se_puede_listar() {
         assert_eq!(claims::count(), 1);
     });
 }
+
+// ---------------------------------------------------------------------------
+// Las tablas de ACPI
+// ---------------------------------------------------------------------------
+
+use crate::acpi;
+use crate::tables::Acpi as Rsdp;
+
+/// Arma una tabla de ACPI con la firma pedida y el checksum bien puesto.
+fn tabla_acpi(firma: &[u8; 4], cuerpo: &[u8]) -> Vec<u8> {
+    let mut t = vec![0u8; 36];
+    t[..4].copy_from_slice(firma);
+    t.extend_from_slice(cuerpo);
+    let largo = t.len() as u32;
+    t[4..8].copy_from_slice(&largo.to_le_bytes());
+
+    // ACPI manda que la tabla entera sume 0 modulo 256.
+    let suma = t.iter().fold(0u8, |a, x| a.wrapping_add(*x));
+    t[9] = 0u8.wrapping_sub(suma);
+    t
+}
+
+/// Una entrada de la MADT: tipo, largo, y payload.
+fn entrada(tipo: u8, payload: &[u8]) -> Vec<u8> {
+    let mut e = vec![tipo, (payload.len() + 2) as u8];
+    e.extend_from_slice(payload);
+    e
+}
+
+/// Arma un XSDT que apunta a las tablas dadas, y devuelve todo junto para que
+/// no se muevan de lugar mientras se lee.
+fn maquina_acpi(tablas: &[Vec<u8>]) -> (Vec<u8>, Vec<Box<[u8]>>) {
+    // Las tablas van al heap y se quedan quietas ahi; el XSDT guarda punteros.
+    let fijas: Vec<Box<[u8]>> = tablas.iter().map(|t| t.clone().into_boxed_slice()).collect();
+    let mut punteros = Vec::new();
+    for t in &fijas {
+        punteros.extend_from_slice(&(t.as_ptr() as u64).to_le_bytes());
+    }
+    (tabla_acpi(b"XSDT", &punteros), fijas)
+}
+
+fn leer(xsdt: &[u8]) -> acpi::Hardware {
+    let rsdp = Rsdp { revision: 2, rsdt: 0, xsdt: Some(xsdt.as_ptr() as u64) };
+    unsafe { acpi::read(&rsdp) }
+}
+
+#[test]
+fn se_leen_los_nucleos_de_x86() {
+    // Tres APICs locales: dos habilitados y uno que no.
+    let mut cuerpo = 0xFEE0_0000u32.to_le_bytes().to_vec(); // direccion del APIC
+    cuerpo.extend_from_slice(&0u32.to_le_bytes()); // banderas
+    cuerpo.extend(entrada(0, &[0, 0, 1, 0, 0, 0])); // uid 0, apic 0, habilitado
+    cuerpo.extend(entrada(0, &[1, 7, 1, 0, 0, 0])); // uid 1, apic 7, habilitado
+    cuerpo.extend(entrada(0, &[2, 9, 0, 0, 0, 0])); // uid 2, apic 9, NO
+
+    let madt = tabla_acpi(b"APIC", &cuerpo);
+    let (xsdt, _fijas) = maquina_acpi(&[madt]);
+    let hw = leer(&xsdt);
+
+    assert_eq!(hw.cpus.len(), 3, "se perdio algun nucleo");
+    assert_eq!(hw.usable_cpus(), 2, "un nucleo deshabilitado no es usable");
+    assert_eq!(hw.cpus[1].id, 7);
+    assert_eq!(hw.cpus[1].uid, 1);
+    assert!(!hw.cpus[2].enabled);
+
+    let i = hw.interrupts.expect("no encontro el controlador");
+    assert_eq!(i.kind, "apic");
+    assert_eq!(i.address, 0xFEE0_0000);
+}
+
+/// El mismo formato, contenido distinto: un ARM describe GICs donde un x86
+/// describe APICs, y los dos salen normalizados al mismo vocabulario (D24).
+#[test]
+fn se_leen_los_nucleos_de_arm() {
+    let mut cuerpo = vec![0u8; 8];
+    // GICC: el identificador que sirve para arrancarlo es el MPIDR, en el
+    // offset 68 de la entrada.
+    let mut gicc = vec![0u8; 74];
+    gicc[6..10].copy_from_slice(&5u32.to_le_bytes()); // uid, en el offset 8
+    gicc[10..14].copy_from_slice(&1u32.to_le_bytes()); // banderas: habilitado
+    gicc[66..74].copy_from_slice(&0x8000_0003u64.to_le_bytes()); // mpidr
+    cuerpo.extend(entrada(11, &gicc));
+
+    // GICD: el distribuidor, version 3.
+    let mut gicd = vec![0u8; 22];
+    gicd[6..14].copy_from_slice(&0x0800_0000u64.to_le_bytes()); // direccion
+    gicd[18] = 3; // version
+    cuerpo.extend(entrada(12, &gicd));
+
+    let (xsdt, _fijas) = maquina_acpi(&[tabla_acpi(b"APIC", &cuerpo)]);
+    let hw = leer(&xsdt);
+
+    assert_eq!(hw.cpus.len(), 1);
+    assert_eq!(hw.cpus[0].id, 0x8000_0003, "el id tiene que ser el MPIDR");
+    assert_eq!(hw.cpus[0].uid, 5);
+    assert!(hw.cpus[0].enabled);
+
+    let i = hw.interrupts.expect("no encontro el GIC");
+    assert_eq!(i.kind, "gic");
+    assert_eq!(i.address, 0x0800_0000);
+    assert_eq!(i.version, 3);
+}
+
+#[test]
+fn se_lee_donde_esta_pcie() {
+    let mut cuerpo = vec![0u8; 8]; // reservado
+    cuerpo.extend_from_slice(&0xE000_0000u64.to_le_bytes()); // base
+    cuerpo.extend_from_slice(&0u16.to_le_bytes()); // segmento
+    cuerpo.push(0); // primer bus
+    cuerpo.push(255); // ultimo bus
+    cuerpo.extend_from_slice(&0u32.to_le_bytes());
+
+    let (xsdt, _fijas) = maquina_acpi(&[tabla_acpi(b"MCFG", &cuerpo)]);
+    let x = leer(&xsdt).pcie.expect("no encontro PCIe");
+    assert_eq!(x.base, 0xE000_0000);
+    assert_eq!(x.bus_end, 255);
+}
+
+/// Informar que existe una tabla que este kernel todavia no lee es mas util que
+/// callarla (P4).
+#[test]
+fn se_informan_las_tablas_que_no_se_interpretan() {
+    let (xsdt, _fijas) = maquina_acpi(&[
+        tabla_acpi(b"FACP", &[0u8; 4]),
+        tabla_acpi(b"DSDT", &[0u8; 4]),
+    ]);
+    let hw = leer(&xsdt);
+    assert_eq!(hw.signatures.len(), 2);
+    assert_eq!(&hw.signatures[0], b"FACP");
+    assert_eq!(&hw.signatures[1], b"DSDT");
+    assert!(hw.cpus.is_empty());
+}
+
+/// Es la razon de ser del checksum: recorriendo memoria cruda, dar con cuatro
+/// bytes que parecen una firma es mas facil de lo que parece.
+#[test]
+fn una_tabla_con_el_checksum_roto_se_ignora() {
+    let mut madt = tabla_acpi(b"APIC", &[0u8; 8]);
+    madt[9] = madt[9].wrapping_add(1);
+    let (xsdt, _fijas) = maquina_acpi(&[madt]);
+    let hw = leer(&xsdt);
+    assert!(hw.signatures.is_empty(), "acepto una tabla que no cerraba");
+}
+
+/// Una entrada de largo cero haria girar el recorrido para siempre.
+#[test]
+fn una_entrada_de_largo_imposible_no_cuelga() {
+    let mut cuerpo = vec![0u8; 8];
+    cuerpo.push(0); // tipo
+    cuerpo.push(0); // largo CERO
+    cuerpo.extend_from_slice(&[0u8; 8]);
+
+    let (xsdt, _fijas) = maquina_acpi(&[tabla_acpi(b"APIC", &cuerpo)]);
+    // Que vuelva ya es la prueba.
+    let hw = leer(&xsdt);
+    assert!(hw.cpus.is_empty());
+}
+
+#[test]
+fn sin_raiz_no_se_inventa_nada() {
+    let rsdp = Rsdp { revision: 2, rsdt: 0, xsdt: Some(0) };
+    let hw = unsafe { acpi::read(&rsdp) };
+    assert!(hw.cpus.is_empty() && hw.signatures.is_empty());
+    assert!(hw.interrupts.is_none() && hw.pcie.is_none());
+}

@@ -32,6 +32,7 @@
 //! el kernel mintiendo por omision.
 
 use crate::cbor::{self, Reader, Scan, Writer};
+use crate::acpi::Hardware;
 use crate::claims;
 use crate::machine::Machine;
 use crate::memory::Kind;
@@ -60,7 +61,7 @@ static mut OUTBOX: [u8; MAX_RESPONSE] = [0; MAX_RESPONSE];
 pub const MARCA: &str = "-- CBOR --";
 
 /// Atiende el cordon umbilical para siempre.
-pub fn serve<P: Platform>(p: &mut P, m: &Machine) -> ! {
+pub fn serve<P: Platform>(p: &mut P, m: &Machine, hw: &Hardware) -> ! {
     let inbox = unsafe { &mut *core::ptr::addr_of_mut!(INBOX) };
     let mut n = 0usize;
 
@@ -92,7 +93,7 @@ pub fn serve<P: Platform>(p: &mut P, m: &Machine) -> ! {
             }
 
             Scan::Complete(largo) => {
-                atender(p, &inbox[..largo], m);
+                atender(p, &inbox[..largo], m, hw);
 
                 // Lo que vino pegado atras es el pedido siguiente: se corre al
                 // principio en vez de tirarlo.
@@ -104,7 +105,7 @@ pub fn serve<P: Platform>(p: &mut P, m: &Machine) -> ! {
 }
 
 /// Contesta un pedido ya completo.
-fn atender<P: Platform>(p: &mut P, req: &[u8], m: &Machine) {
+fn atender<P: Platform>(p: &mut P, req: &[u8], m: &Machine, hw: &Hardware) {
     let mut r = Reader::new(req);
 
     // `[id, verbo, argumentos]`
@@ -119,7 +120,7 @@ fn atender<P: Platform>(p: &mut P, req: &[u8], m: &Machine) {
     };
 
     match verbo {
-        "describe" => describe(p, id, &mut r, m),
+        "describe" => describe(p, id, &mut r, m, hw),
         "mem.claim" => mem_claim(p, id, &mut r, m),
         "mem.read" => mem_read(p, id, &mut r),
         "mem.write" => mem_write(p, id, &mut r),
@@ -141,11 +142,14 @@ struct Pedido {
     /// Lo que el agente tiene reclamado. Es como recupera su estado al
     /// reconectar (D14).
     claims: bool,
+    cpus: bool,
+    interrupts: bool,
+    pcie: bool,
     /// Si no vino la clave `what`, se devuelve el indice (D16).
     indice: bool,
 }
 
-fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine) {
+fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw: &Hardware) {
     let mut q = Pedido { indice: true, ..Default::default() };
 
     // Los argumentos son un mapa, y puede no venir.
@@ -172,6 +176,9 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine) {
                     Some("memory") => q.memory = true,
                     Some("tables") => q.tables = true,
                     Some("claims") => q.claims = true,
+                    Some("cpus") => q.cpus = true,
+                    Some("interrupts") => q.interrupts = true,
+                    Some("pcie") => q.pcie = true,
                     // Contestar solo con lo que se reconocio, callado, seria
                     // mentir por omision.
                     Some(_) => return responder_error(p, id, "unknown section in what"),
@@ -189,7 +196,7 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine) {
     w.bool(true);
 
     if q.indice {
-        escribir_indice(&mut w, m, P::ARCH);
+        escribir_indice(&mut w, m, hw, P::ARCH);
     } else {
         let mut secciones = 0;
         if q.memory {
@@ -200,6 +207,11 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine) {
         }
         if q.claims {
             secciones += 1;
+        }
+        for extra in [q.cpus, q.interrupts, q.pcie] {
+            if extra {
+                secciones += 1;
+            }
         }
         w.map(secciones);
         if q.memory {
@@ -217,6 +229,51 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine) {
                 escribir_claim(&mut w, &c);
             }
         }
+        if q.cpus {
+            w.text("cpus");
+            w.array(hw.cpus.len());
+            for c in hw.cpus {
+                w.map(3);
+                w.text("id");
+                w.uint(c.id);
+                w.text("uid");
+                w.uint(c.uid as u64);
+                w.text("enabled");
+                w.bool(c.enabled);
+            }
+        }
+        if q.interrupts {
+            w.text("interrupts");
+            match hw.interrupts {
+                None => w.null(),
+                Some(i) => {
+                    w.map(3);
+                    w.text("kind");
+                    w.text(i.kind);
+                    w.text("address");
+                    w.uint(i.address);
+                    w.text("version");
+                    w.uint(i.version as u64);
+                }
+            }
+        }
+        if q.pcie {
+            w.text("pcie");
+            match hw.pcie {
+                None => w.null(),
+                Some(x) => {
+                    w.map(4);
+                    w.text("base");
+                    w.uint(x.base);
+                    w.text("segment");
+                    w.uint(x.segment as u64);
+                    w.text("bus_start");
+                    w.uint(x.bus_start as u64);
+                    w.text("bus_end");
+                    w.uint(x.bus_end as u64);
+                }
+            }
+        }
     }
 
     match w.finish() {
@@ -228,17 +285,20 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine) {
 }
 
 /// El indice: que hay para pedir, y cuanto de cada cosa.
-fn escribir_indice(w: &mut Writer<'_>, m: &Machine, arch: &str) {
-    w.map(5);
+fn escribir_indice(w: &mut Writer<'_>, m: &Machine, hw: &Hardware, arch: &str) {
+    w.map(8);
 
     w.text("arch");
     w.text(arch);
 
     w.text("sections");
-    w.array(3);
+    w.array(6);
     w.text("memory");
     w.text("tables");
     w.text("claims");
+    w.text("cpus");
+    w.text("interrupts");
+    w.text("pcie");
 
     w.text("memory");
     w.map(2);
@@ -259,6 +319,19 @@ fn escribir_indice(w: &mut Writer<'_>, m: &Machine, arch: &str) {
     // D14: al reconectar, el agente recupera aca lo que tenia reclamado.
     w.text("claims");
     w.uint(claims::count() as u64);
+
+    w.text("cpus");
+    w.map(2);
+    w.text("total");
+    w.uint(hw.cpus.len() as u64);
+    w.text("usable");
+    w.uint(hw.usable_cpus() as u64);
+
+    w.text("interrupts");
+    w.bool(hw.interrupts.is_some());
+
+    w.text("pcie");
+    w.bool(hw.pcie.is_some());
 }
 
 /// El mapa de memoria: un arreglo de `[inicio, bytes, clase]`.

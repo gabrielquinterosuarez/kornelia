@@ -137,7 +137,8 @@ Lo que sí existe:
 | `scripts/check.sh` | El portón: frontera + 15 tests + compila las dos + **las bootea en QEMU** y verifica lo que dicen. Probado que falla cuando debe. |
 | CI (`.github/workflows/ci.yml`) | Llama al mismo portón, para que no haya chequeos que solo existan en una de las dos partes. |
 | **El protocolo CBOR** (D6) | Andando. Escrito a mano, sin dependencias; verificado contra los vectores canónicos del RFC 8949. |
-| **`describe`** | Andando: sirve `memory`, `tables` y `claims`. Sin argumentos devuelve el índice, no un volcado (D16). |
+| **`describe`** | Andando: sirve `memory`, `tables`, `claims`, `cpus`, `interrupts` y `pcie`. Sin argumentos devuelve el índice, no un volcado (D16). |
+| **Lectura de ACPI** | Andando en las dos. MADT (núcleos y controlador de interrupciones) y MCFG (PCIe), con el checksum verificado tabla por tabla. |
 | **`mem.claim` · `mem.read` · `mem.write` · `release`** | Andando. Reclamos por tamaño o por dirección exacta (así se pide MMIO), con alineación y tope. Los handles son de la máquina y no se reusan (D14). |
 | **`exec`** | Andando en las dos. **El fault vuelve como respuesta, no como muerte** (P5): el handler desvía el regreso al punto de recuperación en vez de detener el núcleo. El agente corre en pila propia y las excepciones en otra, así que ni destruyendo el puntero de pila se lleva la máquina. |
 | **Tablas de páginas propias** (D12) | Andando en las dos. Identity map con páginas de 1 GiB; MMIO no cacheable. La raíz se relee del registro y se verifica contra el mapa. |
@@ -162,10 +163,15 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
 2. **La dirección del PL011 sigue horneada** en `kernel-aarch64/src/uart.rs` (`0x0900_0000`, la
    placa `virt` de QEMU). La fuente legítima es el device tree —o la tabla SPCR de ACPI—, que
    todavía no leemos. Mientras siga así, el cordón umbilical solo funciona en esa placa.
-3. **Las tablas de ACPI se encuentran pero no se leen.** Se captura el puntero al RSDP y se
-   verifica, pero nadie recorre la MADT (dónde están los núcleos y el controlador de
-   interrupciones) ni la MCFG (dónde está el espacio de configuración de PCIe). Sin eso,
-   `core.claim`, `irq.install` y el descubrimiento de dispositivos no tienen de dónde salir.
+3. **~~Las tablas de ACPI se encuentran pero no se leen.~~ RESUELTO.** Se recorre el XSDT
+   verificando el checksum de cada tabla, y de ahí salen los núcleos (MADT) y dónde se
+   configura PCIe (MCFG). `describe` gana las secciones `cpus`, `interrupts` y `pcie`. Las
+   tablas que este kernel no interpreta se informan igual por su firma: que exista algo que no
+   sabemos leer es más útil que callarlo (P4).
+
+   Lo que falta encima: el device tree sigue sin leerse, así que una placa embebida —que no
+   tiene ACPI— no reporta nada de esto. Y de la MADT solo se sacan núcleos y el controlador;
+   las rutas de interrupción (`irq.install` las va a necesitar) todavía no.
 4. **~~Seguimos sobre las tablas de páginas del firmware.~~ RESUELTO (D12).** El kernel arma
    las suyas y las carga: identity map con páginas de 1 GiB, tablas en arreglos estáticos —
    o sea dentro de la imagen, en memoria `Kind::Kernel`. El registro raíz (`CR3` / `TTBR0_EL1`)

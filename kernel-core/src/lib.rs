@@ -10,6 +10,7 @@
 // así que sigue siendo `no_std` en las dos arquitecturas.
 #![cfg_attr(not(test), no_std)]
 
+pub mod acpi;
 pub mod cbor;
 pub mod claims;
 pub mod fault;
@@ -47,13 +48,17 @@ pub fn main<P: Platform>(p: &mut P) -> ! {
     let handlers = unsafe { p.install_fault_handlers() };
     probar_los_faults(p, handlers);
 
+    // Las tablas de ACPI, ya con el identity map puesto: recorrerlas es leer
+    // memoria física por todos lados.
+    let hw = leer_hardware(p, &machine);
+
     {
         let mut u = Umbilical::new(p);
         u.line(protocol::MARCA);
     }
 
     // Desde acá manda el protocolo: lo que sale es binario (D6).
-    protocol::serve(p, &machine)
+    protocol::serve(p, &machine, &hw)
 }
 
 /// La señal de vida, en texto, antes de que empiece el protocolo.
@@ -216,4 +221,51 @@ fn probar_los_faults<P: Platform>(p: &mut P, r: Result<(), &'static str>) {
             u.line("faults: el autotest no registro nada");
         }
     }
+}
+
+/// Recorre las tablas de ACPI y cuenta lo que encontró.
+///
+/// Que no haya ACPI no es un error: una placa embebida se describe con device
+/// tree y no tiene ninguna. Se dice y se sigue.
+fn leer_hardware<P: Platform>(p: &mut P, m: &Machine) -> acpi::Hardware {
+    use core::fmt::Write;
+
+    let hw = match m.tables.acpi {
+        None => acpi::Hardware::vacio(),
+        // SAFETY: el RSDP ya se verificó por firma y checksum, y el identity map
+        // de D12 cubre toda la memoria de la máquina.
+        Some(addr) => match unsafe { tables::read_acpi(addr) } {
+            None => acpi::Hardware::vacio(),
+            Some(rsdp) => unsafe { acpi::read(&rsdp) },
+        },
+    };
+
+    let mut u = Umbilical::new(p);
+    if hw.signatures.is_empty() {
+        u.line("acpi: sin tablas");
+        return hw;
+    }
+
+    let _ = write!(
+        u,
+        "acpi: {} tablas, {} nucleos ({} usables)\r\n",
+        hw.signatures.len(),
+        hw.cpus.len(),
+        hw.usable_cpus()
+    );
+    if let Some(i) = hw.interrupts {
+        let _ = write!(u, "  interrupciones: {} en {:#x}", i.kind, i.address);
+        if i.version != 0 {
+            let _ = write!(u, " v{}", i.version);
+        }
+        let _ = u.write_str("\r\n");
+    }
+    if let Some(x) = hw.pcie {
+        let _ = write!(
+            u,
+            "  pcie: config en {:#x}, buses {}-{}\r\n",
+            x.base, x.bus_start, x.bus_end
+        );
+    }
+    hw
 }
