@@ -3,11 +3,14 @@
 #![no_std]
 #![no_main]
 
+mod paging;
 mod uart;
 
 use core::ffi::c_void;
 use core::panic::PanicInfo;
-use kernel_core::{Machine, Platform};
+use kernel_core::machine::Machine;
+use kernel_core::paging::Mapping;
+use kernel_core::Platform;
 
 struct X86_64 {
     machine: Machine,
@@ -32,6 +35,10 @@ impl Platform for X86_64 {
 
     fn machine(&self) -> Machine {
         self.machine
+    }
+
+    unsafe fn install_page_tables(&mut self, m: &Machine) -> Result<Mapping, &'static str> {
+        paging::install(m)
     }
 }
 

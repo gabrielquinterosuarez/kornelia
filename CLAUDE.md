@@ -86,17 +86,18 @@ de commitear; CI corre exactamente ese script.
 
 ## Lo que sigue
 
-1. Parsear las tablas de ACPI que ya sabemos encontrar, para que `describe`
+1. `mem.claim`, `mem.read`, `mem.write` y `release`: reclamar memoria física y
+   subirle bytes. Ya no hay nada del kernel viviendo en memoria reclamable.
+2. Parsear las tablas de ACPI que ya sabemos encontrar, para que `describe`
    devuelva núcleos, PCIe y el controlador de interrupciones.
-2. `mem.claim` y `mem.write`: reclamar memoria física y subirle bytes.
 3. `exec` y la captura de faults como datos (D7/D11). **Ese es el hito que
    importa**: ahí el agente escribe código máquina, lo corre, y recibe el fault
    como valor de retorno en vez de un SIGSEGV.
 
-Deudas anotadas en `docs/DISENO.md` §7. La que bloquea `mem.claim`: **seguimos
-sobre las tablas de páginas del firmware**, que viven en memoria hoy informada
-como libre. Es D12 (identity map propio) y es requisito, no algo para después.
-La pila ya se resolvió: el kernel se muda a una propia y lo verifica.
+Deudas anotadas en `docs/DISENO.md` §7. Las dos que bloqueaban `mem.claim` ya
+están cerradas: el kernel corre sobre **pila propia** y **tablas de páginas
+propias**, las dos en memoria `Kind::Kernel`, y las dos verificadas contra el
+mapa real en cada arranque.
 
 ## Cómo correrlo
 

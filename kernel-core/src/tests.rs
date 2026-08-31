@@ -8,6 +8,7 @@
 use crate::cbor::{scan, Reader, Scan, Writer};
 use crate::machine::{Machine, Tables};
 use crate::memory::{Kind, Region};
+use crate::paging::{attr_of, span_gib, Attr, Mapping, GIB};
 use crate::platform::{Platform, Umbilical};
 use crate::tables::{read_acpi, read_device_tree};
 
@@ -42,6 +43,12 @@ impl Platform for Fake {
 
     fn machine(&self) -> Machine {
         Machine::mute("plataforma de prueba")
+    }
+
+    unsafe fn install_page_tables(&mut self, _m: &Machine) -> Result<Mapping, &'static str> {
+        // Una plataforma de mentira no tiene MMU que configurar. Lo que si se
+        // testea es el PLAN de mapeo, que es la parte portable.
+        Err("la plataforma de prueba no pagina")
     }
 }
 
@@ -459,4 +466,90 @@ fn un_hueco_sin_mapear_tampoco_es_nuestro() {
 fn sin_mapa_no_hay_nada_nuestro() {
     // Una maquina muda no puede afirmar que algo sea suyo.
     assert!(!Machine::mute("sin datos").is_ours(0x1000, 0x10));
+}
+
+// ---------------------------------------------------------------------------
+// El plan de mapeo (D12)
+// ---------------------------------------------------------------------------
+
+fn con(regiones: &'static [Region]) -> Machine {
+    Machine { regions: regiones, tables: Tables::default(), failure: None }
+}
+
+#[test]
+fn se_cubre_hasta_la_region_mas_alta_redondeando_para_arriba() {
+    // Un solo byte pasado el GiB obliga a mapear el GiB siguiente entero.
+    static UNO: [Region; 1] = [Region { start: 0, bytes: GIB + 1, kind: Kind::Free }];
+    assert_eq!(span_gib(&con(&UNO)), 2);
+
+    // Justo en el limite no hace falta uno mas.
+    static JUSTO: [Region; 1] = [Region { start: 0, bytes: GIB, kind: Kind::Free }];
+    assert_eq!(span_gib(&con(&JUSTO)), 1);
+
+    // Se cubre hasta arriba de todo, no hasta donde llega la RAM: ahi viven los
+    // BARs de PCIe.
+    static ALTO: [Region; 2] = [
+        Region { start: 0, bytes: GIB, kind: Kind::Free },
+        Region { start: 100 * GIB, bytes: GIB, kind: Kind::Mmio },
+    ];
+    assert_eq!(span_gib(&con(&ALTO)), 101);
+}
+
+#[test]
+fn una_pagina_con_ram_es_cacheable() {
+    static RAM: [Region; 1] = [Region { start: 0, bytes: GIB, kind: Kind::Free }];
+    assert_eq!(attr_of(&con(&RAM), 0), Attr::Memory);
+}
+
+/// El error caro y el barato no son simetricos: cachear un registro rompe el
+/// dispositivo, no cachear RAM solo la hace lenta.
+#[test]
+fn un_solo_registro_vuelve_toda_la_pagina_no_cacheable() {
+    static MIXTA: [Region; 2] = [
+        Region { start: 0, bytes: GIB - 4096, kind: Kind::Free },
+        // Una sola pagina de MMIO al final del GiB.
+        Region { start: GIB - 4096, bytes: 4096, kind: Kind::Mmio },
+    ];
+    assert_eq!(attr_of(&con(&MIXTA), 0), Attr::Device);
+}
+
+#[test]
+fn un_hueco_sin_nada_se_trata_como_dispositivo() {
+    static LEJOS: [Region; 1] = [Region { start: 0, bytes: GIB, kind: Kind::Free }];
+    // La pagina 5 no la menciona nadie: puede haber un dispositivo que este
+    // kernel todavia no sabe que existe.
+    assert_eq!(attr_of(&con(&LEJOS), 5), Attr::Device);
+}
+
+#[test]
+fn lo_que_la_maquina_no_supo_explicar_no_se_asume_ram() {
+    static RARAS: [Region; 3] = [
+        Region { start: 0, bytes: 4096, kind: Kind::Reserved },
+        Region { start: 4096, bytes: 4096, kind: Kind::Broken },
+        Region { start: 8192, bytes: 4096, kind: Kind::Other(77) },
+    ];
+    assert_eq!(attr_of(&con(&RARAS), 0), Attr::Device);
+}
+
+#[test]
+fn el_firmware_y_las_tablas_de_acpi_son_memoria() {
+    static FW: [Region; 2] = [
+        Region { start: 0, bytes: 4096, kind: Kind::Firmware },
+        Region { start: 4096, bytes: 4096, kind: Kind::AcpiTables },
+    ];
+    assert_eq!(attr_of(&con(&FW), 0), Attr::Memory);
+}
+
+/// Una region que arranca en una pagina y termina en la siguiente tiene que
+/// contar para las dos.
+#[test]
+fn una_region_a_caballo_afecta_a_las_dos_paginas() {
+    static CABALLO: [Region; 1] = [Region {
+        start: GIB - 4096,
+        bytes: 8192,
+        kind: Kind::Mmio,
+    }];
+    let m = con(&CABALLO);
+    assert_eq!(attr_of(&m, 0), Attr::Device);
+    assert_eq!(attr_of(&m, 1), Attr::Device);
 }

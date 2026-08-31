@@ -4,6 +4,7 @@
 //! kernel no sabe sobre qué silicio corre.
 
 use crate::machine::Machine;
+use crate::paging::Mapping;
 use core::fmt::{self, Write};
 
 pub trait Platform {
@@ -32,6 +33,18 @@ pub trait Platform {
     /// de la máquina y no algo atado a esta llamada. El núcleo no sabe si vino
     /// de UEFI, de un device tree o de una ROM de arranque (D24).
     fn machine(&self) -> Machine;
+
+    /// Arma las tablas de páginas del kernel y las carga (D12).
+    ///
+    /// El **qué** mapear lo decide `paging`, que es portable; el cómo escribir
+    /// una tabla es lo menos portable que hay y por eso cruza la frontera.
+    ///
+    /// # Safety
+    ///
+    /// Solo se puede llamar después de `ExitBootServices`: cambiar la
+    /// traducción con el firmware todavía vivo le saca el piso a sus propias
+    /// estructuras.
+    unsafe fn install_page_tables(&mut self, m: &Machine) -> Result<Mapping, &'static str>;
 }
 
 /// Escritor de texto sobre el cordón umbilical.

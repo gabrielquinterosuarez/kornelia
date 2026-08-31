@@ -138,6 +138,7 @@ Lo que sí existe:
 | CI (`.github/workflows/ci.yml`) | Llama al mismo portón, para que no haya chequeos que solo existan en una de las dos partes. |
 | **El protocolo CBOR** (D6) | Andando. Escrito a mano, sin dependencias; verificado contra los vectores canónicos del RFC 8949. |
 | **`describe`** | Andando: sirve `memory` y `tables`. Sin argumentos devuelve el índice, no un volcado (D16). |
+| **Tablas de páginas propias** (D12) | Andando en las dos. Identity map con páginas de 1 GiB; MMIO no cacheable. La raíz se relee del registro y se verifica contra el mapa. |
 | Los otros nueve verbos | Ninguno todavía. |
 
 Verificado el 2026-08-30 contra dos fuentes independientes: el mapa que imprime el kernel en
@@ -160,13 +161,14 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
    todavía no leemos. Mientras siga así, el cordón umbilical solo funciona en esa placa.
 3. **La Configuration Table no se captura.** Es donde viven los punteros a ACPI y al device
    tree. Sin eso no hay núcleos, ni PCIe, ni interrupciones: es lo próximo de `describe`.
-4. **Seguimos corriendo sobre las tablas de páginas del firmware.** UEFI las dejó armadas y
-   las heredamos; nunca armamos las nuestras. Esas tablas viven en memoria del firmware que
-   ahora se informa como libre, así que es exactamente el mismo problema que tenía la pila,
-   con dos agravantes: no se puede "mudar" con un `mov`, y si el agente las pisa no falla al
-   escribir sino en la próxima traducción de dirección, en cualquier parte. **Esto es D12** —
-   identity map de toda la RAM con páginas de 1 GiB, armado por nosotros — y es requisito de
-   `mem.claim`, no algo para después.
+4. **~~Seguimos sobre las tablas de páginas del firmware.~~ RESUELTO (D12).** El kernel arma
+   las suyas y las carga: identity map con páginas de 1 GiB, tablas en arreglos estáticos —
+   o sea dentro de la imagen, en memoria `Kind::Kernel`. El registro raíz (`CR3` / `TTBR0_EL1`)
+   se **relee** para confirmar que el cambio ocurrió, y se comprueba contra el mapa que la raíz
+   haya caído en memoria del kernel.
+
+   Con esto quedan cerradas las dos cosas nuestras que vivían en memoria reclamable, que era
+   lo que bloqueaba `mem.claim`.
 
 5. **Los atributos de cacheabilidad se descartan.** UEFI los informa por región y D12 los va a
    necesitar para mapear MMIO no-cacheable. Se normalizan cuando haga falta.

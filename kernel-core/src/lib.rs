@@ -13,6 +13,7 @@
 pub mod cbor;
 pub mod machine;
 pub mod memory;
+pub mod paging;
 pub mod platform;
 pub mod protocol;
 pub mod stack;
@@ -33,6 +34,16 @@ pub fn main<P: Platform>(p: &mut P) -> ! {
     let machine = p.machine();
 
     saludar(p, &machine);
+
+    // Después del banner y antes de la marca: si esto colgara, se sabe dónde.
+    // SAFETY: el firmware ya soltó la máquina (D25).
+    let tablas = unsafe { p.install_page_tables(&machine) };
+    reportar_tablas(p, tablas, &machine);
+
+    {
+        let mut u = Umbilical::new(p);
+        u.line(protocol::MARCA);
+    }
 
     // Desde acá manda el protocolo: lo que sale es binario (D6).
     protocol::serve(p, &machine)
@@ -82,7 +93,46 @@ fn saludar<P: Platform>(p: &mut P, m: &Machine) {
 
     u.line("");
     u.line("Sin procesos. Sin archivos. Sin shell. Sin usuarios.");
-    u.line(protocol::MARCA);
+}
+
+/// Cuenta cómo salió el mapeo (D12).
+///
+/// Que falle no es fatal hoy: se sigue con las tablas del firmware y el kernel
+/// anda. Pero `mem.claim` no se puede habilitar así, porque esas tablas viven
+/// en memoria que el mapa informa como libre — y por eso se dice fuerte.
+fn reportar_tablas<P: Platform>(
+    p: &mut P,
+    r: Result<paging::Mapping, &'static str>,
+    maq: &Machine,
+) {
+    use core::fmt::Write;
+    let mut u = Umbilical::new(p);
+
+    match r {
+        Ok(t) => {
+            let _ = write!(
+                u,
+                "tablas: {} GiB identity-mapeados ({} cacheables, {} de dispositivo)\r\n",
+                t.gib,
+                t.gib - t.device_gib,
+                t.device_gib
+            );
+            // Mismo cuidado que con la pila: si la raíz cayera en memoria
+            // reclamable, `mem.claim` podría entregársela al agente y la
+            // traducción se rompería en cualquier parte.
+            if maq.is_ours(t.root, 4096) {
+                let _ = write!(u, "  raiz en {:#x}, en memoria del kernel\r\n", t.root);
+            } else {
+                let _ = write!(u, "  raiz en {:#x} FUERA DE LA MEMORIA DEL KERNEL\r\n", t.root);
+                u.line("  mem.claim NO se puede habilitar asi.");
+            }
+        }
+        Err(motivo) => {
+            u.line("tablas: NO SE PUDIERON ARMAR, se sigue con las del firmware");
+            u.kv("  motivo", motivo);
+            u.line("  mem.claim NO se puede habilitar asi.");
+        }
+    }
 }
 
 /// Comprueba contra el mapa real que la pila esté en memoria del kernel.
