@@ -58,6 +58,10 @@ impl Platform for Fake {
         None
     }
 
+    unsafe fn exec(&mut self, _entry: u64, _region: (u64, u64)) -> crate::fault::Outcome {
+        crate::fault::Outcome { faulted: false, regs: &[], fault: None }
+    }
+
     unsafe fn install_page_tables(&mut self, _m: &Machine) -> Result<Mapping, &'static str> {
         // Una plataforma de mentira no tiene MMU que configurar. Lo que si se
         // testea es el PLAN de mapeo, que es la parte portable.

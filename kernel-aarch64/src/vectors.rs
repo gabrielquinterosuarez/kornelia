@@ -174,6 +174,16 @@ extern "C" fn fault_rust(m: &mut Marco) {
         return;
     }
 
+    // Si hay un `exec` en curso, hay a donde volver: se le cambia el destino al
+    // `eret`. En vez de devolverle el control al codigo que fallo, lo devuelve
+    // al punto de recuperacion, que le contesta al agente con este fault como
+    // dato (P5). Esto es lo que hace que el codigo del agente no pueda matar al
+    // kernel.
+    if unsafe { crate::exec::EXEC_ARMADO } != 0 {
+        m.elr = unsafe { crate::exec::EXEC_RIP };
+        return;
+    }
+
     let mut s = crate::Serie;
     let _ = s.write_str("\r\n");
     kernel_core::fault::report(&f, REGISTROS, &mut s);

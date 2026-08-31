@@ -80,10 +80,10 @@ Arranca por UEFI en x86_64 y aarch64, le toma la máquina al firmware y **habla
 CBOR** por el cordón umbilical. Corre sobre pila y tablas de páginas propias, y
 captura los faults en vez de reiniciarse.
 
-**Cinco de los diez verbos andan:** `describe`, `mem.claim`, `mem.read`,
-`mem.write` y `release`. El agente ya puede reclamar memoria física, escribirle
-y leerla de vuelta. Faltan `core.claim`, `exec`, `irq.install`,
-`irq.install_raw` y `dma.allow`.
+**Seis de los diez verbos andan:** `describe`, `mem.claim`, `mem.read`,
+`mem.write`, `release` y **`exec`**. El agente sube código máquina, lo corre, y
+si falla **el fault vuelve como respuesta en vez de matar la máquina** (P5).
+Faltan `core.claim`, `irq.install`, `irq.install_raw` y `dma.allow`.
 
 El portón es `./scripts/check.sh`: frontera + 26 tests + compila las dos + las
 bootea en QEMU y les habla el protocolo con `scripts/client.py`. Corrélo antes
@@ -91,14 +91,14 @@ de commitear; CI corre exactamente ese script.
 
 ## Lo que sigue
 
-1. **`exec`, y con él cerrar P5.** Es el hito que decide el experimento: el
-   agente sube código máquina, lo corre, y el fault vuelve como valor de retorno
-   en vez de matar nada. Los cimientos están: se puede subir código con
-   `mem.write` y los faults ya se capturan. Falta que el handler vuelva al bucle
-   del protocolo en vez de detener el núcleo, y que el fault viaje por CBOR.
+1. **Tapar el agujero que queda en P5:** si el código del agente rompe el
+   puntero de pila y después falla, todavía se lleva la máquina. Hace falta una
+   pila de excepción aparte — IST en x86_64 (con GDT y TSS propios), `SP_EL0`
+   para el agente y `SP_EL1` para las excepciones en aarch64.
 2. Parsear las tablas de ACPI que ya sabemos encontrar, para que `describe`
    devuelva núcleos, PCIe y el controlador de interrupciones.
-3. `core.claim`, `irq.install` y `dma.allow`.
+3. `core.claim`, `irq.install` y `dma.allow`. El último es el más grande:
+   IOMMU es VT-d en Intel y SMMU en ARM.
 
 Deudas anotadas en `docs/DISENO.md` §7. Las que bloqueaban `mem.claim` ya están
 cerradas: el kernel corre sobre **pila propia** y **tablas de páginas propias**,

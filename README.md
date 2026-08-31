@@ -18,11 +18,12 @@ Arranca por UEFI en **x86_64 y aarch64**, le toma la máquina al firmware
 (`ExitBootServices`) y **habla CBOR por el cordón umbilical** (D6). Corre sobre
 pila y tablas de páginas propias, y captura los faults en vez de reiniciarse.
 
-**Cinco de los diez verbos andan:** `describe`, `mem.claim`, `mem.read`,
-`mem.write` y `release`. Un agente ya puede preguntarle a la máquina qué es,
-reclamar memoria física, escribirle y leerla de vuelta.
+**Seis de los diez verbos andan:** `describe`, `mem.claim`, `mem.read`,
+`mem.write`, `release` y **`exec`**. Un agente ya puede preguntarle a la máquina
+qué es, reclamar memoria física, subirle código máquina y **correrlo** — y si
+ese código falla, el fault vuelve como respuesta en vez de matar la máquina.
 
-Faltan `core.claim`, `exec`, `irq.install`, `irq.install_raw` y `dma.allow`.
+Faltan `core.claim`, `irq.install`, `irq.install_raw` y `dma.allow`.
 
 ## Requisitos
 
@@ -73,7 +74,26 @@ un agente: arranca QEMU, espera la marca `-- CBOR --` y habla el protocolo.
 ./scripts/client.py --what tables --raw   # mostrando los bytes que viajan
 ./scripts/client.py --arch aarch64
 ./scripts/client.py --memoria             # el lazo: claim, write, read, release
+./scripts/client.py --exec                # sube codigo maquina y lo corre
 ```
+
+Con `--exec` se ve la tesis del proyecto en ocho bytes de código máquina:
+
+```
+un programa que anda: 48c7c0eeffc000c3        # mov rax, 0xC0FFEE ; ret
+  faulted=False
+  rax=0xc0ffee
+
+un programa que falla: 48b80000000000400000488900c3
+  faulted=True
+  fault: {'cause': 'page-fault', 'raw': 14, 'detail': 2, 'address': 70368744177664}
+
+la maquina sigue viva despues del fault
+```
+
+En un sistema operativo normal, el segundo programa sería un SIGSEGV y el
+proceso se moriría. Acá **es un valor de retorno**: causa, dirección tocada y
+todos los registros del instante exacto en que falló. El agente lo lee y corrige.
 
 Con `--memoria` se ve el primer momento en que el agente no solo mira la
 máquina sino que la **usa**:

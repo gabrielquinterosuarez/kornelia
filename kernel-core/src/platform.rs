@@ -3,7 +3,7 @@
 //! Todo lo que una arquitectura debe proveer vive en este trait. El resto del
 //! kernel no sabe sobre qué silicio corre.
 
-use crate::fault::Fault;
+use crate::fault::{Fault, Outcome};
 use crate::machine::Machine;
 use crate::paging::Mapping;
 use core::fmt::{self, Write};
@@ -71,6 +71,27 @@ pub trait Platform {
 
     /// El último fault capturado, si hubo alguno.
     fn last_fault(&self) -> Option<Fault>;
+
+    /// Salta a código máquina y vuelve con lo que haya pasado (P3, P5).
+    ///
+    /// El agente no es un participante en tiempo de ejecución: es un compilador
+    /// que escribe código que corre sin él. Esto es donde ese código corre.
+    ///
+    /// **Nunca mata al kernel.** Si el código falla, el handler desvía la
+    /// ejecución de vuelta acá y el fault se devuelve como dato, no como
+    /// muerte. Esa es la razón de ser de todo lo anterior.
+    ///
+    /// # Safety
+    ///
+    /// `entry` tiene que apuntar a memoria mapeada y ejecutable. Lo que haya
+    /// ahí puede ser cualquier cosa: el kernel no lo mira ni lo valida (P2).
+    ///
+    /// `region` es el reclamo entero donde vive ese código. Se pasa porque hay
+    /// arquitecturas donde la caché de instrucciones **no** es coherente con la
+    /// de datos: ahí, código recién escrito por el camino de datos no se ve
+    /// desde el camino de instrucciones hasta que alguien las sincroniza. En
+    /// x86_64 el hardware lo hace solo; en aarch64 hay que pedirlo.
+    unsafe fn exec(&mut self, entry: u64, region: (u64, u64)) -> Outcome;
 }
 
 /// Escritor de texto sobre el cordón umbilical.

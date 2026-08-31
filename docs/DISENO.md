@@ -123,7 +123,7 @@ mapeados en memoria. `describe` tiene que cubrir los dos modelos de descubrimien
 ## 7. Estado del código
 
 **Cuidado al leer este documento:** las secciones 4 y 6 son *especificación*, no descripción.
-De los diez verbos de la sección 4 hay **cinco** implementados; los otros cinco todavía no.
+De los diez verbos de la sección 4 hay **seis** implementados; los otros cuatro todavía no.
 
 Lo que sí existe:
 
@@ -139,9 +139,10 @@ Lo que sí existe:
 | **El protocolo CBOR** (D6) | Andando. Escrito a mano, sin dependencias; verificado contra los vectores canónicos del RFC 8949. |
 | **`describe`** | Andando: sirve `memory`, `tables` y `claims`. Sin argumentos devuelve el índice, no un volcado (D16). |
 | **`mem.claim` · `mem.read` · `mem.write` · `release`** | Andando. Reclamos por tamaño o por dirección exacta (así se pide MMIO), con alineación y tope. Los handles son de la máquina y no se reusan (D14). |
+| **`exec`** | Andando en las dos. **El fault vuelve como respuesta, no como muerte** (P5): el handler desvía el regreso al punto de recuperación en vez de detener el núcleo. Verificado con código máquina real que anda y código que falla. |
 | **Tablas de páginas propias** (D12) | Andando en las dos. Identity map con páginas de 1 GiB; MMIO no cacheable. La raíz se relee del registro y se verifica contra el mapa. |
 | **Captura de faults** (P5, D7) | Andando en las dos. Causa + crudo + dirección + registros. Autotest de breakpoint en cada arranque. Todavía no viaja por CBOR ni vuelve al agente. |
-| Los otros cinco verbos | `core.claim`, `exec`, `irq.install`, `irq.install_raw`, `dma.allow`. |
+| Los otros cuatro verbos | `core.claim`, `irq.install`, `irq.install_raw`, `dma.allow`. |
 
 Verificado el 2026-08-30 contra dos fuentes independientes: el mapa que imprime el kernel en
 aarch64 coincide con el device tree que genera QEMU (`memory@40000000` → primera región en esa
@@ -174,20 +175,32 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
    Con esto quedan cerradas las dos cosas nuestras que vivían en memoria reclamable, que era
    lo que bloqueaba `mem.claim`.
 
-5. **Los atributos de cacheabilidad que informa UEFI se descartan.** D12 anda igual porque la
+5. **Una pila rota durante `exec` todavía mata la máquina.** Si el código del agente destruye
+   el puntero de pila y después falla, el CPU intenta apilar el marco de excepción sobre una
+   pila inválida, y eso escala a doble y triple fault: la máquina se reinicia y no hay nada que
+   capturar. Es el agujero que queda en P5. Se arregla con una pila de excepción aparte: en
+   x86_64 con IST, que necesita GDT y TSS propios; en aarch64 corriendo el código del agente
+   con `SP_EL0` y tomando las excepciones con `SP_EL1`, que la arquitectura tiene bancados
+   justo para esto.
+
+6. **`exec` no recibe un estado inicial de registros**, aunque la sección 4 lo especifica. El
+   código recibe en el primer registro de argumento su propia dirección, y nada más. Y no se
+   puede elegir núcleo, porque `core.claim` no existe.
+
+7. **Los atributos de cacheabilidad que informa UEFI se descartan.** D12 anda igual porque la
    cacheabilidad se deduce de la *clase* de cada región, pero UEFI informa además atributos por
    región (`UC`, `WC`, `WT`, `WB`) que son más precisos que esa deducción. Mientras el grano del
    mapeo sea 1 GiB casi no cambia nada; cuando haya que mapear MMIO fino con `mem.claim`, sí.
 
-6. **~~No hay manejo de excepciones.~~ RESUELTO (P5, D7).** IDT en x86_64, tabla de vectores en
+4b. **~~No hay manejo de excepciones.~~ RESUELTO (P5, D7).** IDT en x86_64, tabla de vectores en
    aarch64. Un fault devuelve causa normalizada, el número crudo que usó la máquina, la
    dirección tocada y los registros con **sus** nombres (D3). El arranque provoca un breakpoint
    a propósito y comprueba que vuelva bien, en vez de suponerlo.
 
-   Lo que falta encima de esto: hoy un fault no recuperable se reporta y detiene el núcleo,
-   porque no hay a dónde volver. Cuando exista `exec`, el handler tiene que volver al bucle del
-   protocolo y devolverle el fault al agente como respuesta — que es el punto entero de P5. Y
-   los faults todavía no viajan por CBOR: salen en texto por el cordón.
+   Y con `exec` quedó cerrado el círculo: **durante un `exec`, un fault no detiene nada** — el
+   handler desvía el regreso al punto de recuperación y el fault vuelve al agente por CBOR.
+   Fuera de un `exec`, un fault sigue siendo un bug del kernel y detiene el núcleo, que es lo
+   correcto: ahí no hay a quién devolvérselo.
 
 ---
 

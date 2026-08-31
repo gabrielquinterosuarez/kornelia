@@ -3,13 +3,14 @@
 #![no_std]
 #![no_main]
 
+mod exec;
 mod vectors;
 mod paging;
 mod uart;
 
 use core::ffi::c_void;
 use core::panic::PanicInfo;
-use kernel_core::fault::Fault;
+use kernel_core::fault::{Fault, Outcome};
 use kernel_core::machine::Machine;
 use kernel_core::paging::Mapping;
 use kernel_core::Platform;
@@ -55,6 +56,13 @@ impl Platform for AArch64 {
 
     fn last_fault(&self) -> Option<Fault> {
         vectors::last()
+    }
+
+    unsafe fn exec(&mut self, entry: u64, region: (u64, u64)) -> Outcome {
+        // En aarch64 las dos caches NO son coherentes: hay que empujar lo
+        // escrito hasta donde lo ve el camino de instrucciones.
+        exec::sincronizar_cache(region.0, region.1);
+        exec::run(entry)
     }
 }
 

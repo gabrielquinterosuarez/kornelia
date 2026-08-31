@@ -247,6 +247,100 @@ def prueba_de_memoria(proc, timeout):
     return 0
 
 
+# Codigo maquina escrito a mano. Son los dos programas mas chicos que sirven
+# para probar las dos salidas de `exec`: volver bien y fallar.
+PROGRAMAS = {
+    "x86_64": {
+        # mov rax, 0x00C0FFEE ; ret
+        "ok": bytes([0x48, 0xC7, 0xC0, 0xEE, 0xFF, 0xC0, 0x00, 0xC3]),
+        # mov rax, 0x0000400000000000 ; mov [rax], rax ; ret
+        "falla": bytes([0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00,
+                        0x48, 0x89, 0x00, 0xC3]),
+        "registro": "rax",
+    },
+    "aarch64": {
+        # movz x0, #0xFFEE ; movk x0, #0xC0, lsl #16 ; ret
+        "ok": bytes([0xC0, 0xFD, 0x9F, 0xD2, 0x00, 0x18, 0xA0, 0xF2,
+                     0xC0, 0x03, 0x5F, 0xD6]),
+        # movz x9, #0x4000, lsl #32 ; str x9, [x9] ; ret
+        "falla": bytes([0x09, 0x00, 0xC8, 0xD2, 0x29, 0x01, 0x00, 0xF9,
+                        0xC0, 0x03, 0x5F, 0xD6]),
+        "registro": "x0",
+    },
+}
+
+
+def prueba_de_exec(proc, timeout, arch):
+    """Sube codigo maquina de verdad, lo corre, y comprueba las dos salidas.
+
+    Esta es la tesis del proyecto: el agente escribe codigo, lo corre, y si
+    esta mal el fault vuelve como un dato en vez de matar la maquina.
+    """
+    prog = PROGRAMAS[arch]
+    fallas = []
+
+    def pedir_verbo(n, verbo, args):
+        resp, _ = pedir(proc, [n, verbo, args], timeout)
+        _, ok, carga = resp
+        return ok, carga
+
+    for nombre, codigo, espera_fault in (
+        ("un programa que anda", prog["ok"], False),
+        ("un programa que falla", prog["falla"], True),
+    ):
+        ok, c = pedir_verbo(10, "mem.claim", {"bytes": 4096, "align": 4096})
+        if not ok:
+            fallas.append(f"{nombre}: no se pudo reclamar")
+            continue
+        h = c["handle"]
+
+        ok, _ = pedir_verbo(11, "mem.write", {"handle": h, "bytes": codigo})
+        if not ok:
+            fallas.append(f"{nombre}: no se pudo subir")
+            continue
+
+        print(f"  {nombre}: {codigo.hex()}")
+        ok, r = pedir_verbo(12, "exec", {"handle": h})
+        if not ok:
+            fallas.append(f"{nombre}: exec fallo: {r}")
+            continue
+
+        print(f"    faulted={r['faulted']}")
+        if r["faulted"] != espera_fault:
+            fallas.append(f"{nombre}: faulted={r['faulted']}, se esperaba {espera_fault}")
+
+        if espera_fault:
+            f = r["fault"]
+            print(f"    fault: {f}")
+            if not f or f.get("cause") != "page-fault":
+                fallas.append(f"{nombre}: la causa no es page-fault: {f}")
+            if f and f.get("address") != 0x400000000000:
+                fallas.append(f"{nombre}: la direccion no es la que se toco: {f}")
+        else:
+            reg = prog["registro"]
+            valor = r["registers"].get(reg)
+            print(f"    {reg}={valor:#x}")
+            if valor != 0xC0FFEE:
+                fallas.append(f"{nombre}: {reg}={valor:#x}, se esperaba 0xc0ffee")
+
+        pedir_verbo(13, "release", {"handle": h})
+
+    # Y lo mas importante: la maquina sigue contestando despues del fault.
+    ok, _ = pedir_verbo(14, "describe", {})
+    if not ok:
+        fallas.append("la maquina dejo de contestar despues del fault")
+    else:
+        print("  la maquina sigue viva despues del fault")
+
+    print()
+    if fallas:
+        for f in fallas:
+            print(f"  FALLA: {f}")
+        return 1
+    print("  exec: ok")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -254,6 +348,8 @@ def main():
     ap.add_argument("--what", help="secciones separadas por coma; sin esto pide el indice")
     ap.add_argument("--raw", action="store_true", help="mostrar los bytes que viajan")
     ap.add_argument("--timeout", type=float, default=90.0)
+    ap.add_argument("--exec", action="store_true", dest="ejecutar",
+                    help="sube codigo maquina de verdad y lo corre")
     ap.add_argument("--memoria", action="store_true",
                     help="prueba el lazo completo: claim, write, read, release")
     args = ap.parse_args()
@@ -290,10 +386,14 @@ def main():
 
         # El lazo de memoria va en el mismo arranque: cada booteo de QEMU son
         # quince segundos, y el porton hace esto por arquitectura.
+        rc = 0
         if args.memoria:
             print()
-            return prueba_de_memoria(proc, args.timeout)
-        return 0
+            rc |= prueba_de_memoria(proc, args.timeout)
+        if args.ejecutar:
+            print()
+            rc |= prueba_de_exec(proc, args.timeout, args.arch)
+        return rc
     finally:
         proc.kill()
         proc.wait()

@@ -3,13 +3,14 @@
 #![no_std]
 #![no_main]
 
+mod exec;
 mod idt;
 mod paging;
 mod uart;
 
 use core::ffi::c_void;
 use core::panic::PanicInfo;
-use kernel_core::fault::Fault;
+use kernel_core::fault::{Fault, Outcome};
 use kernel_core::machine::Machine;
 use kernel_core::paging::Mapping;
 use kernel_core::Platform;
@@ -55,6 +56,12 @@ impl Platform for X86_64 {
 
     fn last_fault(&self) -> Option<Fault> {
         idt::last()
+    }
+
+    unsafe fn exec(&mut self, entry: u64, _region: (u64, u64)) -> Outcome {
+        // x86_64 mantiene coherente la cache de instrucciones con la de datos:
+        // codigo recien escrito se ve sin pedir nada.
+        exec::run(entry)
     }
 }
 

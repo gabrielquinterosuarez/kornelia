@@ -128,3 +128,20 @@ pub fn report(f: &Fault, names: &[&str], out: &mut impl core::fmt::Write) {
         let _ = write!(out, "\r\n");
     }
 }
+
+/// Como termino un `exec`.
+///
+/// Las dos salidas son datos: que el codigo del agente falle no es una
+/// excepcion al funcionamiento normal, es el funcionamiento normal (P5). El
+/// agente es un generador estocastico de codigo maquina; va a fallar seguido, y
+/// cada falla tiene que volver como algo que se pueda leer y corregir.
+#[derive(Clone, Copy)]
+pub struct Outcome {
+    /// Si termino por un fault en vez de volver solo.
+    pub faulted: bool,
+    /// El estado de los registros al terminar, en el orden de
+    /// `Platform::REGISTERS`.
+    pub regs: &'static [u64],
+    /// Que paso, si fue un fault.
+    pub fault: Option<Fault>,
+}

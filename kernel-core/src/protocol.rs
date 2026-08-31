@@ -124,6 +124,7 @@ fn atender<P: Platform>(p: &mut P, req: &[u8], m: &Machine) {
         "mem.read" => mem_read(p, id, &mut r),
         "mem.write" => mem_write(p, id, &mut r),
         "release" => release(p, id, &mut r),
+        "exec" => exec(p, id, &mut r),
         _ => responder_error(p, id, "unknown verb"),
     }
 }
@@ -591,4 +592,92 @@ fn terminar<P: Platform>(p: &mut P, id: u64, w: Writer<'_>) {
         Some(bytes) => emitir(p, bytes),
         None => responder_error(p, id, "response too large"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// exec
+// ---------------------------------------------------------------------------
+
+/// Salta a codigo del agente y contesta con lo que haya pasado.
+///
+/// Es el verbo por el que existe todo lo anterior. El agente sube codigo con
+/// `mem.write` y lo corre aca; si falla, **el fault vuelve como respuesta** en
+/// vez de matar la maquina (P5). El kernel no mira ese codigo ni lo valida: no
+/// tiene una opinion sobre lo que el agente deberia hacer (P2).
+///
+/// Lo que todavia no hace: elegir nucleo —`core.claim` no existe, asi que corre
+/// en este— ni recibir un estado inicial de registros. El codigo recibe en el
+/// primer registro de argumento su propia direccion, para poder encontrar sus
+/// datos sin depender de donde lo hayan cargado.
+fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
+    let Some(a) = leer_args(r) else {
+        return responder_error(p, id, "malformed arguments");
+    };
+    let Some(handle) = a.handle else {
+        return responder_error(p, id, "exec needs handle");
+    };
+    let off = a.off.unwrap_or(0);
+
+    // Se comprueba que la entrada este adentro del reclamo. Un byte alcanza:
+    // hasta donde llega el codigo lo sabe el codigo, no el kernel.
+    let entrada = match claims::range_of(handle, off, 1) {
+        Err(e) => return responder_fallo(p, id, e),
+        Ok(dir) => dir,
+    };
+    // El reclamo entero, para que la arquitectura pueda sincronizar cachés.
+    let Some(c) = claims::get(handle) else {
+        return responder_fallo(p, id, claims::Error::NoSuchHandle);
+    };
+
+    // SAFETY: la direccion esta dentro de un reclamo vigente, y el identity map
+    // de D12 cubre toda la memoria de la maquina. Lo que haya ahi puede ser
+    // cualquier cosa — de eso se trata.
+    let salida = unsafe { p.exec(entrada, (c.start, c.bytes)) };
+
+    let out = unsafe { &mut *core::ptr::addr_of_mut!(OUTBOX) };
+    let mut w = Writer::new(out);
+    w.array(3);
+    w.uint(id);
+    // `true`: el pedido se atendio. Que el codigo haya fallado no es un fallo
+    // del pedido — es su resultado, y va adentro.
+    w.bool(true);
+
+    w.map(3);
+
+    w.text("faulted");
+    w.bool(salida.faulted);
+
+    // Los registros con los nombres de ESTA maquina (D3).
+    w.text("registers");
+    let nombres = P::REGISTERS;
+    let cuantos = nombres.len().min(salida.regs.len());
+    w.map(cuantos);
+    for i in 0..cuantos {
+        w.text(nombres[i]);
+        w.uint(salida.regs[i]);
+    }
+
+    w.text("fault");
+    match salida.fault {
+        None => w.null(),
+        Some(f) => {
+            let pares = if f.address.is_some() { 5 } else { 4 };
+            w.map(pares);
+            w.text("cause");
+            w.text(f.cause.code());
+            // El numero que uso la maquina, sin traducir (P4).
+            w.text("raw");
+            w.uint(f.raw);
+            w.text("detail");
+            w.uint(f.detail);
+            w.text("pc");
+            w.uint(f.pc);
+            if let Some(dir) = f.address {
+                w.text("address");
+                w.uint(dir);
+            }
+        }
+    }
+
+    terminar(p, id, w);
 }
