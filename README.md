@@ -172,7 +172,9 @@ grep -ao '[a-z0-9-]*@[0-9a-f]*' virt.dtb | sort -u
 | `kernel-core/src/machine.rs` | Lo que se sabe de la máquina: regiones y dónde están ACPI y el device tree. |
 | `kernel-core/src/tables.rs` | Lee y **verifica** los encabezados de ACPI y del device tree. |
 | `kernel-core/src/cbor.rs` | El formato binario del protocolo (D6), escrito a mano. |
-| `kernel-core/src/protocol.rs` | Los verbos. Hoy siete de los diez. |
+| `kernel-core/src/protocol.rs` | Los verbos. Hoy ocho de los once. |
+| `kernel-core/src/channel.rs` | El segundo canal: el buzón que arma el agente (D17, D28). |
+| `kernel-core/src/serial.rs` | El buffer entre el timbre del cable y el bucle. |
 | `kernel-core/src/claims.rs` | La tabla de handles: qué tiene reclamado el agente (D14). |
 | `kernel-core/src/fault.rs` | Los faults como datos (P5): causa, dirección y registros. |
 | `kernel-core/src/acpi.rs` | Recorre las tablas de ACPI: núcleos, interrupciones y PCIe. |
