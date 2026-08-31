@@ -7,7 +7,14 @@
 //!
 //! El firmware UEFI ya lo dejó configurado, así que no hace falta init.
 
-const PL011_BASE: usize = 0x0900_0000;
+/// La direccion de la maquina `virt` de QEMU.
+///
+/// Esta horneada porque el kernel necesita poder hablar antes de leer ninguna
+/// tabla de ACPI. Pero **no se da por buena**: el arranque la contrasta contra
+/// lo que dice la tabla SPCR y avisa si no coinciden (ver `Platform::uart_address`).
+pub const BASE: u64 = 0x0900_0000;
+
+const PL011_BASE: usize = BASE as usize;
 
 const UARTDR: usize = PL011_BASE + 0x00; // dato
 const UARTFR: usize = PL011_BASE + 0x18; // banderas

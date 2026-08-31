@@ -61,6 +61,10 @@ impl Platform for X86_64 {
         idt::last()
     }
 
+    fn uart_address(&self) -> Option<u64> {
+        None
+    }
+
     fn this_core(&self) -> u64 {
         smp::this_core()
     }

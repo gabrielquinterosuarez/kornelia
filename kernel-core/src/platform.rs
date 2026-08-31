@@ -95,6 +95,19 @@ pub trait Platform {
     /// x86_64 el hardware lo hace solo; en aarch64 hay que pedirlo.
     unsafe fn exec(&mut self, entry: u64, region: (u64, u64)) -> Outcome;
 
+    /// Dónde tiene esta arquitectura los registros del UART, o `None` si no
+    /// están en memoria.
+    ///
+    /// Existe para poder **contrastarlo contra lo que dice la máquina**: hay una
+    /// tabla de ACPI (SPCR) que informa dónde está la consola, y el kernel
+    /// arranca con esa dirección horneada porque necesita poder hablar antes de
+    /// leer ninguna tabla. Comparar las dos convierte una suposición en un dato
+    /// comprobado (P4).
+    ///
+    /// En x86_64 el UART no está en memoria sino en puertos de E/S, que son otro
+    /// espacio de direcciones: ahí devuelve `None`.
+    fn uart_address(&self) -> Option<u64>;
+
     /// El identificador del núcleo sobre el que corre el kernel.
     ///
     /// Es el que atiende el protocolo, y por eso es el único que no se puede

@@ -62,6 +62,10 @@ impl Platform for Fake {
         crate::fault::Outcome { faulted: false, regs: &[], fault: None }
     }
 
+    fn uart_address(&self) -> Option<u64> {
+        None
+    }
+
     fn this_core(&self) -> u64 {
         0
     }
@@ -1113,4 +1117,57 @@ fn el_estado_de_un_nucleo_se_puede_corregir() {
         cores::settle(slot, cores::State::Failed);
         assert_eq!(cores::all().next().unwrap().state, cores::State::Failed);
     });
+}
+
+/// El controlador que recibe las interrupciones de los aparatos, y las
+/// interrupciones viejas de PC que esta maquina movio de numero.
+#[test]
+fn se_lee_el_ioapic_y_los_numeros_movidos() {
+    let mut cuerpo = vec![0u8; 8];
+    // Tipo 1: el IO-APIC. Direccion en el offset 4 de la entrada, primer
+    // numero global en el 8.
+    let mut ioapic = vec![0u8; 10];
+    ioapic[2..6].copy_from_slice(&0xFEC0_0000u32.to_le_bytes());
+    ioapic[6..10].copy_from_slice(&0u32.to_le_bytes());
+    cuerpo.extend(entrada(1, &ioapic));
+
+    // Tipo 2: la interrupcion 4 (el serie de la PC) esta en la 20.
+    let mut over = vec![0u8; 8];
+    over[1] = 4; // source, en el offset 3 de la entrada
+    over[2..6].copy_from_slice(&20u32.to_le_bytes());
+    cuerpo.extend(entrada(2, &over));
+
+    let (xsdt, _fijas) = maquina_acpi(&[tabla_acpi(b"APIC", &cuerpo)]);
+    let hw = leer(&xsdt);
+
+    let io = hw.ioapic.expect("no encontro el IO-APIC");
+    assert_eq!(io.address, 0xFEC0_0000);
+    assert_eq!(io.gsi_base, 0);
+
+    // La 4 se movio a la 20; las que no estan en la tabla no cambiaron.
+    assert_eq!(hw.gsi_of(4), 20);
+    assert_eq!(hw.gsi_of(1), 1, "una interrupcion sin override no cambia");
+}
+
+/// La maquina diciendo donde tiene su consola, en vez de que la supongamos.
+#[test]
+fn se_lee_donde_esta_el_puerto_serie() {
+    let mut cuerpo = vec![0u8; 22]; // hasta el offset 58 de la tabla
+    // La direccion vive adentro de una estructura generica que arranca en el
+    // offset 40 de la tabla; la direccion misma en el 44, o sea el 8 del cuerpo.
+    cuerpo[8..16].copy_from_slice(&0x0900_0000u64.to_le_bytes());
+    // El numero de interrupcion, en el 54 de la tabla = 18 del cuerpo.
+    cuerpo[18..22].copy_from_slice(&33u32.to_le_bytes());
+
+    let (xsdt, _fijas) = maquina_acpi(&[tabla_acpi(b"SPCR", &cuerpo)]);
+    let sp = leer(&xsdt).serial.expect("no encontro el puerto serie");
+    assert_eq!(sp.address, 0x0900_0000);
+    assert_eq!(sp.gsi, 33);
+}
+
+/// Una SPCR mas corta de lo que el campo necesita no se lee a medias.
+#[test]
+fn una_spcr_truncada_no_inventa_nada() {
+    let (xsdt, _fijas) = maquina_acpi(&[tabla_acpi(b"SPCR", &[0u8; 4])]);
+    assert!(leer(&xsdt).serial.is_none());
 }

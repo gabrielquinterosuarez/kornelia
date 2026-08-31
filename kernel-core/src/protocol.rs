@@ -225,7 +225,7 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
         }
         if q.tables {
             w.text("tables");
-            escribir_tablas(&mut w, m);
+            escribir_tablas(&mut w, m, hw);
         }
         if q.claims {
             w.text("claims");
@@ -252,13 +252,41 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
             match hw.interrupts {
                 None => w.null(),
                 Some(i) => {
-                    w.map(3);
+                    w.map(6);
                     w.text("kind");
                     w.text(i.kind);
                     w.text("address");
                     w.uint(i.address);
                     w.text("version");
                     w.uint(i.version as u64);
+                    // La parte del GIC que mira cada nucleo. Cero en x86_64.
+                    w.text("cpu_interface");
+                    w.uint(i.cpu_interface);
+                    // Quien recibe las interrupciones de los aparatos en x86_64.
+                    w.text("ioapic");
+                    match hw.ioapic {
+                        None => w.null(),
+                        Some(io) => {
+                            w.map(2);
+                            w.text("address");
+                            w.uint(io.address);
+                            w.text("gsi_base");
+                            w.uint(io.gsi_base as u64);
+                        }
+                    }
+                    // Donde esta el puerto serie y por que interrupcion avisa,
+                    // si la maquina lo dice (P4).
+                    w.text("serial");
+                    match hw.serial {
+                        None => w.null(),
+                        Some(sp) => {
+                            w.map(2);
+                            w.text("address");
+                            w.uint(sp.address);
+                            w.text("gsi");
+                            w.uint(sp.gsi as u64);
+                        }
+                    }
                 }
             }
         }
@@ -378,8 +406,8 @@ fn escribir_memoria(w: &mut Writer<'_>, m: &Machine) {
 }
 
 /// Donde la maquina guarda su propia descripcion, ya verificada.
-fn escribir_tablas(w: &mut Writer<'_>, m: &Machine) {
-    w.map(3);
+fn escribir_tablas(w: &mut Writer<'_>, m: &Machine, hw: &Hardware) {
+    w.map(4);
 
     w.text("acpi");
     match m.tables.acpi {
@@ -438,6 +466,15 @@ fn escribir_tablas(w: &mut Writer<'_>, m: &Machine) {
                 }
             }
         }
+    }
+
+    // Las firmas de todas las tablas de ACPI que hay, se interpreten o no:
+    // informar que existe algo que este kernel todavia no lee es mas util que
+    // callarlo (P4).
+    w.text("acpi_signatures");
+    w.array(hw.signatures.len());
+    for f in hw.signatures {
+        w.text(core::str::from_utf8(f).unwrap_or("????"));
     }
 
     w.text("smbios");

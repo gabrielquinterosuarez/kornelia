@@ -231,6 +231,9 @@ fn probar_los_faults<P: Platform>(p: &mut P, r: Result<(), &'static str>) {
 fn leer_hardware<P: Platform>(p: &mut P, m: &Machine) -> acpi::Hardware {
     use core::fmt::Write;
 
+    // Se pide antes de tomar el cordón: `Umbilical` toma prestado `p`.
+    let p_uart = p.uart_address();
+
     let hw = match m.tables.acpi {
         None => acpi::Hardware::vacio(),
         // SAFETY: el RSDP ya se verificó por firma y checksum, y el identity map
@@ -261,6 +264,28 @@ fn leer_hardware<P: Platform>(p: &mut P, m: &Machine) -> acpi::Hardware {
         }
         let _ = u.write_str("\r\n");
     }
+    // Lo que la maquina dice del puerto serie, contra lo que teniamos horneado.
+    match (hw.serial, p_uart) {
+        (Some(sp), Some(nuestra)) if sp.address != nuestra => {
+            let _ = write!(
+                u,
+                "  serie: LA MAQUINA DICE {:#x} Y USAMOS {:#x}\r\n",
+                sp.address, nuestra
+            );
+        }
+        (Some(sp), Some(_)) => {
+            let _ = write!(u, "  serie: {:#x} confirmado por la maquina", sp.address);
+            if sp.gsi != 0 {
+                let _ = write!(u, ", interrupcion {}", sp.gsi);
+            }
+            let _ = u.write_str("\r\n");
+        }
+        (Some(sp), None) => {
+            let _ = write!(u, "  serie: la maquina lo pone en {:#x}\r\n", sp.address);
+        }
+        (None, _) => {}
+    }
+
     if let Some(x) = hw.pcie {
         let _ = write!(
             u,

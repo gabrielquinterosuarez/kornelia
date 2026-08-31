@@ -164,7 +164,9 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
 
    **Pero el problema de fondo no está cerrado:** la pila era *una* de las cosas nuestras que
    vivían en memoria que `ExitBootServices` convirtió en libre. Sigue estando la siguiente.
-2. **La dirección del PL011 sigue horneada** en `kernel-aarch64/src/uart.rs` (`0x0900_0000`, la
+2. **~~La dirección del PL011 sigue horneada.~~ COMPROBADA.** Sigue escrita a mano porque el kernel necesita poder hablar antes de leer ninguna tabla, pero ya no se da por buena: el arranque la contrasta contra la tabla SPCR de ACPI —que es la máquina diciendo dónde tiene su consola— y avisa si no coinciden. En QEMU `virt` coincide: `0x9000000`, interrupción 33. Lo que falta para cerrarla del todo es *usar* la que dice la tabla en vez de la propia, que solo importa en una placa donde no coincidan.
+
+   **Nota vieja:** *La dirección del PL011 estaba horneada* en `kernel-aarch64/src/uart.rs` (`0x0900_0000`, la
    placa `virt` de QEMU). La fuente legítima es el device tree —o la tabla SPCR de ACPI—, que
    todavía no leemos. Mientras siga así, el cordón umbilical solo funciona en esa placa.
 3. **~~Las tablas de ACPI se encuentran pero no se leen.~~ RESUELTO.** Se recorre el XSDT

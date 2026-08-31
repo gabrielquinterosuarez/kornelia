@@ -60,6 +60,10 @@ impl Platform for AArch64 {
         vectors::last()
     }
 
+    fn uart_address(&self) -> Option<u64> {
+        Some(uart::BASE)
+    }
+
     fn this_core(&self) -> u64 {
         smp::this_core()
     }
