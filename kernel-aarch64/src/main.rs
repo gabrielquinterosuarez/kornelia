@@ -6,6 +6,7 @@
 mod exec;
 mod vectors;
 mod paging;
+mod percpu;
 mod smp;
 mod uart;
 
@@ -48,7 +49,7 @@ impl Platform for AArch64 {
     const REGISTERS: &'static [&'static str] = vectors::REGISTROS;
 
     unsafe fn install_fault_handlers(&mut self) -> Result<(), &'static str> {
-        vectors::install()
+        vectors::install(percpu::RANURA_ARRANQUE)
     }
 
     fn trigger_breakpoint(&mut self) {

@@ -27,30 +27,14 @@
 
 use kernel_core::fault::Outcome;
 
-#[no_mangle]
-pub static mut EXEC_ARMADO: u64 = 0;
-
-#[no_mangle]
-pub static mut EXEC_RIP: u64 = 0;
-
-#[no_mangle]
-static mut EXEC_SP: u64 = 0;
-
-/// En el orden de `vectors::REGISTROS`: x0..x30, pc, pstate.
-#[no_mangle]
-static mut EXEC_REGS: [u64; 33] = [0; 33];
-
-/// 64 KiB de pila para el codigo del agente, aparte de la del kernel.
+/// 64 KiB de pila de agente para cada nucleo.
 const TAM_PILA_AGENTE: usize = 64 * 1024;
 
 #[repr(C, align(16))]
-struct PilaAgente([u8; TAM_PILA_AGENTE]);
+struct PilasAgente([[u8; TAM_PILA_AGENTE]; crate::percpu::RANURAS]);
 
-static mut PILA_AGENTE: PilaAgente = PilaAgente([0; TAM_PILA_AGENTE]);
-
-/// La cima de esa pila.
-#[no_mangle]
-static mut EXEC_PILA: u64 = 0;
+static mut PILAS_AGENTE: PilasAgente =
+    PilasAgente([[0; TAM_PILA_AGENTE]; crate::percpu::RANURAS]);
 
 core::arch::global_asm!(
     r#"
@@ -58,6 +42,9 @@ core::arch::global_asm!(
 .globl exec_trampolin
 
 // x0 = direccion de entrada. Devuelve 0 si volvio solo, 1 si hubo fault.
+//
+// Todo lo que toca esta en el bloque privado de este nucleo, que sale de
+// TPIDR_EL1. Los offsets son los del struct `PerCpu`, verificados al compilar.
 exec_trampolin:
     stp x29, x30, [sp, #-96]!
     stp x19, x20, [sp, #16]
@@ -66,25 +53,21 @@ exec_trampolin:
     stp x25, x26, [sp, #64]
     stp x27, x28, [sp, #80]
 
+    mrs  x20, tpidr_el1               // el bloque de este nucleo
+
     // Se arma el punto de recuperacion ANTES de saltar.
     adrp x9,  exec_recuperacion
     add  x9,  x9, :lo12:exec_recuperacion
-    adrp x10, EXEC_RIP
-    str  x9,  [x10, :lo12:EXEC_RIP]
-
+    str  x9,  [x20, #8]               // rip
     mov  x9,  sp
-    adrp x10, EXEC_SP
-    str  x9,  [x10, :lo12:EXEC_SP]
-
+    str  x9,  [x20, #16]              // sp del kernel
     mov  x9,  #1
-    adrp x10, EXEC_ARMADO
-    str  x9,  [x10, :lo12:EXEC_ARMADO]
+    str  x9,  [x20, #0]               // armado
 
     // La pila del agente, en SP_EL0. Desde el `msr spsel, #0` hasta el de
     // vuelta, `sp` es la suya; la nuestra queda intacta en SP_EL1.
-    adrp x11, EXEC_PILA
-    ldr  x11, [x11, :lo12:EXEC_PILA]
-    msr  sp_el0, x11
+    ldr  x9,  [x20, #24]
+    msr  sp_el0, x9
     msr  spsel, #0
 
     // El codigo recibe en x0 su propia direccion.
@@ -92,14 +75,13 @@ exec_trampolin:
     blr  x9
 
     // Volvio solo. Se fotografian los registros; nada de esto usa la pila.
-    adrp x10, EXEC_REGS
-    add  x10, x10, :lo12:EXEC_REGS
+    add  x10, x20, #32                // donde arranca regs
     stp  x0,  x1,  [x10, #(0 * 8)]
     stp  x2,  x3,  [x10, #(2 * 8)]
     stp  x4,  x5,  [x10, #(4 * 8)]
     stp  x6,  x7,  [x10, #(6 * 8)]
     stp  x8,  x9,  [x10, #(8 * 8)]
-    // x10 se esta usando de puntero: se guarda cero en vez de mentir.
+    // x10 es el puntero y x20 el bloque: se guarda cero en vez de mentir.
     str  xzr,      [x10, #(10 * 8)]
     stp  x11, x12, [x10, #(11 * 8)]
     stp  x13, x14, [x10, #(13 * 8)]
@@ -118,8 +100,7 @@ exec_trampolin:
 
     // Recien ahora se vuelve a la pila del kernel y se desarma.
     msr  spsel, #1
-    adrp x10, EXEC_ARMADO
-    str  xzr, [x10, :lo12:EXEC_ARMADO]
+    str  xzr, [x20, #0]
 
     mov  x0,  #0
     b    exec_salida
@@ -127,11 +108,10 @@ exec_trampolin:
 exec_recuperacion:
     // Aca aterriza el `eret` del handler cuando hubo fault. Ya llega con
     // SPSel=1 porque el handler se lo prendio al SPSR; falta ponerle el valor.
-    adrp x9,  EXEC_SP
-    ldr  x9,  [x9, :lo12:EXEC_SP]
-    mov  sp,  x9
-    adrp x10, EXEC_ARMADO
-    str  xzr, [x10, :lo12:EXEC_ARMADO]
+    mrs  x9,  tpidr_el1
+    ldr  x10, [x9, #16]
+    mov  sp,  x10
+    str  xzr, [x9, #0]
     mov  x0,  #1
 
 exec_salida:
@@ -155,7 +135,12 @@ extern "C" {
 ///
 /// `entry` tiene que apuntar a memoria mapeada y ejecutable.
 pub unsafe fn run(entry: u64) -> Outcome {
-    EXEC_PILA = core::ptr::addr_of!(PILA_AGENTE) as u64 + TAM_PILA_AGENTE as u64;
+    let ranura = crate::percpu::ranura();
+    let bloque = crate::percpu::bloque(ranura);
+
+    // La pila de agente de este nucleo.
+    (*bloque).pila =
+        core::ptr::addr_of!(PILAS_AGENTE) as u64 + ((ranura + 1) * TAM_PILA_AGENTE) as u64;
 
     let hubo_fault = exec_trampolin(entry) != 0;
 
@@ -163,15 +148,14 @@ pub unsafe fn run(entry: u64) -> Outcome {
         // El handler ya dejo anotado el fault, con los registros del momento
         // exacto en que fallo — que son mas utiles que los de ahora.
         let f = crate::vectors::last();
-        Outcome {
-            faulted: true,
-            regs: f.map(|f| f.regs).unwrap_or(&[]),
-            fault: f,
-        }
+        Outcome { faulted: true, regs: f.map(|f| f.regs).unwrap_or(&[]), fault: f }
     } else {
         Outcome {
             faulted: false,
-            regs: &*core::ptr::addr_of!(EXEC_REGS),
+            regs: core::slice::from_raw_parts(
+                core::ptr::addr_of!((*bloque).regs) as *const u64,
+                33,
+            ),
             fault: None,
         }
     }

@@ -7,6 +7,7 @@ mod exec;
 mod gdt;
 mod idt;
 mod paging;
+mod percpu;
 mod smp;
 mod uart;
 
@@ -49,7 +50,7 @@ impl Platform for X86_64 {
     const REGISTERS: &'static [&'static str] = idt::REGISTROS;
 
     unsafe fn install_fault_handlers(&mut self) -> Result<(), &'static str> {
-        idt::install()
+        idt::install(percpu::RANURA_ARRANQUE)
     }
 
     fn trigger_breakpoint(&mut self) {

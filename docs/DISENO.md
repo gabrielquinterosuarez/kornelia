@@ -195,17 +195,21 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
    código recibe en el primer registro de argumento su propia dirección, y nada más. Y no se
    puede elegir núcleo, porque `core.claim` no existe.
 
-7. **Un núcleo reclamado todavía no puede recibir trabajo.** Arranca, se configura solo y queda
+7. **Al reportar un fault, dos núcleos que fallan a la vez entrelazan la salida del cordón.**
+   No se corrompe nada —el estado del fault ya es por núcleo— pero el texto sale mezclado y se
+   lee mal. Cuando los faults viajen por CBOR en vez de por texto deja de importar.
+
+8. **Un núcleo reclamado todavía no puede recibir trabajo.** Arranca, se configura solo y queda
    esperando, pero `exec` corre siempre en el núcleo que atiende el protocolo: falta un buzón por
    núcleo y que `exec` acepte a cuál mandarle el trabajo, que es lo que la sección 4 especifica
    (`exec(core, handle, off, regs)`).
 
-8. **Un test falló una vez y no reprodujo.** Ocurrió una sola vez en la suite de `kernel-core` y
+9. **Un test falló una vez y no reprodujo.** Ocurrió una sola vez en la suite de `kernel-core` y
    no se repitió en veinte corridas seguidas. Se auditó lo único que puede causarlo —los tests
    que tocan las tablas globales de reclamos y de núcleos— y todos toman el mismo candado. **No
    está diagnosticado**; queda anotado para no darlo por inexistente si vuelve a pasar.
 
-9. **Los atributos de cacheabilidad que informa UEFI se descartan.** D12 anda igual porque la
+10. **Los atributos de cacheabilidad que informa UEFI se descartan.** D12 anda igual porque la
    cacheabilidad se deduce de la *clase* de cada región, pero UEFI informa además atributos por
    región (`UC`, `WC`, `WT`, `WB`) que son más precisos que esa deducción. Mientras el grano del
    mapeo sea 1 GiB casi no cambia nada; cuando haya que mapear MMIO fino con `mem.claim`, sí.

@@ -64,8 +64,10 @@ pub const REGISTROS: &[&str] = &[
     "r13", "r14", "r15", "rip", "rflags",
 ];
 
-static mut VALORES: [u64; REGISTROS.len()] = [0; REGISTROS.len()];
-static mut ULTIMO: Option<Fault> = None;
+/// Uno por nucleo: dos que fallan a la vez no se pisan el reporte.
+static mut VALORES: [[u64; REGISTROS.len()]; crate::percpu::RANURAS] =
+    [[0; REGISTROS.len()]; crate::percpu::RANURAS];
+static mut ULTIMO: [Option<Fault>; crate::percpu::RANURAS] = [None; crate::percpu::RANURAS];
 
 core::arch::global_asm!(
     r#"
@@ -197,13 +199,17 @@ extern "sysv64" fn fault_rust(m: &mut Marco) {
         None
     };
 
+    // De quien es este fault. Una sola lectura de un registro del CPU: adentro
+    // de un handler no se puede depender de memoria compartida.
+    let ranura = crate::percpu::ranura();
+
     let regs = unsafe {
-        let v = &mut *core::ptr::addr_of_mut!(VALORES);
+        let v = &mut (*core::ptr::addr_of_mut!(VALORES))[ranura];
         *v = [
             m.rax, m.rbx, m.rcx, m.rdx, m.rsi, m.rdi, m.rbp, m.rsp, m.r8, m.r9, m.r10, m.r11,
             m.r12, m.r13, m.r14, m.r15, m.rip, m.rflags,
         ];
-        &*core::ptr::addr_of!(VALORES)
+        &(*core::ptr::addr_of!(VALORES))[ranura]
     };
 
     let f = Fault {
@@ -214,7 +220,7 @@ extern "sysv64" fn fault_rust(m: &mut Marco) {
         address,
         regs,
     };
-    unsafe { ULTIMO = Some(f) };
+    unsafe { (*core::ptr::addr_of_mut!(ULTIMO))[ranura] = Some(f) };
 
     if cause.resumable() {
         // En x86 un `int3` es un trap: RIP ya quedo apuntando a la instruccion
@@ -227,8 +233,8 @@ extern "sysv64" fn fault_rust(m: &mut Marco) {
     // al punto de recuperacion, que le contesta al agente con este fault como
     // dato (P5). Esto es lo que hace que el codigo del agente no pueda matar al
     // kernel.
-    if unsafe { crate::exec::EXEC_ARMADO } != 0 {
-        m.rip = unsafe { crate::exec::EXEC_RIP };
+    if crate::percpu::armado() != 0 {
+        m.rip = crate::percpu::punto_de_retorno();
         return;
     }
 
@@ -292,10 +298,14 @@ struct Descriptor {
 ///
 /// Los stubs tienen que estar mapeados y ejecutables, que lo estan porque son
 /// parte de la imagen del kernel.
-pub unsafe fn install() -> Result<(), &'static str> {
-    // Primero la GDT: sin un TSS ahi adentro no existe la pila de excepcion, y
+pub unsafe fn install(ranura: usize) -> Result<(), &'static str> {
+    // Primero el bloque privado: el handler lo lee para saber de quien es el
+    // fault, asi que tiene que estar puesto antes de que pueda haber uno.
+    crate::percpu::instalar(ranura);
+
+    // Despues la GDT: sin un TSS ahi adentro no existe la pila de excepcion, y
     // las entradas de abajo la piden.
-    crate::gdt::install()?;
+    crate::gdt::install(ranura)?;
 
     let idt = &mut *core::ptr::addr_of_mut!(IDT);
 
@@ -329,6 +339,7 @@ pub fn breakpoint() {
     unsafe { core::arch::asm!("int3", options(nomem, nostack)) }
 }
 
+/// El ultimo fault de **este** nucleo.
 pub fn last() -> Option<Fault> {
-    unsafe { ULTIMO }
+    unsafe { (*core::ptr::addr_of!(ULTIMO))[crate::percpu::ranura()] }
 }

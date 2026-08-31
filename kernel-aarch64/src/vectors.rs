@@ -39,8 +39,10 @@ pub const REGISTROS: &[&str] = &[
     "x27", "x28", "x29", "x30", "pc", "pstate",
 ];
 
-static mut VALORES: [u64; REGISTROS.len()] = [0; REGISTROS.len()];
-static mut ULTIMO: Option<Fault> = None;
+/// Uno por nucleo: dos que fallan a la vez no se pisan el reporte.
+static mut VALORES: [[u64; REGISTROS.len()]; crate::percpu::RANURAS] =
+    [[0; REGISTROS.len()]; crate::percpu::RANURAS];
+static mut ULTIMO: [Option<Fault>; crate::percpu::RANURAS] = [None; crate::percpu::RANURAS];
 
 core::arch::global_asm!(
     r#"
@@ -156,16 +158,19 @@ extern "C" fn fault_rust(m: &mut Marco) {
     )
     .then_some(far);
 
+    // De quien es este fault. Una sola lectura de un registro del CPU.
+    let ranura = crate::percpu::ranura();
+
     let regs = unsafe {
-        let v = &mut *core::ptr::addr_of_mut!(VALORES);
+        let v = &mut (*core::ptr::addr_of_mut!(VALORES))[ranura];
         v[..31].copy_from_slice(&m.x);
         v[31] = m.elr;
         v[32] = m.spsr;
-        &*core::ptr::addr_of!(VALORES)
+        &(*core::ptr::addr_of!(VALORES))[ranura]
     };
 
     let f = Fault { cause, raw: ec, detail: iss, pc: m.elr, address, regs };
-    unsafe { ULTIMO = Some(f) };
+    unsafe { (*core::ptr::addr_of_mut!(ULTIMO))[ranura] = Some(f) };
 
     if cause.resumable() {
         // ELR apunta al `brk` mismo: sin correrlo, se reejecuta para siempre.
@@ -179,8 +184,8 @@ extern "C" fn fault_rust(m: &mut Marco) {
     // al punto de recuperacion, que le contesta al agente con este fault como
     // dato (P5). Esto es lo que hace que el codigo del agente no pueda matar al
     // kernel.
-    if unsafe { crate::exec::EXEC_ARMADO } != 0 {
-        m.elr = unsafe { crate::exec::EXEC_RIP };
+    if crate::percpu::armado() != 0 {
+        m.elr = crate::percpu::punto_de_retorno();
         // El codigo del agente corria sobre SP_EL0, asi que el SPSR guardado
         // dice que hay que volver ahi. Se le prende el bit para volver a
         // SP_EL1: la pila del agente puede ser justo lo que se rompio.
@@ -216,7 +221,11 @@ fn traducir(ec: u64) -> Cause {
 /// # Safety
 ///
 /// Solo desde EL1.
-pub unsafe fn install() -> Result<(), &'static str> {
+pub unsafe fn install(ranura: usize) -> Result<(), &'static str> {
+    // El bloque privado primero: el handler lo lee para saber de quien es el
+    // fault, asi que tiene que estar puesto antes de que pueda haber uno.
+    crate::percpu::instalar(ranura);
+
     let dir = core::ptr::addr_of!(VECTORES) as u64;
     if dir % 2048 != 0 {
         return Err("la tabla de vectores no quedo alineada a 2048");
@@ -238,6 +247,7 @@ pub fn breakpoint() {
     unsafe { core::arch::asm!("brk #0", options(nomem, nostack)) }
 }
 
+/// El ultimo fault de **este** nucleo.
 pub fn last() -> Option<Fault> {
-    unsafe { ULTIMO }
+    unsafe { (*core::ptr::addr_of!(ULTIMO))[crate::percpu::ranura()] }
 }

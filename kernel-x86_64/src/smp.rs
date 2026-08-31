@@ -155,7 +155,7 @@ extern "sysv64" fn ap_main(slot: u64) -> ! {
     // Su propia tabla de excepciones y su GDT: hasta aca corria con las del
     // trampolin, que no tienen ni TSS ni handlers.
     unsafe {
-        let _ = crate::idt::install();
+        let _ = crate::idt::install(slot as usize);
     }
 
     cores::arrived(slot as usize, this_core());

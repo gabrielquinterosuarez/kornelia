@@ -24,8 +24,14 @@
 pub const CODIGO: u16 = 0x08;
 /// Selector del segmento de datos.
 pub const DATOS: u16 = 0x10;
-/// Selector del TSS. Ocupa dos entradas porque en 64 bits el descriptor mide 16.
-const TSS: u16 = 0x18;
+/// El primer selector de TSS. Cada nucleo tiene el suyo, y cada descriptor
+/// ocupa dos entradas porque en 64 bits mide 16 bytes.
+const TSS_BASE: u16 = 0x18;
+
+/// El selector del TSS de esa ranura.
+fn selector_tss(ranura: usize) -> u16 {
+    TSS_BASE + (ranura as u16) * 16
+}
 
 /// Cual de las siete pilas de la IST usan las excepciones. La 1.
 pub const IST_FAULTS: u8 = 1;
@@ -35,9 +41,12 @@ pub const IST_FAULTS: u8 = 1;
 const TAM_PILA: usize = 16 * 1024;
 
 #[repr(C, align(16))]
-struct Pila([u8; TAM_PILA]);
+struct Pilas([[u8; TAM_PILA]; crate::percpu::RANURAS]);
 
-static mut PILA_EXCEPCION: Pila = Pila([0; TAM_PILA]);
+/// Una pila de excepcion por nucleo. Compartirlas seria que dos nucleos que
+/// fallan a la vez se pisen el marco de excepcion — corrupcion adentro del
+/// mecanismo que existe para que nada se corrompa en silencio.
+static mut PILAS_EXCEPCION: Pilas = Pilas([[0; TAM_PILA]; crate::percpu::RANURAS]);
 
 /// El TSS de 64 bits. De todo lo que tiene, lo unico que se usa es `ist[0]`.
 ///
@@ -60,21 +69,28 @@ struct Tss {
     iomap: u16,
 }
 
-static mut TSS_ACTUAL: Tss = Tss {
-    _reservado0: 0,
-    rsp: [0; 3],
-    _reservado1: 0,
-    ist: [0; 7],
-    _reservado2: 0,
-    _reservado3: 0,
-    iomap: core::mem::size_of::<Tss>() as u16,
-};
+static mut TSS_POR_NUCLEO: [Tss; crate::percpu::RANURAS] = [const {
+    Tss {
+        _reservado0: 0,
+        rsp: [0; 3],
+        _reservado1: 0,
+        ist: [0; 7],
+        _reservado2: 0,
+        _reservado3: 0,
+        iomap: core::mem::size_of::<Tss>() as u16,
+    }
+}; crate::percpu::RANURAS];
 
-/// Cinco huecos de 8 bytes: nulo, codigo, datos y dos para el TSS.
+/// Nulo, codigo, datos, y dos huecos por cada TSS.
+const ENTRADAS_GDT: usize = 3 + 2 * crate::percpu::RANURAS;
+
 #[repr(C, align(16))]
-struct Gdt([u64; 5]);
+struct Gdt([u64; ENTRADAS_GDT]);
 
-static mut GDT: Gdt = Gdt([0; 5]);
+/// La tabla es una sola y la comparten todos los nucleos: los descriptores son
+/// de solo lectura una vez armados. Lo que cambia por nucleo es **cual TSS
+/// carga cada uno**.
+static mut GDT: Gdt = Gdt([0; ENTRADAS_GDT]);
 
 #[repr(C, packed)]
 struct Descriptor {
@@ -87,12 +103,16 @@ struct Descriptor {
 /// # Safety
 ///
 /// Solo despues de `ExitBootServices`: se reemplaza la GDT del firmware.
-pub unsafe fn install() -> Result<(), &'static str> {
-    let tss = &mut *core::ptr::addr_of_mut!(TSS_ACTUAL);
+pub unsafe fn install(ranura: usize) -> Result<(), &'static str> {
+    if ranura >= crate::percpu::RANURAS {
+        return Err("ranura fuera de rango");
+    }
 
-    // La pila crece hacia abajo, asi que la IST apunta al final.
-    let pila = core::ptr::addr_of!(PILA_EXCEPCION) as u64 + TAM_PILA as u64;
-    tss.ist[(IST_FAULTS - 1) as usize] = pila;
+    let tss = &mut (*core::ptr::addr_of_mut!(TSS_POR_NUCLEO))[ranura];
+
+    // La pila crece hacia abajo, asi que la IST apunta al final de la suya.
+    let pilas = core::ptr::addr_of!(PILAS_EXCEPCION) as u64;
+    tss.ist[(IST_FAULTS - 1) as usize] = pilas + ((ranura + 1) * TAM_PILA) as u64;
 
     let gdt = &mut *core::ptr::addr_of_mut!(GDT);
     gdt.0[0] = 0;
@@ -101,18 +121,23 @@ pub unsafe fn install() -> Result<(), &'static str> {
     // Datos: presente, anillo 0, escribible.
     gdt.0[2] = 0x00CF_9200_0000_FFFF;
 
-    // El descriptor del TSS son 16 bytes y lleva la direccion partida en cuatro
-    // pedazos salteados. Es una herencia de cuando las direcciones eran de 24
-    // bits y se fue estirando sin mover lo que ya estaba.
-    let base = core::ptr::addr_of!(*tss) as u64;
-    let limite = (core::mem::size_of::<Tss>() - 1) as u64;
-    gdt.0[3] = limite & 0xFFFF
-        | (base & 0xFF_FFFF) << 16
-        // 0x89: presente, anillo 0, TSS de 64 bits disponible.
-        | 0x89 << 40
-        | ((limite >> 16) & 0xF) << 48
-        | ((base >> 24) & 0xFF) << 56;
-    gdt.0[4] = base >> 32;
+    // Un descriptor por TSS. Son 16 bytes y llevan la direccion partida en
+    // cuatro pedazos salteados: herencia de cuando las direcciones eran de 24
+    // bits y el formato se fue estirando sin mover lo que ya estaba.
+    //
+    // Se arman todos, no solo el propio: la tabla es compartida y el nucleo que
+    // llegue despues necesita encontrar el suyo ya puesto.
+    for i in 0..crate::percpu::RANURAS {
+        let otro = core::ptr::addr_of!((*core::ptr::addr_of!(TSS_POR_NUCLEO))[i]) as u64;
+        let limite = (core::mem::size_of::<Tss>() - 1) as u64;
+        gdt.0[3 + i * 2] = limite & 0xFFFF
+            | (otro & 0xFF_FFFF) << 16
+            // 0x89: presente, anillo 0, TSS de 64 bits disponible.
+            | 0x89 << 40
+            | ((limite >> 16) & 0xF) << 48
+            | ((otro >> 24) & 0xFF) << 56;
+        gdt.0[4 + i * 2] = otro >> 32;
+    }
 
     let d = Descriptor {
         limite: (core::mem::size_of::<Gdt>() - 1) as u16,
@@ -144,7 +169,7 @@ pub unsafe fn install() -> Result<(), &'static str> {
         descriptor = in(reg) &d,
         codigo = in(reg) CODIGO as u64,
         datos = in(reg) DATOS as u64,
-        tss = in(reg) TSS as u64,
+        tss = in(reg) selector_tss(ranura) as u64,
         tmp = out(reg) _,
         // Sin `nostack`: este bloque apila para el salto lejano.
         options(preserves_flags),

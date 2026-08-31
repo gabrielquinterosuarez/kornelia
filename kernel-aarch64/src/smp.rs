@@ -122,6 +122,11 @@ extern "C" fn ap_main(slot: u64) -> ! {
     // de arriba son banderas, no parte del numero.
     unsafe { core::arch::asm!("mrs {}, mpidr_el1", out(reg) mpidr, options(nomem, nostack)) };
 
+    // Su propio bloque privado y su tabla de excepciones.
+    unsafe {
+        let _ = crate::vectors::install(slot as usize);
+    }
+
     cores::arrived(slot as usize, mpidr & 0x00FF_FFFF);
 
     // Y a esperar trabajo. Todavia no hay forma de darselo: `exec` corre en el

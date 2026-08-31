@@ -17,7 +17,7 @@
 //! Es la misma idea que un `setjmp`/`longjmp`, pero sin necesidad de uno: el
 //! salto ya lo hace el `iretq`, solo hay que cambiarle el destino.
 //!
-//! # La pila del agente esta aparte (P5)
+//! # Tres pilas (P5)
 //!
 //! El codigo del agente corre en su propia pila, no en la del kernel. Y las
 //! excepciones entran en una **tercera**, la de la IST, a la que el CPU cambia
@@ -25,45 +25,24 @@
 //!
 //! Sin eso, el agente podia matar la maquina sin siquiera querer: bastaba con
 //! romper RSP y despues fallar, porque el marco de excepcion se apilaba sobre
-//! esa pila rota y eso escalaba a doble y triple fault. Con las tres pilas
-//! separadas, romper la suya no le saca al kernel ni el piso ni la capacidad de
-//! contar lo que paso.
+//! esa pila rota y eso escalaba a doble y triple fault.
+//!
+//! # Y las tres son por nucleo
+//!
+//! Todo el estado de aca vive en el bloque privado de cada nucleo, alcanzable
+//! por `gs:` (ver `percpu`). Compartirlo seria que dos nucleos corriendo codigo
+//! del agente a la vez se pisen el punto de retorno — y volver al punto de
+//! retorno del otro es una forma particularmente confusa de fallar.
 
 use kernel_core::fault::Outcome;
 
-/// El punto de recuperacion esta armado. Lo lee el handler.
-#[no_mangle]
-pub static mut EXEC_ARMADO: u64 = 0;
-
-/// A donde saltar si hay fault. Lo escribe el trampolin, lo lee el handler.
-#[no_mangle]
-pub static mut EXEC_RIP: u64 = 0;
-
-/// La pila del kernel, para recuperarla: la del agente puede estar en cualquier
-/// lado cuando falle.
-#[no_mangle]
-static mut EXEC_RSP: u64 = 0;
-
-/// Los registros tal como quedaron al volver bien. En el orden de
-/// `idt::REGISTROS`.
-#[no_mangle]
-static mut EXEC_REGS: [u64; 18] = [0; 18];
-
-/// 64 KiB de pila para el codigo del agente.
-///
-/// Aparte de la del kernel a proposito: el agente puede desbordarla o dejarla
-/// en cualquier lado sin llevarse puesto nada nuestro. Y como las excepciones
-/// entran por la IST, romperla tampoco impide capturar el fault.
-const TAM_PILA_AGENTE: usize = 64 * 1024;
+/// 64 KiB de pila para el codigo del agente de cada nucleo.
+const TAM_PILA: usize = 64 * 1024;
 
 #[repr(C, align(16))]
-struct PilaAgente([u8; TAM_PILA_AGENTE]);
+struct Pilas([[u8; TAM_PILA]; crate::percpu::RANURAS]);
 
-static mut PILA_AGENTE: PilaAgente = PilaAgente([0; TAM_PILA_AGENTE]);
-
-/// La cima de esa pila, que es por donde se empieza.
-#[no_mangle]
-static mut EXEC_PILA: u64 = 0;
+static mut PILAS_AGENTE: Pilas = Pilas([[0; TAM_PILA]; crate::percpu::RANURAS]);
 
 core::arch::global_asm!(
     r#"
@@ -71,6 +50,10 @@ core::arch::global_asm!(
 .globl exec_trampolin
 
 // rdi = direccion de entrada. Devuelve 0 si volvio solo, 1 si hubo fault.
+//
+// Todo lo que toca esta en el bloque privado de este nucleo, que se alcanza con
+// el prefijo `gs:`. Los numeros son los offsets del struct `PerCpu`, y estan
+// verificados en tiempo de compilacion del lado de Rust.
 //
 // OJO: el argumento va en RDI porque esto se declara `extern "sysv64"` del lado
 // de Rust. En el target `x86_64-unknown-uefi`, `extern "C"` NO es System V sino
@@ -86,58 +69,54 @@ exec_trampolin:
 
     // Se arma el punto de recuperacion ANTES de saltar.
     lea rax, [rip + exec_recuperacion]
-    mov qword ptr [rip + EXEC_RIP], rax
-    mov qword ptr [rip + EXEC_RSP], rsp
-    mov qword ptr [rip + EXEC_ARMADO], 1
+    mov gs:[8], rax                    // rip
+    mov gs:[16], rsp                   // rsp del kernel
+    mov qword ptr gs:[0], 1            // armado
 
     // El codigo recibe en rdi su propia direccion, para poder encontrar sus
     // datos sin depender de donde lo hayan cargado.
     mov rax, rdi
     // Y corre en su propia pila: si la rompe, la del kernel queda entera.
-    mov rsp, qword ptr [rip + EXEC_PILA]
+    mov rsp, gs:[24]
     call rax
 
     // Volvio solo. El punto de recuperacion sigue armado mientras se toma la
-    // foto, porque la foto tambien apila: si la pila del agente quedo rota,
-    // este push falla y se captura como cualquier otro fault.
-    push rax
-    lea rax, [rip + EXEC_REGS]
-    mov [rax + 8],   rbx
-    mov [rax + 16],  rcx
-    mov [rax + 24],  rdx
-    mov [rax + 32],  rsi
-    mov [rax + 40],  rdi
-    mov [rax + 48],  rbp
-    mov [rax + 64],  r8
-    mov [rax + 72],  r9
-    mov [rax + 80],  r10
-    mov [rax + 88],  r11
-    mov [rax + 96],  r12
-    mov [rax + 104], r13
-    mov [rax + 112], r14
-    mov [rax + 120], r15
-    // rcx ya quedo guardado, asi que sirve de andamio para el rax de verdad.
-    pop rcx
-    mov [rax + 0],   rcx
-    // El rsp con el que quedo el agente, no el nuestro.
-    mov [rax + 56],  rsp
+    // foto: `pushfq` de mas abajo tambien apila, y si la pila del agente quedo
+    // rota eso falla y se captura como cualquier otro fault.
+    mov gs:[32],  rax                  // regs[0]
+    mov gs:[40],  rbx
+    mov gs:[48],  rcx
+    mov gs:[56],  rdx
+    mov gs:[64],  rsi
+    mov gs:[72],  rdi
+    mov gs:[80],  rbp
+    mov gs:[88],  rsp                  // el rsp con el que quedo el agente
+    mov gs:[96],  r8
+    mov gs:[104], r9
+    mov gs:[112], r10
+    mov gs:[120], r11
+    mov gs:[128], r12
+    mov gs:[136], r13
+    mov gs:[144], r14
+    mov gs:[152], r15
     // El codigo ya volvio: no hay un "donde estaba ejecutando" que informar.
-    mov qword ptr [rax + 128], 0
+    mov qword ptr gs:[160], 0
     pushfq
-    pop rdx
-    mov [rax + 136], rdx
+    pop rax
+    mov gs:[168], rax
 
     // Recien ahora se vuelve a la pila del kernel y se desarma.
-    mov rsp, qword ptr [rip + EXEC_RSP]
-    mov qword ptr [rip + EXEC_ARMADO], 0
+    mov rsp, gs:[16]
+    mov qword ptr gs:[0], 0
     xor eax, eax
     jmp exec_salida
 
 exec_recuperacion:
     // Aca aterriza el `iretq` del handler cuando hubo fault. La pila del agente
-    // puede estar rota, asi que lo primero es recuperar la nuestra.
-    mov rsp, qword ptr [rip + EXEC_RSP]
-    mov qword ptr [rip + EXEC_ARMADO], 0
+    // puede estar rota, asi que lo primero es recuperar la nuestra — y eso se
+    // puede hacer porque `gs:` no depende de la pila.
+    mov rsp, gs:[16]
+    mov qword ptr gs:[0], 0
     mov eax, 1
 
 exec_salida:
@@ -159,9 +138,16 @@ extern "sysv64" {
 ///
 /// # Safety
 ///
-/// `entry` tiene que apuntar a memoria mapeada y ejecutable.
+/// `entry` tiene que apuntar a memoria mapeada y ejecutable. Corre en el nucleo
+/// que la llama, sobre la pila de agente de ese nucleo.
 pub unsafe fn run(entry: u64) -> Outcome {
-    EXEC_PILA = core::ptr::addr_of!(PILA_AGENTE) as u64 + TAM_PILA_AGENTE as u64;
+    let ranura = crate::percpu::ranura();
+    let bloque = crate::percpu::bloque(ranura);
+
+    // La pila de agente de este nucleo. Se pone en cada llamada y no una vez al
+    // arrancar: es barato, y asi no hay un orden de inicializacion que recordar.
+    (*bloque).pila =
+        core::ptr::addr_of!(PILAS_AGENTE) as u64 + ((ranura + 1) * TAM_PILA) as u64;
 
     let hubo_fault = exec_trampolin(entry) != 0;
 
@@ -169,15 +155,14 @@ pub unsafe fn run(entry: u64) -> Outcome {
         // El handler ya dejo anotado el fault, con los registros del momento
         // exacto en que fallo — que son mas utiles que los de ahora.
         let f = crate::idt::last();
-        Outcome {
-            faulted: true,
-            regs: f.map(|f| f.regs).unwrap_or(&[]),
-            fault: f,
-        }
+        Outcome { faulted: true, regs: f.map(|f| f.regs).unwrap_or(&[]), fault: f }
     } else {
         Outcome {
             faulted: false,
-            regs: &*core::ptr::addr_of!(EXEC_REGS),
+            regs: core::slice::from_raw_parts(
+                core::ptr::addr_of!((*bloque).regs) as *const u64,
+                18,
+            ),
             fault: None,
         }
     }
