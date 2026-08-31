@@ -98,7 +98,7 @@ interrupciones y PCIe, leídos de ACPI.
 `core.claim` arranca los otros núcleos: PSCI en aarch64, INIT/SIPI más un
 trampolín de 16→32→64 bits en x86_64.
 
-Faltan `irq.install`, `irq.install_raw` y `dma.allow`.
+Falta uno: `dma.allow`, el IOMMU.
 
 El portón es `./scripts/check.sh`: frontera + 69 tests + compila las dos + las
 bootea en QEMU y les habla el protocolo con `scripts/client.py`. Corrélo antes

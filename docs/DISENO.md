@@ -2,9 +2,9 @@
 
 **Estado:** las dos arquitecturas arrancan por UEFI, le toman la máquina al firmware y
 **hablan el protocolo CBOR** por el cordón umbilical. Corren sobre pila y tablas de páginas
-propias, capturan los faults como datos, y **ocho de los once verbos andan**: el agente
+propias, capturan los faults como datos, y **diez de los once verbos andan**: el agente
 reclama memoria, sube código máquina, lo corre, y arranca los otros núcleos.
-Faltan `irq.install`, `irq.install_raw` y `dma.allow`.
+Falta uno: `dma.allow`, el IOMMU.
 **Última actualización:** 2026-08-31
 
 ---
