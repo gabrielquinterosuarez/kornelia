@@ -17,13 +17,17 @@
 //! Es la misma idea que un `setjmp`/`longjmp`, pero sin necesidad de uno: el
 //! salto ya lo hace el `iretq`, solo hay que cambiarle el destino.
 //!
-//! # Limite conocido
+//! # La pila del agente esta aparte (P5)
 //!
-//! Si el codigo del agente rompe RSP y despues falla, el CPU intenta apilar el
-//! marco de excepcion sobre una pila invalida y eso escala a doble y triple
-//! fault: la maquina se reinicia y no hay nada que capturar. La solucion es una
-//! pila de excepcion aparte (IST), que necesita GDT y TSS propios. Queda
-//! anotado como deuda.
+//! El codigo del agente corre en su propia pila, no en la del kernel. Y las
+//! excepciones entran en una **tercera**, la de la IST, a la que el CPU cambia
+//! *antes* de apilar el marco (ver `gdt`).
+//!
+//! Sin eso, el agente podia matar la maquina sin siquiera querer: bastaba con
+//! romper RSP y despues fallar, porque el marco de excepcion se apilaba sobre
+//! esa pila rota y eso escalaba a doble y triple fault. Con las tres pilas
+//! separadas, romper la suya no le saca al kernel ni el piso ni la capacidad de
+//! contar lo que paso.
 
 use kernel_core::fault::Outcome;
 
