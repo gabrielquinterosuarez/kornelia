@@ -539,6 +539,82 @@ def prueba_de_timbre(proc, timeout, arch):
     return 0
 
 
+def prueba_de_permiso(proc, timeout, arch):
+    """Memoria pedida para el agente, y la prueba de que el bit esta puesto.
+
+    La comprobacion no es mirar lo que dice el kernel: es que una memoria
+    marcada para el agente **deja de ser ejecutable con privilegio**. Asi que si
+    el bit se puso de verdad, correr codigo ahi con `exec` tiene que fallar con
+    un fault de permiso al buscar la instruccion.
+    """
+    fallas = []
+
+    def pedir_verbo(n, verbo, args):
+        resp, _ = pedir(proc, [n, verbo, args], timeout)
+        _, ok, carga = resp
+        return ok, carga
+
+    ret = (0xD65F03C0).to_bytes(4, "little") if arch == "aarch64" else b"\xc3"
+
+    # Primero, memoria comun: correr ahi tiene que andar.
+    ok, c = pedir_verbo(80, "mem.claim", {"bytes": 4096, "align": 4096})
+    if not ok:
+        print(f"  no se pudo reclamar: {c}")
+        return 1
+    print(f"  memoria comun:      user={c['user']}, {c['bytes']} bytes")
+    if c["user"]:
+        fallas.append("una memoria que no se pidio para el agente vino marcada")
+    pedir_verbo(81, "mem.write", {"handle": c["handle"], "bytes": ret})
+    ok, r = pedir_verbo(82, "exec", {"handle": c["handle"]})
+    if not ok or r.get("faulted"):
+        fallas.append(f"no se pudo correr codigo en memoria comun: {r}")
+    else:
+        print("    y el kernel puede correr codigo ahi")
+
+    # Ahora memoria para el agente.
+    ok, u = pedir_verbo(83, "mem.claim", {"bytes": 4096, "user": True})
+    if not ok:
+        print(f"  no se pudo reclamar para el agente: {u}")
+        return 1
+    print(f"  para el agente:     user={u['user']}, {u['bytes']} bytes, en {u['start']:#x}")
+    if not u["user"]:
+        fallas.append("se pidio para el agente y no quedo marcada")
+    # Pedirlo redondea al bloque de la tabla: el kernel informa lo que quedo.
+    if u["bytes"] < 2 * 1024 * 1024:
+        fallas.append(f"no se redondeo al bloque: {u['bytes']} bytes")
+    if u["start"] % (2 * 1024 * 1024) != 0:
+        fallas.append(f"no quedo alineada al bloque: {u['start']:#x}")
+
+    pedir_verbo(84, "mem.write", {"handle": u["handle"], "bytes": ret})
+    ok, r = pedir_verbo(85, "exec", {"handle": u["handle"]})
+    if ok and not r.get("faulted"):
+        fallas.append("el kernel pudo correr codigo en memoria del agente: el bit NO se puso")
+    else:
+        # Cada arquitectura lo cuenta a su manera: aarch64 dice que no pudo
+        # buscar la instruccion, x86 lo reporta como fault de pagina.
+        causa = r.get("fault", {}).get("cause") if ok else "?"
+        print(f"    y el kernel YA NO puede correr codigo ahi: {causa}")
+
+    # Y al soltarla, el permiso se saca: si quedara, seria un agujero silencioso.
+    pedir_verbo(86, "release", {"handle": u["handle"]})
+    ok, v = pedir_verbo(87, "mem.claim", {"at": u["start"], "bytes": 4096})
+    if ok:
+        pedir_verbo(88, "mem.write", {"handle": v["handle"], "bytes": ret})
+        ok2, r2 = pedir_verbo(89, "exec", {"handle": v["handle"]})
+        if not ok2 or r2.get("faulted"):
+            fallas.append("al soltarla no se le saco el permiso")
+        else:
+            print("    y al soltarla vuelve a ser del kernel")
+
+    print()
+    if fallas:
+        for f in fallas:
+            print(f"  FALLA: {f}")
+        return 1
+    print("  permiso: ok")
+    return 0
+
+
 def prueba_durante_exec(proc, timeout, arch):
     """El handler del agente corre DURANTE un exec largo (D9, D29).
 
@@ -826,6 +902,8 @@ def main():
                     help="cuantos nucleos darle a QEMU")
     ap.add_argument("--exec", action="store_true", dest="ejecutar",
                     help="sube codigo maquina de verdad y lo corre")
+    ap.add_argument("--permiso", action="store_true",
+                    help="pide memoria alcanzable sin privilegio y comprueba que el bit este")
     ap.add_argument("--durante", action="store_true",
                     help="el handler del agente corre durante un exec largo")
     ap.add_argument("--handler", action="store_true",
@@ -898,6 +976,9 @@ def main():
         if args.durante:
             print()
             rc |= prueba_durante_exec(proc, args.timeout, args.arch)
+        if args.permiso:
+            print()
+            rc |= prueba_de_permiso(proc, args.timeout, args.arch)
         return rc
     finally:
         proc.kill()

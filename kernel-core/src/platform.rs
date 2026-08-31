@@ -150,6 +150,26 @@ pub trait Platform {
         raw: bool,
     ) -> Result<Doorbell, handlers::Error>;
 
+    /// Marca un rango como alcanzable —o no— desde el nivel sin privilegio.
+    ///
+    /// El permiso es una propiedad de **la memoria**, no de la corrida: se pide
+    /// al reclamarla y se comprueba al usarla (D27). Ponerlo en cada `exec`
+    /// obligaría a tocar las tablas en caliente, y dos reclamos que compartan
+    /// bloque se pisarían el permiso sin que nadie se entere.
+    ///
+    /// El grano es el bloque de `paging::BLOQUE`, así que el rango tiene que
+    /// estar alineado y ser múltiplo de eso. El que llama se encarga.
+    ///
+    /// # Safety
+    ///
+    /// El rango tiene que estar mapeado y no ser memoria del kernel.
+    unsafe fn set_user_access(
+        &mut self,
+        start: u64,
+        bytes: u64,
+        user: bool,
+    ) -> Result<(), &'static str>;
+
     /// Prende o apaga la atención a los timbres en **este** núcleo.
     ///
     /// Existe para **establecer** el estado en vez de heredarlo del firmware.

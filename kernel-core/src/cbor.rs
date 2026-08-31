@@ -333,6 +333,19 @@ impl<'a> Reader<'a> {
         }
     }
 
+    /// Un `true` o un `false`.
+    pub fn bool(&mut self) -> Option<bool> {
+        let guardado = self.pos;
+        match self.head() {
+            Some((7, 21)) => Some(true),
+            Some((7, 20)) => Some(false),
+            _ => {
+                self.pos = guardado;
+                None
+            }
+        }
+    }
+
     /// Saltea el item que viene, sea lo que sea.
     ///
     /// Es lo que permite ignorar una clave que este kernel no conoce sin perder

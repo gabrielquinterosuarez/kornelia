@@ -39,7 +39,7 @@ const MAX_NIVEL1: usize = 8;
 
 /// Cuantos pedazos de 1 GiB se pueden partir en bloques de 2 MiB.
 ///
-/// Se parten los que tienen memoria del kernel adentro, que son uno o dos.
+/// Se parten los que tienen kernel o memoria libre adentro: uno o dos.
 const MAX_NIVEL2: usize = 4;
 
 #[repr(C, align(4096))]
@@ -112,22 +112,22 @@ pub unsafe fn install(m: &Machine) -> Result<Mapping, &'static str> {
         };
 
         if !paging::needs_split(m, gib) {
-            // Sin memoria del kernel adentro: un bloque de 1 GiB entero, y el
-            // agente lo alcanza.
+            // Nada que distinguir adentro: un bloque de 1 GiB entero, del
+            // kernel — de ahi no salen reclamos.
             n1[cual].0[cual_entrada] =
                 (gib * paging::GIB) | attr | ES_BLOQUE;
             continue;
         }
 
-        // Con memoria del kernel adentro: se parte en bloques de 2 MiB.
+        // Con kernel o con memoria libre adentro: se parte en bloques de 2 MiB.
         if partidos >= MAX_NIVEL2 {
             return Err("hay mas pedazos con kernel adentro de los que se pueden partir");
         }
         let tabla = &mut n2[partidos];
         for i in 0..ENTRADAS {
             let base = gib * paging::GIB + i as u64 * paging::BLOQUE;
-            // Todavia sin marcar quien alcanza que: el permiso va junto con la
-            // transicion de privilegio, no antes. Ver el comentario de arriba.
+            // Arrancan siendo del kernel. El permiso se prende bloque por
+            // bloque cuando el agente reclama memoria pidiendolo (D27).
             tabla.0[i] = base | attr | ES_BLOQUE;
         }
         n1[cual].0[cual_entrada] = (core::ptr::addr_of!(*tabla) as u64) | ES_TABLA;
@@ -150,7 +150,9 @@ pub unsafe fn install(m: &Machine) -> Result<Mapping, &'static str> {
         return Err("TTBR0_EL1 no quedo apuntando a nuestras tablas");
     }
 
-    Ok(Mapping { gib: total, device_gib, root: raiz })
+    // En aarch64 no hay nada que prender: que una pagina alcanzable desde EL0
+    // no sea ejecutable desde EL1 viene en el modelo de permisos.
+    Ok(Mapping { gib: total, device_gib, root: raiz, isolation: true })
 }
 
 /// El valor de TCR_EL1 para grano de 4 KiB y direcciones de 48 bits.
@@ -224,4 +226,64 @@ unsafe fn cargar(raiz: u64, tcr: u64) {
         raiz = in(reg) raiz,
         options(nostack, preserves_flags),
     );
+}
+
+/// El campo que hace a un bloque alcanzable desde EL0.
+///
+/// `00` es "solo EL1", `01` es "EL1 y EL0". Y marcarlo **deja el bloque fuera
+/// del alcance del kernel para ejecutar**: es la misma regla que SMEP en x86,
+/// pero acá metida en el modelo de permisos y sin forma de apagarla.
+const AP_USUARIO: u64 = 0b01 << 6;
+
+/// Marca un rango como alcanzable, o no, desde EL0.
+///
+/// # Safety
+///
+/// El rango tiene que estar alineado a `BLOQUE` y caer en pedazos ya partidos.
+pub unsafe fn set_user_access(
+    m: &Machine,
+    start: u64,
+    bytes: u64,
+    user: bool,
+) -> Result<(), &'static str> {
+    if start % paging::BLOQUE != 0 || bytes % paging::BLOQUE != 0 || bytes == 0 {
+        return Err("el rango no esta alineado al bloque");
+    }
+
+    let n1 = &mut *core::ptr::addr_of_mut!(NIVEL1);
+    let n2 = &mut *core::ptr::addr_of_mut!(NIVEL2);
+
+    let mut dir = start;
+    while dir < start + bytes {
+        let gib = dir / paging::GIB;
+        if !paging::needs_split(m, gib) {
+            return Err("ese pedazo no tiene grano fino");
+        }
+        let cual = (gib / ENTRADAS as u64) as usize;
+        let entrada = n1[cual].0[(gib % ENTRADAS as u64) as usize];
+        if entrada & 0b11 != ES_TABLA {
+            return Err("ese pedazo quedo como un bloque entero");
+        }
+        let tabla_dir = entrada & 0x0000_FFFF_FFFF_F000;
+
+        let indice = ((dir % paging::GIB) / paging::BLOQUE) as usize;
+        let tabla = n2
+            .iter_mut()
+            .find(|t| core::ptr::addr_of!(**t) as u64 == tabla_dir)
+            .ok_or("no se encontro la tabla de bloques")?;
+
+        if user {
+            tabla.0[indice] |= AP_USUARIO;
+        } else {
+            tabla.0[indice] &= !AP_USUARIO;
+        }
+        dir += paging::BLOQUE;
+    }
+
+    // Lo que el CPU se acuerde de antes ya no vale.
+    core::arch::asm!("dsb ishst", options(nostack));
+    core::arch::asm!("tlbi vmalle1", options(nostack));
+    core::arch::asm!("dsb ish", options(nostack));
+    core::arch::asm!("isb", options(nostack));
+    Ok(())
 }

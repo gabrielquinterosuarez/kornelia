@@ -175,6 +175,16 @@ fn reportar_tablas<P: Platform>(
                 t.gib - t.device_gib,
                 t.device_gib
             );
+            // Si el hardware hace cumplir que la memoria del agente no sea
+            // ejecutable con privilegio (D27). Sin esto el permiso se puede
+            // poner pero no separa nada, y una garantía que no se cumple es
+            // peor que no tenerla.
+            if t.isolation {
+                u.line("  separacion kernel/agente: la hace cumplir el hardware");
+            } else {
+                u.line("  separacion kernel/agente: NO la hace cumplir el hardware");
+                u.line("    el permiso se marca pero el kernel igual puede ejecutar ahi.");
+            }
             // Mismo cuidado que con la pila: si la raíz cayera en memoria
             // reclamable, `mem.claim` podría entregársela al agente y la
             // traducción se rompería en cualquier parte.

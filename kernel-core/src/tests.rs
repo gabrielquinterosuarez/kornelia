@@ -86,6 +86,15 @@ impl Platform for Fake {
         Err(crate::handlers::Error::NoSuchInterrupt)
     }
 
+    unsafe fn set_user_access(
+        &mut self,
+        _start: u64,
+        _bytes: u64,
+        _user: bool,
+    ) -> Result<(), &'static str> {
+        Err("la plataforma de prueba no pagina")
+    }
+
     fn set_interrupts(&mut self, _on: bool) {}
 
     fn sleep(&mut self) {}
@@ -1445,9 +1454,25 @@ fn se_reconoce_que_pedazos_tienen_kernel_adentro() {
     assert!(!paging_touches(&m, 0, 0x1000), "justo antes no lo toca");
     assert!(!paging_touches(&m, 0x2000, 0x3000), "justo despues tampoco");
 
-    // El primer pedazo de 1 GiB hay que partirlo; el segundo no.
+    // Los dos pedazos hay que partirlos, por motivos distintos: el primero
+    // porque tiene kernel adentro, el segundo porque tiene memoria libre y de
+    // ahi salen los reclamos, que pueden pedir ser alcanzables sin privilegio.
     assert!(crate::paging::needs_split(&m, 0));
-    assert!(!crate::paging::needs_split(&m, 1));
+    assert!(crate::paging::needs_split(&m, 1));
+}
+
+/// Un pedazo que no tiene ni kernel ni memoria libre no se parte: nadie va a
+/// necesitar decir cosas distintas de sus bloques.
+#[test]
+fn un_pedazo_de_solo_dispositivos_no_se_parte() {
+    static MAPA: [Region; 2] = [
+        Region { start: 0, bytes: 0x1000, kind: Kind::Kernel },
+        Region { start: 3 * GIB, bytes: GIB, kind: Kind::Mmio },
+    ];
+    let m = Machine { regions: &MAPA, tables: Tables::default(), failure: None };
+    assert!(crate::paging::needs_split(&m, 0), "el del kernel si");
+    assert!(!crate::paging::needs_split(&m, 3), "el de puro mmio no");
+    assert!(!crate::paging::needs_split(&m, 2), "y uno vacio tampoco");
 }
 
 fn paging_touches(m: &Machine, a: u64, b: u64) -> bool {

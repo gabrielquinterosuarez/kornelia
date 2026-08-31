@@ -48,7 +48,7 @@ elif ! command -v python3 >/dev/null; then
 else
     for arq in x86_64 aarch64; do
         paso "arranca $arq y contesta el protocolo"
-        salida=$(timeout 240 ./scripts/client.py --arch "$arq" --smp 4 --what memory,tables --memoria --exec --nucleos --buzon --timbre --handler --durante 2>&1 || true)
+        salida=$(timeout 240 ./scripts/client.py --arch "$arq" --smp 4 --what memory,tables --memoria --exec --nucleos --buzon --timbre --handler --durante --permiso 2>&1 || true)
 
         # Lo que tiene que haber dicho en el banner de texto.
         for esperado in "arquitectura: $arq" "memoria:" "tablas:" \
@@ -112,6 +112,16 @@ else
             mal "$arq no atiende interrupciones durante un exec"
             printf '%s\n' "$salida" | grep -E "FALLA:|durante" | head -10
         fi
+
+        # Y que el permiso de memoria del agente lo haga cumplir el hardware
+        # (D27). La prueba no es lo que el kernel dice, es que el kernel deje de
+        # poder ejecutar ahi.
+        if ! grep -qFe "permiso: ok" <<<"$salida"; then
+            mal "$arq no hace cumplir el permiso de la memoria del agente"
+            printf '%s\n' "$salida" | grep -E "FALLA:|user=|separacion" | head -10
+        fi
+        grep -qFe "separacion kernel/agente: la hace cumplir el hardware" <<<"$salida" \
+            || mal "$arq no informa que el hardware haga cumplir la separacion"
 
         n=$(grep -cE '^ +0x[0-9a-f]{16} ' <<<"$salida" || true)
         if [ "$n" -lt 5 ]; then

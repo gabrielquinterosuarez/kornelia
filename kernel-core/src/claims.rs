@@ -36,6 +36,12 @@ pub struct Claim {
     /// De que clase era la region de donde salio. Se informa para que el agente
     /// sepa que se llevo.
     pub kind: Kind,
+    /// Si es alcanzable desde el nivel sin privilegio (D27).
+    ///
+    /// Es una propiedad de la memoria, no de la corrida: se pide al reclamarla.
+    /// Y **tiene contracara**: una memoria marcada asi deja de ser ejecutable
+    /// con privilegio, asi que sirve para `exec supervised` y no para `raw`.
+    pub user: bool,
 }
 
 impl Claim {
@@ -67,6 +73,8 @@ pub enum Error {
     NoSuchHandle,
     /// El rango pedido se sale del reclamo.
     OutOfBounds,
+    /// Se pidio alcanzable sin privilegio y no se pudo marcar.
+    CannotGrant,
 }
 
 impl Error {
@@ -82,6 +90,7 @@ impl Error {
             Error::TableFull => "claim-table-full",
             Error::NoSuchHandle => "no-such-handle",
             Error::OutOfBounds => "out-of-bounds",
+            Error::CannotGrant => "cannot-grant-user-access",
         }
     }
 }
@@ -98,11 +107,17 @@ pub struct Request {
     /// Tope duro. Existe porque hay dispositivos que solo hacen DMA por debajo
     /// de los 4 GiB.
     pub below: Option<u64>,
+    /// Que sea alcanzable desde el nivel sin privilegio (D27).
+    ///
+    /// Pedirlo **redondea el tamano y la alineacion al bloque** de la tabla de
+    /// paginas, porque el permiso no se puede decir mas fino que eso. El kernel
+    /// informa lo que quedo de verdad.
+    pub user: bool,
 }
 
 impl Default for Request {
     fn default() -> Self {
-        Self { bytes: 0, at: None, align: 1, below: None }
+        Self { bytes: 0, at: None, align: 1, below: None, user: false }
     }
 }
 
@@ -147,6 +162,19 @@ pub fn claim(m: &Machine, r: Request) -> Result<Claim, Error> {
     if r.align == 0 || !r.align.is_power_of_two() {
         return Err(Error::BadAlign);
     }
+
+    // El permiso no se puede decir mas fino que un bloque de la tabla, asi que
+    // pedirlo redondea. Se hace aca y no en quien llama para que la regla viva
+    // en un solo lugar.
+    let r = if r.user {
+        Request {
+            bytes: r.bytes.next_multiple_of(crate::paging::BLOQUE),
+            align: r.align.max(crate::paging::BLOQUE),
+            ..r
+        }
+    } else {
+        r
+    };
 
     match r.at {
         Some(dir) => reclamar_exacto(m, dir, r.bytes),
@@ -214,6 +242,16 @@ fn buscar_hueco(m: &Machine, r: Request) -> Result<Claim, Error> {
     Err(Error::NoRoom)
 }
 
+/// Anota que ese reclamo quedo alcanzable sin privilegio.
+pub fn mark_user(handle: u64) {
+    let t = unsafe { &mut *core::ptr::addr_of_mut!(TABLA) };
+    for c in t.iter_mut().flatten() {
+        if c.handle == handle {
+            c.user = true;
+        }
+    }
+}
+
 fn anotar(start: u64, bytes: u64, kind: Kind) -> Result<Claim, Error> {
     let t = unsafe { &mut *core::ptr::addr_of_mut!(TABLA) };
     let hueco = t.iter_mut().find(|c| c.is_none()).ok_or(Error::TableFull)?;
@@ -224,7 +262,7 @@ fn anotar(start: u64, bytes: u64, kind: Kind) -> Result<Claim, Error> {
         h
     };
 
-    let c = Claim { handle, start, bytes, kind };
+    let c = Claim { handle, start, bytes, kind, user: false };
     *hueco = Some(c);
     Ok(c)
 }

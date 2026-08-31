@@ -85,6 +85,15 @@ impl Platform for AArch64 {
         irq::install_agente(hw, interrupt, slot, raw)
     }
 
+    unsafe fn set_user_access(
+        &mut self,
+        start: u64,
+        bytes: u64,
+        user: bool,
+    ) -> Result<(), &'static str> {
+        paging::set_user_access(&self.machine, start, bytes, user)
+    }
+
     fn set_interrupts(&mut self, on: bool) {
         unsafe {
             if on {

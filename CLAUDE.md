@@ -111,10 +111,11 @@ de commitear; CI corre exactamente ese script.
 argumentos en `docs/DISENO.md` §8. Los tres verbos que faltan son grandes y
 ninguno bloquea a los otros:
 
-1. **Que los handlers del agente no se atiendan diferidos.** Hoy esperan a la
-   próxima ventana de dormir porque el bucle corre con las interrupciones
-   enmascaradas. D9 pide microsegundos. El arreglo está diseñado y anotado en
-   `DISENO.md` §7.
+1. **Terminar D27: la transición de privilegio.** La mitad de abajo ya está —
+   `mem.claim {user: true}` entrega memoria del agente y el hardware lo hace
+   cumplir. Falta entrar a anillo 3 / EL0 en `exec supervised`, y la ventanilla
+   (`int 0x80` / `svc`) para que el agente pueda volver: desde el nivel bajo un
+   `ret` común no vuelve.
 2. **Darle trabajo a los núcleos reclamados.** Hoy arrancan y quedan esperando,
    pero `exec` corre siempre en el que atiende el protocolo. Falta un buzón por
    núcleo y que `exec` acepte a cuál mandárselo (sección 4: `exec(core, ...)`).

@@ -653,6 +653,8 @@ struct Args<'a> {
     at: Option<u64>,
     align: Option<u64>,
     below: Option<u64>,
+    /// Que la memoria sea alcanzable sin privilegio (D27).
+    user: Option<bool>,
     handle: Option<u64>,
     off: Option<u64>,
     len: Option<u64>,
@@ -673,6 +675,7 @@ fn leer_args<'a>(r: &mut Reader<'a>) -> Option<Args<'a>> {
         at: None,
         align: None,
         below: None,
+        user: None,
         handle: None,
         off: None,
         len: None,
@@ -697,6 +700,7 @@ fn leer_args<'a>(r: &mut Reader<'a>) -> Option<Args<'a>> {
             "at" => a.at = Some(r.uint()?),
             "align" => a.align = Some(r.uint()?),
             "below" => a.below = Some(r.uint()?),
+            "user" => a.user = Some(r.bool()?),
             "handle" => a.handle = Some(r.uint()?),
             "off" => a.off = Some(r.uint()?),
             "len" => a.len = Some(r.uint()?),
@@ -720,16 +724,31 @@ fn mem_claim<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine) {
         return responder_error(p, id, "mem.claim needs bytes");
     };
 
+    let quiere_usuario = a.user.unwrap_or(false);
     let pedido = claims::Request {
         bytes,
         at: a.at,
         align: a.align.unwrap_or(1),
         below: a.below,
+        user: quiere_usuario,
     };
 
     match claims::claim(m, pedido) {
         Err(e) => responder_fallo(p, id, e),
-        Ok(c) => {
+        Ok(mut c) => {
+            // Y si lo pidio alcanzable sin privilegio, marcarlo de verdad. Si
+            // no se puede, se suelta: entregar memoria que dice ser del agente
+            // y no lo es seria la peor forma de fallar.
+            if quiere_usuario {
+                // SAFETY: el rango salio de un reclamo vigente y quedo alineado
+                // al bloque, que es lo que `set_user_access` exige.
+                if unsafe { p.set_user_access(c.start, c.bytes, true) }.is_err() {
+                    claims::release(c.handle);
+                    return responder_fallo(p, id, claims::Error::CannotGrant);
+                }
+                claims::mark_user(c.handle);
+                c.user = true;
+            }
             let out = unsafe { &mut *core::ptr::addr_of_mut!(OUTBOX) };
             let mut w = Writer::new(out);
             w.array(3);
@@ -812,6 +831,15 @@ fn release<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
         return responder_error(p, id, "release needs handle");
     };
 
+    // Si era alcanzable sin privilegio, se le saca el permiso antes de soltarla:
+    // memoria devuelta que sigue marcada seria un agujero silencioso.
+    if let Some(c) = claims::get(handle) {
+        if c.user {
+            // SAFETY: el rango sigue siendo el del reclamo, alineado al bloque.
+            let _ = unsafe { p.set_user_access(c.start, c.bytes, false) };
+        }
+    }
+
     if !claims::release(handle) {
         return responder_fallo(p, id, claims::Error::NoSuchHandle);
     }
@@ -828,7 +856,7 @@ fn release<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
 }
 
 fn escribir_claim(w: &mut Writer<'_>, c: &claims::Claim) {
-    w.map(4);
+    w.map(5);
     w.text("handle");
     w.uint(c.handle);
     w.text("start");
@@ -838,6 +866,10 @@ fn escribir_claim(w: &mut Writer<'_>, c: &claims::Claim) {
     // De que clase era la region: el agente decide con el dato a la vista.
     w.text("kind");
     w.text(c.kind.code());
+    // Si quedo alcanzable sin privilegio. Se informa siempre, porque el tamano
+    // pudo haberse redondeado al pedirlo.
+    w.text("user");
+    w.bool(c.user);
 }
 
 fn terminar<P: Platform>(p: &mut P, id: u64, w: Writer<'_>) {

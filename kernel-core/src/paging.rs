@@ -98,6 +98,15 @@ pub struct Mapping {
     /// Direccion fisica de la tabla raiz, ya releida del registro. Se informa
     /// para poder comprobar que cayo en memoria del kernel.
     pub root: u64,
+    /// Si el hardware **hace cumplir** que la memoria marcada para el agente no
+    /// sea ejecutable con privilegio (D27).
+    ///
+    /// En aarch64 siempre: viene en el modelo de permisos y no se apaga. En
+    /// x86_64 depende de que el CPU tenga SMEP y de haberlo podido prender — el
+    /// firmware puede dejarlo apagado, y QEMU lo hace. Sin esto el permiso se
+    /// marca igual pero no separa nada, y una garantia que no se cumple es peor
+    /// que no tenerla: por eso se informa en vez de suponerse.
+    pub isolation: bool,
 }
 
 /// El grano fino: cuando un pedazo de 1 GiB tiene memoria del kernel adentro,
@@ -121,6 +130,17 @@ pub fn touches_kernel(m: &Machine, start: u64, end: u64) -> bool {
 }
 
 /// Si esa pagina de 1 GiB necesita partirse en bloques mas chicos.
+///
+/// Se parte por dos motivos, y los dos son el mismo: hay que poder decir cosas
+/// distintas de pedazos distintos.
+///
+/// - **Tiene memoria del kernel adentro**: esos bloques nunca son del agente.
+/// - **Tiene memoria libre adentro**: de ahi salen los reclamos, y un reclamo
+///   puede pedir ser alcanzable sin privilegio (D27). Si el pedazo entero fuera
+///   un solo bloque de 1 GiB, marcarlo marcaria tambien todo lo que hay al lado.
 pub fn needs_split(m: &Machine, gib: u64) -> bool {
-    touches_kernel(m, gib * GIB, (gib + 1) * GIB)
+    let (a, b) = (gib * GIB, (gib + 1) * GIB);
+    m.regions
+        .iter()
+        .any(|r| matches!(r.kind, Kind::Kernel | Kind::Free) && r.start < b && r.end() > a)
 }

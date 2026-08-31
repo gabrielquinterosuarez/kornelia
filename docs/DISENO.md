@@ -146,6 +146,7 @@ Lo que sí existe:
 | **El protocolo CBOR** (D6) | Andando. Escrito a mano, sin dependencias; verificado contra los vectores canónicos del RFC 8949. |
 | **`describe`** | Andando: sirve `memory`, `tables`, `claims`, `cpus`, `interrupts` y `pcie`. Sin argumentos devuelve el índice, no un volcado (D16). |
 | **Lectura de ACPI** | Andando en las dos. MADT (núcleos y controlador de interrupciones) y MCFG (PCIe), con el checksum verificado tabla por tabla. |
+| **Permiso de memoria** (D27) | Andando en las dos. `mem.claim {user: true}` entrega memoria alcanzable sin privilegio, y **lo hace cumplir el hardware**: SMEP en x86_64, el modelo de permisos en aarch64. Falta la transición de privilegio en sí. |
 | **`mem.claim` · `mem.read` · `mem.write` · `release`** | Andando. Reclamos por tamaño o por dirección exacta (así se pide MMIO), con alineación y tope. Los handles son de la máquina y no se reusan (D14). |
 | **`irq.install`** | Andando en las dos. El agente pone su código a atender un aparato, y el kernel publica además **cómo hacer sonar esa interrupción a propósito** para que pueda probar su handler sin esperar al aparato. `irq.install_raw` solo en x86_64. |
 | **Timbre del buzón** | Andando en las dos. El agente lo toca con código máquina propio: un IPI por el APIC en x86_64, un SGI por el GIC en aarch64. **Con prioridad más baja que el cable**, así que por más que el agente inunde de llamadas el cordón pasa primero (D17, P6). El kernel cuenta cuántas veces sonó, que es lo que permite comprobarlo. |
