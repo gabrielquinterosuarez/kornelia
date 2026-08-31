@@ -1427,3 +1427,45 @@ fn se_cuenta_cada_vez_que_se_atiende() {
         handlers::served(handlers::MAX + 5);
     });
 }
+
+/// Lo que decide si un pedazo se le puede dejar alcanzar al agente cuando corra
+/// sin privilegio (D27).
+#[test]
+fn se_reconoce_que_pedazos_tienen_kernel_adentro() {
+    // El kernel en 0x1000..0x2000, dentro del primer GiB.
+    static MAPA: [Region; 3] = [
+        Region { start: 0, bytes: 0x1000, kind: Kind::Free },
+        Region { start: 0x1000, bytes: 0x1000, kind: Kind::Kernel },
+        Region { start: GIB, bytes: GIB, kind: Kind::Free },
+    ];
+    let m = Machine { regions: &MAPA, tables: Tables::default(), failure: None };
+
+    assert!(paging_touches(&m, 0x1000, 0x2000), "el rango del kernel mismo");
+    assert!(paging_touches(&m, 0, 0x2000), "un rango que lo incluye");
+    assert!(!paging_touches(&m, 0, 0x1000), "justo antes no lo toca");
+    assert!(!paging_touches(&m, 0x2000, 0x3000), "justo despues tampoco");
+
+    // El primer pedazo de 1 GiB hay que partirlo; el segundo no.
+    assert!(crate::paging::needs_split(&m, 0));
+    assert!(!crate::paging::needs_split(&m, 1));
+}
+
+fn paging_touches(m: &Machine, a: u64, b: u64) -> bool {
+    crate::paging::touches_kernel(m, a, b)
+}
+
+/// El bloque de 2 MiB es el grano fino, y la consecuencia es que memoria del
+/// agente pegada al kernel queda del lado del kernel. Conviene que este escrito.
+#[test]
+fn el_grano_fino_arrastra_lo_que_esta_pegado() {
+    static MAPA: [Region; 2] = [
+        Region { start: 0x1000, bytes: 0x1000, kind: Kind::Kernel },
+        Region { start: 0x2000, bytes: 0x1000, kind: Kind::Free },
+    ];
+    let m = Machine { regions: &MAPA, tables: Tables::default(), failure: None };
+
+    // Las dos caen en el mismo bloque de 2 MiB, asi que el bloque entero queda
+    // fuera del alcance del agente aunque una de las dos sea libre.
+    let bloque = crate::paging::BLOQUE;
+    assert!(crate::paging::touches_kernel(&m, 0, bloque));
+}

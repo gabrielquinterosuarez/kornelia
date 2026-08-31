@@ -166,7 +166,7 @@ pub unsafe fn start(psci: Option<Psci>, id: u64, slot: usize) -> Result<(), core
         return Err(cores::Error::NoMechanism);
     };
 
-    let entrada = ap_entry as usize as u64;
+    let entrada = ap_entry as *const () as u64;
     let estado = llamar(p.use_hvc, CPU_ON, id, entrada, slot as u64);
 
     // PSCI devuelve 0 en exito y un negativo en error.

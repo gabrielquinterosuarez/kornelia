@@ -99,3 +99,28 @@ pub struct Mapping {
     /// para poder comprobar que cayo en memoria del kernel.
     pub root: u64,
 }
+
+/// El grano fino: cuando un pedazo de 1 GiB tiene memoria del kernel adentro,
+/// se parte en bloques de este tamano para poder distinguir.
+///
+/// Dos MiB y no cuatro KiB porque partir un GiB en paginas de 4 KiB serian
+/// quinientas doce tablas. La contra es que memoria del agente que caiga en el
+/// mismo bloque de 2 MiB que el kernel queda tambien fuera de su alcance — y eso
+/// se informa en vez de que lo descubra chocandose.
+pub const BLOQUE: u64 = 2 << 20;
+
+/// Si ese rango pisa memoria del kernel.
+///
+/// Es lo que decide si un pedazo se le puede dejar alcanzar al agente. La
+/// pregunta se hace sobre el mapa real y no sobre donde uno cree que esta el
+/// kernel: la respuesta la da la maquina (P4).
+pub fn touches_kernel(m: &Machine, start: u64, end: u64) -> bool {
+    m.regions
+        .iter()
+        .any(|r| r.kind == Kind::Kernel && r.start < end && r.end() > start)
+}
+
+/// Si esa pagina de 1 GiB necesita partirse en bloques mas chicos.
+pub fn needs_split(m: &Machine, gib: u64) -> bool {
+    touches_kernel(m, gib * GIB, (gib + 1) * GIB)
+}

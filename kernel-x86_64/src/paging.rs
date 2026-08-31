@@ -33,11 +33,18 @@ const ENTRADAS: usize = 512;
 /// no alcanza, se avisa en vez de mapear a medias y callarse.
 const MAX_PDPT: usize = 8;
 
+/// Cuantos pedazos de 1 GiB se pueden partir en bloques de 2 MiB.
+///
+/// Se parten los que tienen memoria del kernel adentro, que en la practica son
+/// uno o dos: la imagen del kernel entra en unos cientos de KiB.
+const MAX_PD: usize = 4;
+
 #[repr(C, align(4096))]
 struct Tabla([u64; ENTRADAS]);
 
 static mut PML4: Tabla = Tabla([0; ENTRADAS]);
 static mut PDPT: [Tabla; MAX_PDPT] = [const { Tabla([0; ENTRADAS]) }; MAX_PDPT];
+static mut PD: [Tabla; MAX_PD] = [const { Tabla([0; ENTRADAS]) }; MAX_PD];
 
 // --- Los bits de una entrada ------------------------------------------------
 const PRESENTE: u64 = 1 << 0;
@@ -71,18 +78,43 @@ pub unsafe fn install(m: &Machine) -> Result<Mapping, &'static str> {
     let pml4 = &mut *core::ptr::addr_of_mut!(PML4);
     let pdpt = &mut *core::ptr::addr_of_mut!(PDPT);
 
+    let pd = &mut *core::ptr::addr_of_mut!(PD);
     let mut device_gib = 0;
+    let mut partidos = 0usize;
 
     for gib in 0..total {
         let cual = (gib / ENTRADAS as u64) as usize;
         let cual_entrada = (gib % ENTRADAS as u64) as usize;
 
-        let mut e = (gib * paging::GIB) | PRESENTE | ESCRIBIBLE | GRANDE;
-        if paging::attr_of(m, gib) == Attr::Device {
-            e |= PCD | PWT;
+        let device = paging::attr_of(m, gib) == Attr::Device;
+        if device {
             device_gib += 1;
         }
-        pdpt[cual].0[cual_entrada] = e;
+        let cache = if device { PCD | PWT } else { 0 };
+
+        if !paging::needs_split(m, gib) {
+            // Sin memoria del kernel adentro: un solo bloque de 1 GiB, y el
+            // agente lo alcanza entero.
+            pdpt[cual].0[cual_entrada] =
+                (gib * paging::GIB) | PRESENTE | ESCRIBIBLE | GRANDE | cache;
+            continue;
+        }
+
+        // Con memoria del kernel adentro: se parte en bloques de 2 MiB para
+        // poder marcar cuales alcanza el agente y cuales no.
+        if partidos >= MAX_PD {
+            return Err("hay mas pedazos con kernel adentro de los que se pueden partir");
+        }
+        let tabla = &mut pd[partidos];
+        for i in 0..ENTRADAS {
+            let base = gib * paging::GIB + i as u64 * paging::BLOQUE;
+            // Todavia sin marcar quien alcanza que: el permiso va junto con la
+            // transicion de privilegio, no antes.
+            tabla.0[i] = base | PRESENTE | ESCRIBIBLE | GRANDE | cache;
+        }
+        pdpt[cual].0[cual_entrada] =
+            (core::ptr::addr_of!(*tabla) as u64) | PRESENTE | ESCRIBIBLE;
+        partidos += 1;
     }
 
     // Cuantos PDPT se llegaron a usar, y se cuelgan del PML4.

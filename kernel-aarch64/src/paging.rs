@@ -37,11 +37,17 @@ const ENTRADAS: usize = 512;
 /// Cada tabla de nivel 1 cubre 512 GiB.
 const MAX_NIVEL1: usize = 8;
 
+/// Cuantos pedazos de 1 GiB se pueden partir en bloques de 2 MiB.
+///
+/// Se parten los que tienen memoria del kernel adentro, que son uno o dos.
+const MAX_NIVEL2: usize = 4;
+
 #[repr(C, align(4096))]
 struct Tabla([u64; ENTRADAS]);
 
 static mut NIVEL0: Tabla = Tabla([0; ENTRADAS]);
 static mut NIVEL1: [Tabla; MAX_NIVEL1] = [const { Tabla([0; ENTRADAS]) }; MAX_NIVEL1];
+static mut NIVEL2: [Tabla; MAX_NIVEL2] = [const { Tabla([0; ENTRADAS]) }; MAX_NIVEL2];
 
 // --- Descriptores -----------------------------------------------------------
 /// Los dos bits de abajo en 0b11: esta entrada apunta a otra tabla.
@@ -86,19 +92,46 @@ pub unsafe fn install(m: &Machine) -> Result<Mapping, &'static str> {
     let n0 = &mut *core::ptr::addr_of_mut!(NIVEL0);
     let n1 = &mut *core::ptr::addr_of_mut!(NIVEL1);
 
+    let n2 = &mut *core::ptr::addr_of_mut!(NIVEL2);
     let mut device_gib = 0;
+    let mut partidos = 0usize;
 
     for gib in 0..total {
         let cual = (gib / ENTRADAS as u64) as usize;
         let cual_entrada = (gib % ENTRADAS as u64) as usize;
 
-        let d = if paging::attr_of(m, gib) == Attr::Device {
+        let device = paging::attr_of(m, gib) == Attr::Device;
+        if device {
             device_gib += 1;
-            (gib * paging::GIB) | AF | ATTR_DEVICE | ES_BLOQUE
+        }
+        // Los atributos, sin el permiso: eso se decide aparte.
+        let attr = if device {
+            AF | ATTR_DEVICE
         } else {
-            (gib * paging::GIB) | AF | COMPARTIDA | ATTR_NORMAL | ES_BLOQUE
+            AF | COMPARTIDA | ATTR_NORMAL
         };
-        n1[cual].0[cual_entrada] = d;
+
+        if !paging::needs_split(m, gib) {
+            // Sin memoria del kernel adentro: un bloque de 1 GiB entero, y el
+            // agente lo alcanza.
+            n1[cual].0[cual_entrada] =
+                (gib * paging::GIB) | attr | ES_BLOQUE;
+            continue;
+        }
+
+        // Con memoria del kernel adentro: se parte en bloques de 2 MiB.
+        if partidos >= MAX_NIVEL2 {
+            return Err("hay mas pedazos con kernel adentro de los que se pueden partir");
+        }
+        let tabla = &mut n2[partidos];
+        for i in 0..ENTRADAS {
+            let base = gib * paging::GIB + i as u64 * paging::BLOQUE;
+            // Todavia sin marcar quien alcanza que: el permiso va junto con la
+            // transicion de privilegio, no antes. Ver el comentario de arriba.
+            tabla.0[i] = base | attr | ES_BLOQUE;
+        }
+        n1[cual].0[cual_entrada] = (core::ptr::addr_of!(*tabla) as u64) | ES_TABLA;
+        partidos += 1;
     }
 
     let usadas = total.div_ceil(ENTRADAS as u64) as usize;
