@@ -28,9 +28,36 @@ sudo apt install qemu-system-x86 qemu-system-arm ovmf qemu-efi-aarch64
 ## Correr
 
 ```bash
-./scripts/run-x86_64.sh     # Ctrl-A luego X para salir de QEMU
+./scripts/run-x86_64.sh
 ./scripts/run-aarch64.sh
 ./scripts/check-frontera.sh # D23/D24: verifica los dos ejes de la frontera
+```
+
+Los scripts pasan a QEMU cualquier argumento extra, así que `./scripts/run-x86_64.sh -m 1G`
+arranca con 1 GiB y el mapa de memoria tiene que reflejarlo.
+
+**Para salir de QEMU: `Ctrl-A`, soltar, y después `X`.**
+
+`Ctrl-A` funciona porque los scripts usan `-serial mon:stdio`: el prefijo `mon:`
+multiplexa el monitor de QEMU y el puerto serie sobre la misma terminal, y es
+ese multiplexor el que implementa los escapes. Sin `mon:` no hay escape ninguno
+y el `Ctrl-A` le llega al kernel como un byte más.
+
+Los otros dos que sirven:
+
+| Tecla | Qué hace |
+|---|---|
+| `Ctrl-A` `X` | Sale de QEMU. |
+| `Ctrl-A` `C` | Alterna entre el kernel y el monitor de QEMU. |
+| `Ctrl-A` `H` | Lista todo lo demás. |
+
+Desde el monitor se puede mirar la máquina por fuera del kernel — útil para
+contrastar lo que el kernel dice contra lo que QEMU sabe:
+
+```
+(qemu) info mtree     # el mapa de memoria segun QEMU
+(qemu) info registers # el estado del CPU
+(qemu) xp /16xb 0x0   # volcar memoria fisica
 ```
 
 Salida esperada (recortada — el mapa real trae decenas de regiones, y son

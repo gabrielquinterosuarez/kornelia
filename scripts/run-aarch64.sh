@@ -30,4 +30,4 @@ exec qemu-system-aarch64 \
     -drive if=pflash,format=raw,unit=0,readonly=on,file="$AAVMF_CODE" \
     -drive if=pflash,format=raw,unit=1,file=target/AAVMF_VARS-aarch64.fd \
     -drive format=raw,file=fat:rw:target/esp-aarch64 \
-    -serial stdio -display none -no-reboot "$@"
+    -serial mon:stdio -display none -no-reboot "$@"

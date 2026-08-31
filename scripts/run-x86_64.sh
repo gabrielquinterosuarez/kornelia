@@ -31,4 +31,4 @@ exec qemu-system-x86_64 \
     -drive if=pflash,format=raw,unit=0,readonly=on,file="$OVMF_CODE" \
     -drive if=pflash,format=raw,unit=1,file=target/OVMF_VARS-x86_64.fd \
     -drive format=raw,file=fat:rw:target/esp-x86_64 \
-    -serial stdio -display none -no-reboot "$@"
+    -serial mon:stdio -display none -no-reboot "$@"
