@@ -36,6 +36,7 @@ use crate::acpi::Hardware;
 use crate::channel;
 use crate::claims;
 use crate::cores;
+use crate::handlers;
 use crate::machine::Machine;
 use crate::memory::Kind;
 use crate::platform::Platform;
@@ -184,6 +185,8 @@ fn atender<P: Platform>(p: &mut P, req: &[u8], m: &Machine, hw: &Hardware) {
         "exec" => exec(p, id, &mut r),
         "core.claim" => core_claim(p, id, &mut r, hw),
         "listen" => listen(p, id, &mut r),
+        "irq.install" => irq_install(p, id, &mut r, hw, false),
+        "irq.install_raw" => irq_install(p, id, &mut r, hw, true),
         _ => responder_error(p, id, "unknown verb"),
     }
 }
@@ -207,6 +210,8 @@ struct Pedido {
     cores: bool,
     /// El acuerdo del segundo canal, para que el agente no lo hornee (D17).
     channel: bool,
+    /// Los handlers de interrupcion que el agente tiene instalados (D9).
+    handlers: bool,
     /// Si no vino la clave `what`, se devuelve el indice (D16).
     indice: bool,
 }
@@ -243,6 +248,7 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
                     Some("pcie") => q.pcie = true,
                     Some("cores") => q.cores = true,
                     Some("channel") => q.channel = true,
+                    Some("handlers") => q.handlers = true,
                     // Contestar solo con lo que se reconocio, callado, seria
                     // mentir por omision.
                     Some(_) => return responder_error(p, id, "unknown section in what"),
@@ -272,7 +278,7 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
         if q.claims {
             secciones += 1;
         }
-        for extra in [q.cpus, q.interrupts, q.pcie, q.cores, q.channel] {
+        for extra in [q.cpus, q.interrupts, q.pcie, q.cores, q.channel, q.handlers] {
             if extra {
                 secciones += 1;
             }
@@ -356,6 +362,33 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
                 escribir_core(&mut w, &c);
             }
         }
+        if q.handlers {
+            w.text("handlers");
+            w.array(handlers::count());
+            for h in handlers::all() {
+                w.map(5);
+                w.text("interrupt");
+                w.uint(h.interrupt as u64);
+                w.text("entry");
+                w.uint(h.entry);
+                w.text("raw");
+                w.bool(h.raw);
+                // Cuantas veces se atendio: el agente sabe si su aparato habla
+                // sin tener que instrumentar su propio codigo.
+                w.text("served");
+                w.uint(h.count);
+                // Como hacerla sonar a proposito, para que el agente pueda
+                // probar su handler sin esperar al aparato.
+                w.text("trigger");
+                w.array(h.trigger.count);
+                for (addr, val, ancho) in &h.trigger.writes[..h.trigger.count] {
+                    w.array(3);
+                    w.uint(*addr);
+                    w.uint(*val);
+                    w.uint(*ancho as u64);
+                }
+            }
+        }
         if q.channel {
             w.text("channel");
             escribir_canal(&mut w);
@@ -389,13 +422,13 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
 
 /// El indice: que hay para pedir, y cuanto de cada cosa.
 fn escribir_indice(w: &mut Writer<'_>, m: &Machine, hw: &Hardware, arch: &str) {
-    w.map(10);
+    w.map(11);
 
     w.text("arch");
     w.text(arch);
 
     w.text("sections");
-    w.array(8);
+    w.array(9);
     w.text("memory");
     w.text("tables");
     w.text("claims");
@@ -404,6 +437,7 @@ fn escribir_indice(w: &mut Writer<'_>, m: &Machine, hw: &Hardware, arch: &str) {
     w.text("pcie");
     w.text("cores");
     w.text("channel");
+    w.text("handlers");
 
     w.text("memory");
     w.map(2);
@@ -443,6 +477,9 @@ fn escribir_indice(w: &mut Writer<'_>, m: &Machine, hw: &Hardware, arch: &str) {
 
     w.text("channel");
     w.bool(channel::current().is_some());
+
+    w.text("handlers");
+    w.uint(handlers::count() as u64);
 }
 
 /// El mapa de memoria: un arreglo de `[inicio, bytes, clase]`.
@@ -621,6 +658,8 @@ struct Args<'a> {
     len: Option<u64>,
     /// El identificador de un nucleo, para `core.claim`.
     core_id: Option<u64>,
+    /// El numero de una interrupcion, para `irq.install`.
+    interrupt: Option<u64>,
     /// Prestados del buffer de entrada, no copiados: subir codigo maquina no
     /// puede costar una copia mas. La vida util los ata al pedido, asi que se
     /// dejan de poder usar cuando llega el siguiente — que es exactamente
@@ -638,6 +677,7 @@ fn leer_args<'a>(r: &mut Reader<'a>) -> Option<Args<'a>> {
         off: None,
         len: None,
         core_id: None,
+        interrupt: None,
         datos: None,
     };
 
@@ -661,6 +701,7 @@ fn leer_args<'a>(r: &mut Reader<'a>) -> Option<Args<'a>> {
             "off" => a.off = Some(r.uint()?),
             "len" => a.len = Some(r.uint()?),
             "id" => a.core_id = Some(r.uint()?),
+            "interrupt" => a.interrupt = Some(r.uint()?),
             _ => r.skip()?,
         }
     }
@@ -1087,6 +1128,74 @@ fn escribir_canal(w: &mut Writer<'_>) {
             w.uint(m.handle);
             w.text("capacity");
             w.uint(m.capacity() as u64);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// irq.install
+// ---------------------------------------------------------------------------
+
+/// Pone el codigo del agente a atender una interrupcion de un aparato (D9).
+///
+/// El kernel no le pasa el evento al agente: el agente escribe el codigo que
+/// corre **sin el**, y el kernel solo lo pone en la tabla. Una interrupcion se
+/// atiende en microsegundos y el agente contesta en segundos — nunca puede
+/// estar en ese lazo (P3).
+///
+/// La variante `raw` no restringe menos: es que el kernel no pone prologo,
+/// epilogo ni el aviso de "ya atendi". No es un guardarrail lo que se saca, son
+/// veinte bytes que el agente escribiria igual.
+fn irq_install<P: Platform>(
+    p: &mut P,
+    id: u64,
+    r: &mut Reader<'_>,
+    hw: &Hardware,
+    raw: bool,
+) {
+    let Some(a) = leer_args(r) else {
+        return responder_error(p, id, "malformed arguments");
+    };
+    let (Some(handle), Some(interrupt)) = (a.handle, a.interrupt) else {
+        return responder_error(p, id, "irq.install needs handle and interrupt");
+    };
+    let off = a.off.unwrap_or(0);
+
+    // La entrada tiene que estar adentro de un reclamo vigente. Un byte alcanza:
+    // hasta donde llega el handler lo sabe el handler.
+    let entrada = match claims::range_of(handle, off, 1) {
+        Err(e) => return responder_fallo(p, id, e),
+        Ok(dir) => dir,
+    };
+
+    let slot = match handlers::reserve(interrupt as u32, entrada, raw) {
+        Err(e) => return responder_error(p, id, e.code()),
+        Ok(s) => s,
+    };
+
+    // SAFETY: la entrada esta dentro de un reclamo y el identity map cubre todo.
+    match unsafe { p.install_irq(hw, interrupt as u32, slot, raw) } {
+        Err(e) => {
+            // Si la arquitectura no pudo, la ranura se suelta: dejarla tomada
+            // haria que el proximo intento diga "ya instalado" por nada.
+            handlers::release_slot(slot);
+            responder_error(p, id, e.code())
+        }
+        Ok(trigger) => {
+            handlers::set_trigger(slot, trigger);
+            let out = unsafe { &mut *core::ptr::addr_of_mut!(OUTBOX) };
+            let mut w = Writer::new(out);
+            w.array(3);
+            w.uint(id);
+            w.bool(true);
+            w.map(3);
+            w.text("interrupt");
+            w.uint(interrupt);
+            w.text("entry");
+            w.uint(entrada);
+            w.text("raw");
+            w.bool(raw);
+            terminar(p, id, w);
         }
     }
 }

@@ -5,6 +5,7 @@
 
 use crate::acpi::Hardware;
 use crate::channel::Doorbell;
+use crate::handlers;
 use crate::cores;
 use crate::fault::{Fault, Outcome};
 use crate::machine::Machine;
@@ -123,6 +124,31 @@ pub trait Platform {
     /// El timbre del cable tiene que estar instalado antes: comparten
     /// controlador.
     unsafe fn install_doorbell(&mut self, hw: &Hardware) -> Result<Doorbell, &'static str>;
+
+    /// Pone el código del agente a atender una interrupción de un aparato (D9).
+    ///
+    /// `interrupt` es el número con el que **la máquina** identifica esa fuente
+    /// —el que publican las tablas de ACPI—, no una ranura de la tabla de
+    /// interrupciones: eso último es modelo de x86 y no existe igual en ARM.
+    ///
+    /// `slot` es la ranura que `handlers` ya reservó, y es lo que la
+    /// arquitectura usa para saber a qué handler llamar.
+    ///
+    /// Con `raw`, el kernel no pone nada alrededor. La variante envuelta **no
+    /// restringe nada**: ahorra escribir los mismos veinte bytes de prólogo cada
+    /// vez, y no es un guardarraíl.
+    ///
+    /// # Safety
+    ///
+    /// `entry` tiene que apuntar a código ejecutable, y con `raw` ese código
+    /// tiene que terminar como el hardware espera.
+    unsafe fn install_irq(
+        &mut self,
+        hw: &Hardware,
+        interrupt: u32,
+        slot: usize,
+        raw: bool,
+    ) -> Result<Doorbell, handlers::Error>;
 
     /// Duerme este núcleo hasta que suene algún timbre.
     ///

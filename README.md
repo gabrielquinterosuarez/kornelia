@@ -18,14 +18,14 @@ Arranca por UEFI en **x86_64 y aarch64**, le toma la máquina al firmware
 (`ExitBootServices`) y **habla CBOR por el cordón umbilical** (D6). Corre sobre
 pila y tablas de páginas propias, y captura los faults en vez de reiniciarse.
 
-**Ocho de los once verbos andan:** `describe`, `mem.claim`, `mem.read`,
-`mem.write`, `release`, `exec`, `core.claim` y **`listen`**. Un agente ya puede preguntarle a la máquina
+**Diez de los once verbos andan:** `describe`, `mem.claim`, `mem.read`,
+`mem.write`, `release`, `exec`, `core.claim`, `listen` e **`irq.install`**. Un agente ya puede preguntarle a la máquina
 qué es —memoria, núcleos, controlador de interrupciones, PCIe—, reclamar memoria
 física, subirle código máquina y **correrlo**. Y si ese código falla, el fault
 vuelve como respuesta en vez de matar la máquina: ni siquiera destruyendo el
 puntero de pila, porque las excepciones entran en una pila aparte.
 
-Faltan `irq.install`, `irq.install_raw` y `dma.allow`.
+Falta uno: `dma.allow`, el IOMMU.
 
 ## Requisitos
 
@@ -80,6 +80,8 @@ un agente: arranca QEMU, espera la marca `-- CBOR --` y habla el protocolo.
 ./scripts/client.py --exec                # sube codigo maquina y lo corre
 ./scripts/client.py --smp 4 --nucleos     # arranca los otros nucleos
 ./scripts/client.py --buzon                # arma el segundo canal y le habla por ahi
+./scripts/client.py --timbre               # el agente despierta al kernel
+./scripts/client.py --handler              # el agente atiende una interrupcion
 ```
 
 Con `--exec` se ve la tesis del proyecto en ocho bytes de código máquina:
@@ -172,7 +174,8 @@ grep -ao '[a-z0-9-]*@[0-9a-f]*' virt.dtb | sort -u
 | `kernel-core/src/machine.rs` | Lo que se sabe de la máquina: regiones y dónde están ACPI y el device tree. |
 | `kernel-core/src/tables.rs` | Lee y **verifica** los encabezados de ACPI y del device tree. |
 | `kernel-core/src/cbor.rs` | El formato binario del protocolo (D6), escrito a mano. |
-| `kernel-core/src/protocol.rs` | Los verbos. Hoy ocho de los once. |
+| `kernel-core/src/protocol.rs` | Los verbos. Hoy diez de los once. |
+| `kernel-core/src/handlers.rs` | Los handlers de interrupción del agente (D9). |
 | `kernel-core/src/channel.rs` | El segundo canal: el buzón que arma el agente (D17, D28). |
 | `kernel-core/src/serial.rs` | El buffer entre el timbre del cable y el bucle. |
 | `kernel-core/src/claims.rs` | La tabla de handles: qué tiene reclamado el agente (D14). |

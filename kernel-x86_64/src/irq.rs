@@ -261,3 +261,164 @@ pub unsafe fn install_doorbell() -> Result<kernel_core::channel::Doorbell, &'sta
         id: VECTOR_BUZON as u32,
     })
 }
+
+// --- Los handlers del agente (D9) -------------------------------------------
+
+/// Los numeros de timbre que se reservan para el agente.
+///
+/// **Abajo del cable a proposito.** El cable esta en 0x40 (grupo 4) y estos en
+/// el grupo 3, asi que un aparato del agente que se vuelva loco no puede tapar
+/// el cordon (D17, P6).
+const VECTOR_AGENTE: u8 = 0x31;
+
+core::arch::global_asm!(
+    r#"
+.section .text
+.globl AGENTE_STUBS
+
+// Un stub por ranura. Cada uno apila su numero de ranura y salta al comun: es
+// la unica forma de que el codigo comun sepa a que handler llamar, porque el
+// CPU no dice por que vector entro.
+.macro STUB_AGENTE n
+agente_\n:
+    push \n
+    jmp agente_comun
+.endm
+
+STUB_AGENTE 0
+STUB_AGENTE 1
+STUB_AGENTE 2
+STUB_AGENTE 3
+STUB_AGENTE 4
+STUB_AGENTE 5
+STUB_AGENTE 6
+STUB_AGENTE 7
+
+// El prologo y el epilogo que D9 dice que pone el kernel. Salva lo que la
+// convencion de llamadas permite pisar, llama, restaura, y avisa que atendio.
+agente_comun:
+    push rax
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push rbx
+
+    // La ranura quedo apilada antes de todo esto.
+    mov rdi, [rsp + 80]
+
+    mov rbx, rsp
+    and rsp, -16
+    call irq_agente_rust
+    mov rsp, rbx
+
+    pop rbx
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rax
+
+    // Sacar la ranura que apilo el stub.
+    add rsp, 8
+    iretq
+
+.section .rodata
+.balign 8
+AGENTE_STUBS:
+    .quad agente_0, agente_1, agente_2, agente_3
+    .quad agente_4, agente_5, agente_6, agente_7
+"#
+);
+
+extern "C" {
+    static AGENTE_STUBS: [u64; kernel_core::handlers::MAX];
+}
+
+/// Llama al codigo del agente y avisa que se atendio.
+#[no_mangle]
+extern "sysv64" fn irq_agente_rust(slot: u64) {
+    let slot = slot as usize;
+
+    if let Some(h) = kernel_core::handlers::at(slot) {
+        kernel_core::handlers::served(slot);
+        // SAFETY: la direccion salio de un reclamo vigente del agente, y el
+        // identity map cubre toda la memoria. Lo que haya ahi puede ser
+        // cualquier cosa — de eso se trata (P2).
+        unsafe {
+            let f: extern "sysv64" fn() = core::mem::transmute(h.entry);
+            f();
+        }
+    }
+
+    // SAFETY: `install` dejo la direccion del APIC.
+    unsafe {
+        let apic = APIC;
+        if apic != 0 {
+            core::ptr::write_volatile((apic + EOI) as *mut u32, 0);
+        }
+    }
+}
+
+/// Rutea una interrupcion de aparato al codigo del agente.
+///
+/// # Safety
+///
+/// `install` tiene que haber corrido antes.
+pub unsafe fn install_agente(
+    hw: &Hardware,
+    interrupt: u32,
+    slot: usize,
+    raw: bool,
+) -> Result<kernel_core::channel::Doorbell, kernel_core::handlers::Error> {
+    use kernel_core::handlers::Error;
+
+    if APIC == 0 {
+        return Err(Error::NoSuchInterrupt);
+    }
+    let Some(io) = hw.ioapic else {
+        return Err(Error::NoSuchInterrupt);
+    };
+    if interrupt < io.gsi_base {
+        return Err(Error::NoSuchInterrupt);
+    }
+    // El cable del serie no se entrega: seria quedarse sin cordon.
+    if interrupt == hw.gsi_of(CABLE_SERIE) {
+        return Err(Error::IsKernels);
+    }
+
+    let vector = VECTOR_AGENTE + slot as u8;
+
+    // Con `raw` la tabla apunta directo al codigo del agente: ni prologo, ni
+    // epilogo, ni EOI. Tiene que terminar en `iretq` y avisarle al APIC el
+    // mismo.
+    let destino = if raw {
+        kernel_core::handlers::at(slot).map(|h| h.entry).ok_or(Error::NoSuchInterrupt)?
+    } else {
+        AGENTE_STUBS[slot]
+    };
+
+    crate::idt::set_gate(vector as usize, destino).map_err(|_| Error::NoSuchInterrupt)?;
+
+    let entrada = interrupt - io.gsi_base;
+    let reg = 0x10 + entrada * 2;
+    ioapic_escribir(io.address, reg + 1, (crate::smp::this_core() as u32) << 24);
+    ioapic_escribir(io.address, reg, vector as u32);
+
+    // Como hacerla sonar a proposito: un IPI a este mismo nucleo con ese
+    // vector. Entra por la misma puerta que si hubiera hablado el aparato.
+    let destino = (crate::smp::this_core() as u64) << 24;
+    Ok(kernel_core::channel::Doorbell {
+        writes: [(APIC + ICR_ALTO, destino, 4), (APIC + ICR_BAJO, vector as u64, 4)],
+        count: 2,
+        id: vector as u32,
+    })
+}

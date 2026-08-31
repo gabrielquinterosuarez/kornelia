@@ -162,6 +162,15 @@ pub fn sleep() {
                 while let Some(b) = crate::uart::read_byte() {
                     kernel_core::serial::push(b);
                 }
+            } else if let Some(slot) = kernel_core::handlers::slot_of(id) {
+                // Un aparato del agente. El prologo y el epilogo que D9 dice
+                // que pone el kernel son, aca, este mismo camino: los registros
+                // ya estan a salvo porque esto es una llamada normal.
+                if let Some(h) = kernel_core::handlers::at(slot) {
+                    kernel_core::handlers::served(slot);
+                    let f: extern "C" fn() = core::mem::transmute(h.entry);
+                    f();
+                }
             }
             // "Ya atendi", con el mismo numero que vino.
             escribir(GICC, GICC_EOIR, cual);
@@ -189,5 +198,59 @@ pub unsafe fn install_doorbell() -> Result<kernel_core::channel::Doorbell, &'sta
         writes: [(GICD + GICD_SGIR, valor, 4), (0, 0, 0)],
         count: 1,
         id: SGI_BUZON,
+    })
+}
+
+// --- Los handlers del agente (D9) -------------------------------------------
+
+/// Marcar una interrupcion como pendiente sin que el aparato hable.
+const GICD_ISPENDR: u64 = 0x200;
+
+/// La prioridad de los aparatos del agente: **mas baja que el cable**. Un
+/// aparato que se vuelva loco no puede tapar el cordon (D17, P6).
+const PRIORIDAD_AGENTE: u8 = 0xA0;
+
+/// Rutea una interrupcion de aparato al codigo del agente.
+///
+/// # Safety
+///
+/// `install` tiene que haber corrido antes.
+pub unsafe fn install_agente(
+    hw: &Hardware,
+    interrupt: u32,
+    _slot: usize,
+    raw: bool,
+) -> Result<kernel_core::channel::Doorbell, kernel_core::handlers::Error> {
+    use kernel_core::handlers::Error;
+
+    if GICD == 0 {
+        return Err(Error::NoSuchInterrupt);
+    }
+    // En aarch64 el GIC entrega el numero y el reparto lo hace el kernel en
+    // software: no hay un camino mas crudo que este. Decirlo es mejor que
+    // aceptar el pedido y darle otra cosa (P4).
+    if raw {
+        return Err(Error::NoRawPath);
+    }
+    // Ni el cable ni el timbre del buzon se entregan.
+    if hw.serial.map(|s| s.gsi) == Some(interrupt) || interrupt == SGI_BUZON {
+        return Err(Error::IsKernels);
+    }
+    // Del 0 al 31 son las de nucleo a nucleo y las privadas de cada nucleo.
+    if interrupt < 32 || interrupt >= 1020 {
+        return Err(Error::NoSuchInterrupt);
+    }
+
+    escribir_byte(GICD, GICD_IPRIORITYR + interrupt as u64, PRIORIDAD_AGENTE);
+    escribir_byte(GICD, GICD_ITARGETSR + interrupt as u64, 1);
+    escribir(GICD, GICD_ISENABLER + (interrupt as u64 / 32) * 4, 1 << (interrupt % 32));
+
+    // Como hacerla sonar a proposito: marcarla pendiente en el distribuidor.
+    // El GIC no distingue eso de que el aparato haya hablado.
+    let reg = GICD + GICD_ISPENDR + (interrupt as u64 / 32) * 4;
+    Ok(kernel_core::channel::Doorbell {
+        writes: [(reg, 1u64 << (interrupt % 32), 4), (0, 0, 0)],
+        count: 1,
+        id: interrupt,
     })
 }

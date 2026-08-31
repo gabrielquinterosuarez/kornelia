@@ -81,8 +81,8 @@ algo que la lista de diez no podía pedir — ver D28.
 | `mem.write(handle, off, bytes)` | Bytes crudos hacia adentro. |
 | `core.claim(id, modo)` | Un núcleo físico. En `dedicated` es solo del agente, con el timer enmascarado. En `shared` es el núcleo que atiende el protocolo: el kernel le pide prestados microsegundos cuando llega un pedido. El núcleo del protocolo **nunca** se entrega como `dedicated`, y el kernel lo dice con los datos para que el agente decida (P4). |
 | `exec(core, handle, off, regs)` | Salta a código máquina. Devuelve estado de registros + fault si lo hubo. |
-| `irq.install(vector, handle, off)` | Instala un handler. El kernel pone prólogo, epílogo y EOI. |
-| `irq.install_raw(vector, handle, off)` | Igual, pero el agente hace todo. Sin red de contención. |
+| `irq.install(interrupt, handle, off)` | Instala un handler. El kernel pone prólogo, epílogo y EOI. El argumento es el número con el que **la máquina** identifica la fuente, no una ranura de tabla: eso último es modelo de x86 y no existe igual en ARM (D3). |
+| `irq.install_raw(interrupt, handle, off)` | Igual, pero el agente hace todo. Sin red de contención. **En aarch64 devuelve error**: el GIC entrega el número y el reparto es en software, así que no hay un camino más crudo que el que ya se usa — decirlo es mejor que aceptar el pedido y dar otra cosa (P4). |
 | `dma.allow(device, handle)` | Declara qué memoria puede tocar un dispositivo. Programa el IOMMU. |
 | `listen(handle)` | Adopta como **segundo canal** un buzón que armó el agente en memoria reclamada (D5, D17, D28). El kernel escucha por ahí *además* del cable, y contesta por donde le llegó el pedido. |
 | `release(handle)` | Devuelve lo reclamado. |
@@ -129,7 +129,7 @@ mapeados en memoria. `describe` tiene que cubrir los dos modelos de descubrimien
 ## 7. Estado del código
 
 **Cuidado al leer este documento:** las secciones 4 y 6 son *especificación*, no descripción.
-De los **once** verbos de la sección 4 hay **ocho** implementados; los otros tres todavía no.
+De los **once** verbos de la sección 4 hay **diez** implementados; falta uno: `dma.allow`.
 
 Lo que sí existe:
 
@@ -146,6 +146,7 @@ Lo que sí existe:
 | **`describe`** | Andando: sirve `memory`, `tables`, `claims`, `cpus`, `interrupts` y `pcie`. Sin argumentos devuelve el índice, no un volcado (D16). |
 | **Lectura de ACPI** | Andando en las dos. MADT (núcleos y controlador de interrupciones) y MCFG (PCIe), con el checksum verificado tabla por tabla. |
 | **`mem.claim` · `mem.read` · `mem.write` · `release`** | Andando. Reclamos por tamaño o por dirección exacta (así se pide MMIO), con alineación y tope. Los handles son de la máquina y no se reusan (D14). |
+| **`irq.install`** | Andando en las dos. El agente pone su código a atender un aparato, y el kernel publica además **cómo hacer sonar esa interrupción a propósito** para que pueda probar su handler sin esperar al aparato. `irq.install_raw` solo en x86_64. |
 | **Timbre del buzón** | Andando en las dos. El agente lo toca con código máquina propio: un IPI por el APIC en x86_64, un SGI por el GIC en aarch64. **Con prioridad más baja que el cable**, así que por más que el agente inunde de llamadas el cordón pasa primero (D17, P6). El kernel cuenta cuántas veces sonó, que es lo que permite comprobarlo. |
 | **`listen`** | Andando en las dos. El kernel escucha por el cable y por el buzón, y contesta por donde le llegó (D17). El acuerdo lo publica `describe`. |
 | **`core.claim`** | Andando en las dos. PSCI en aarch64; INIT/SIPI más un trampolín de 16→32→64 bits en x86_64. El núcleo nuevo copia las tablas de páginas y la captura de faults, y avisa por un atómico. |
@@ -153,7 +154,7 @@ Lo que sí existe:
 | **Tablas de páginas propias** (D12) | Andando en las dos. Identity map con páginas de 1 GiB; MMIO no cacheable. La raíz se relee del registro y se verifica contra el mapa. |
 | **Timbre del cable serie** | Andando en las dos. El núcleo duerme entre pedidos en vez de preguntarle al UART byte por byte. APIC + IO-APIC en x86_64, GIC en aarch64. Es la misma maquinaria que va a necesitar `irq.install`. |
 | **Captura de faults** (P5, D7) | Andando en las dos. Causa + crudo + dirección + registros. Autotest de breakpoint en cada arranque. Todavía no viaja por CBOR ni vuelve al agente. |
-| Los otros tres verbos | `irq.install`, `irq.install_raw`, `dma.allow`. |
+| El verbo que falta | `dma.allow` — el IOMMU. |
 
 Verificado el 2026-08-30 contra dos fuentes independientes: el mapa que imprime el kernel en
 aarch64 coincide con el device tree que genera QEMU (`memory@40000000` → primera región en esa
@@ -208,11 +209,15 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
    No se corrompe nada —el estado del fault ya es por núcleo— pero el texto sale mezclado y se
    lee mal. Cuando los faults viajen por CBOR en vez de por texto deja de importar.
 
-8. **Un pedido que llega solo por el buzón ya despierta al núcleo** — el timbre existe. Lo que
-   falta es que el **driver** que lo toque sea de verdad: hoy nadie puede llenar el buzón salvo
-   el cliente con `mem.write`, porque el agente todavía no puede atender la interrupción de una
-   placa de red. Eso es `irq.install` (D9), y es lo que convierte el segundo canal en algo
-   usable.
+8. **Los handlers del agente corren diferidos, no al instante.** El bucle del protocolo corre
+   con las interrupciones enmascaradas —porque desenmascararlas abre un hueco donde un
+   despertador se pierde— así que un handler del agente se atiende recién en la próxima ventana
+   de dormir. En la práctica son microsegundos, salvo durante un `exec` largo, que puede ser
+   cualquier cosa. **D9 dice que una interrupción se atiende en microsegundos**, así que esto no
+   cumple del todo. El arreglo diseñado: que el handler marque una bandera y el bucle
+   condicione el dormir a esa bandera, con el chequeo hecho bajo máscara — y si la interrupción
+   no se toma en la ventana queda pendiente, así que el próximo `wfi`/`hlt` vuelve enseguida y
+   el avance está garantizado.
 
 9. **Un núcleo reclamado todavía no puede recibir trabajo.** Arranca, se configura solo y queda
    esperando, pero `exec` corre siempre en el núcleo que atiende el protocolo: falta un buzón por

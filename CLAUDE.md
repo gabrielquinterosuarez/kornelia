@@ -85,8 +85,9 @@ captura los faults en vez de reiniciarse. **El núcleo que atiende duerme entre
 pedidos**: el cable serie tiene timbre (interrupción), así que ya no gira
 preguntando.
 
-**Ocho de los once verbos andan:** `describe`, `mem.claim`, `mem.read`,
-`mem.write`, `release`, `exec`, `core.claim` y **`listen`**. El agente sube código máquina, lo corre, y
+**Diez de los once verbos andan:** `describe`, `mem.claim`, `mem.read`,
+`mem.write`, `release`, `exec`, `core.claim`, `listen` y **`irq.install` /
+`irq.install_raw`** (el `raw` solo en x86_64). El agente sube código máquina, lo corre, y
 si falla **el fault vuelve como respuesta en vez de matar la máquina** (P5) —
 ni siquiera destruyendo el puntero de pila, porque las excepciones entran en una
 pila aparte (IST en x86_64, `SP_EL1` en aarch64).
@@ -109,15 +110,14 @@ de commitear; CI corre exactamente ese script.
 argumentos en `docs/DISENO.md` §8. Los tres verbos que faltan son grandes y
 ninguno bloquea a los otros:
 
-1. **`irq.install`** — handlers del agente (D9). Es lo que convierte el segundo
-   canal en algo usable: hoy el buzón y su timbre andan, pero nadie puede
-   llenarlo salvo el cliente, porque el agente no puede atender la interrupción
-   de una placa de red. Las rutas ya salen de la MADT y los dos controladores
-   ya están encendidos.
+1. **Que los handlers del agente no se atiendan diferidos.** Hoy esperan a la
+   próxima ventana de dormir porque el bucle corre con las interrupciones
+   enmascaradas. D9 pide microsegundos. El arreglo está diseñado y anotado en
+   `DISENO.md` §7.
 2. **Darle trabajo a los núcleos reclamados.** Hoy arrancan y quedan esperando,
    pero `exec` corre siempre en el que atiende el protocolo. Falta un buzón por
    núcleo y que `exec` acepte a cuál mandárselo (sección 4: `exec(core, ...)`).
-3. `dma.allow` — el IOMMU. El más grande del proyecto y el más específico de
+3. **`dma.allow`** — el IOMMU, el único verbo que falta. El más grande del proyecto y el más específico de
    cada fabricante; es lo que más gana con silicio real.
 
 Deudas anotadas en `docs/DISENO.md` §7. La más viva: **un núcleo reclamado

@@ -75,6 +75,16 @@ impl Platform for AArch64 {
         irq::install_doorbell()
     }
 
+    unsafe fn install_irq(
+        &mut self,
+        hw: &kernel_core::acpi::Hardware,
+        interrupt: u32,
+        slot: usize,
+        raw: bool,
+    ) -> Result<kernel_core::channel::Doorbell, kernel_core::handlers::Error> {
+        irq::install_agente(hw, interrupt, slot, raw)
+    }
+
     fn sleep(&mut self) {
         irq::sleep();
     }

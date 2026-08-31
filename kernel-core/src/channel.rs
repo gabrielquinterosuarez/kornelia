@@ -262,7 +262,8 @@ pub fn reset() {
 ///
 /// En aarch64 alcanza una; en x86_64 son dos, porque el registro que dispara la
 /// llamada esta separado del que dice a quien.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(test, derive(Debug))]
 pub struct Doorbell {
     /// (direccion, valor, cuantos bytes escribir).
     pub writes: [(u64, u64, u8); 2],

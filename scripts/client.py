@@ -525,6 +525,87 @@ def prueba_de_timbre(proc, timeout, arch):
     return 0
 
 
+def prueba_de_handler(proc, timeout, arch):
+    """El agente pone su codigo a atender una interrupcion (D9)."""
+    fallas = []
+
+    def pedir_verbo(n, verbo, args):
+        resp, _ = pedir(proc, [n, verbo, args], timeout)
+        _, ok, carga = resp
+        return ok, carga
+
+    # Un numero de interrupcion que la maquina tenga y que no sea del kernel.
+    # 34 en ARM es el reloj de tiempo real; 5 en x86 es un cable libre.
+    INT = 34 if arch == "aarch64" else 5
+
+    # El handler: un `ret` pelado. Lo unico que se prueba es que el kernel lo
+    # llame — lo que haga adentro es asunto del agente (P2).
+    ret = (0xD65F03C0).to_bytes(4, "little") if arch == "aarch64" else b"\xc3"
+
+    ok, c = pedir_verbo(50, "mem.claim", {"bytes": 4096, "align": 4096})
+    if not ok:
+        print(f"  no se pudo reclamar: {c}")
+        return 1
+    h = c["handle"]
+    pedir_verbo(51, "mem.write", {"handle": h, "bytes": ret})
+
+    ok, r = pedir_verbo(52, "irq.install", {"handle": h, "interrupt": INT})
+    print(f"  irq.install (interrupcion {INT})  {'ok ' if ok else 'ERROR'} {r}")
+    if not ok:
+        fallas.append(f"no se pudo instalar: {r}")
+        return 1
+
+    # El cable del kernel NO se entrega: seria quedarse sin cordon.
+    ok, d = pedir_verbo(53, "describe", {"what": ["interrupts"]})
+    cable = d["interrupts"].get("serial")
+    if cable and cable.get("gsi"):
+        ok, e = pedir_verbo(54, "irq.install", {"handle": h, "interrupt": cable["gsi"]})
+        print(f"  y el cable del kernel:            {'ok ' if ok else 'ERROR'} {e}")
+        if ok or e.get("error") != "is-kernel-interrupt":
+            fallas.append("dejo instalar un handler sobre el cable del kernel")
+
+    # Dos veces la misma tampoco.
+    ok, e = pedir_verbo(55, "irq.install", {"handle": h, "interrupt": INT})
+    if ok or e.get("error") != "already-installed":
+        fallas.append("dejo instalar dos veces la misma interrupcion")
+
+    # Ahora hacerla sonar con codigo del agente, y ver si el kernel la atendio.
+    ok, d = pedir_verbo(56, "describe", {"what": ["handlers"]})
+    if not ok or not d.get("handlers"):
+        fallas.append("el handler no aparece en describe")
+        return 1
+    hh = d["handlers"][0]
+    antes = hh["served"]
+    print(f"  atendida {antes} veces hasta ahora")
+
+    if not hh["trigger"]:
+        fallas.append("el kernel no publica como hacerla sonar")
+        return 1
+
+    codigo = emitir_escrituras(arch, hh["trigger"])
+    ok, c2 = pedir_verbo(57, "mem.claim", {"bytes": 4096, "align": 4096})
+    h2 = c2["handle"]
+    pedir_verbo(58, "mem.write", {"handle": h2, "bytes": codigo})
+    print(f"  el agente la hace sonar: {codigo.hex()}")
+    ok, r = pedir_verbo(59, "exec", {"handle": h2})
+    if not ok or r.get("faulted"):
+        fallas.append(f"el codigo que la hace sonar fallo: {r}")
+
+    ok, d = pedir_verbo(60, "describe", {"what": ["handlers"]})
+    despues = d["handlers"][0]["served"] if ok and d.get("handlers") else -1
+    print(f"  y ahora {despues} veces")
+    if despues <= antes:
+        fallas.append("el kernel nunca llamo al handler del agente")
+
+    print()
+    if fallas:
+        for f in fallas:
+            print(f"  FALLA: {f}")
+        return 1
+    print("  handler: ok")
+    return 0
+
+
 def prueba_de_buzon(proc, timeout):
     """Arma el segundo canal en memoria y le manda un pedido por ahi (D17).
 
@@ -634,6 +715,8 @@ def main():
                     help="cuantos nucleos darle a QEMU")
     ap.add_argument("--exec", action="store_true", dest="ejecutar",
                     help="sube codigo maquina de verdad y lo corre")
+    ap.add_argument("--handler", action="store_true",
+                    help="instala un handler de interrupcion del agente y lo hace sonar")
     ap.add_argument("--timbre", action="store_true",
                     help="el agente toca el timbre del kernel con codigo propio")
     ap.add_argument("--buzon", action="store_true",
@@ -696,6 +779,9 @@ def main():
         if args.timbre:
             print()
             rc |= prueba_de_timbre(proc, args.timeout, args.arch)
+        if args.handler:
+            print()
+            rc |= prueba_de_handler(proc, args.timeout, args.arch)
         return rc
     finally:
         proc.kill()

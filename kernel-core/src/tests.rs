@@ -76,6 +76,16 @@ impl Platform for Fake {
         Err("la plataforma de prueba no tiene timbre")
     }
 
+    unsafe fn install_irq(
+        &mut self,
+        _hw: &crate::acpi::Hardware,
+        _interrupt: u32,
+        _slot: usize,
+        _raw: bool,
+    ) -> Result<crate::channel::Doorbell, crate::handlers::Error> {
+        Err(crate::handlers::Error::NoSuchInterrupt)
+    }
+
     fn sleep(&mut self) {}
 
     fn uart_address(&self) -> Option<u64> {
@@ -1336,5 +1346,82 @@ fn el_anillo_da_la_vuelta() {
         // El 9 fue al lugar 0, que es donde estaba el 1.
         let base = channel::size_for(0) as usize + 4;
         assert_eq!(b[base], 9);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Handlers del agente (D9)
+// ---------------------------------------------------------------------------
+
+use crate::handlers;
+
+fn con_handlers_limpios<T>(f: impl FnOnce() -> T) -> T {
+    let _g = CANDADO.lock().unwrap_or_else(|e| e.into_inner());
+    handlers::reset();
+    f()
+}
+
+#[test]
+fn se_instala_un_handler_y_se_encuentra_por_su_interrupcion() {
+    con_handlers_limpios(|| {
+        let slot = handlers::reserve(34, 0x1000, false).unwrap();
+        assert_eq!(handlers::slot_of(34), Some(slot));
+        assert_eq!(handlers::slot_of(35), None);
+        let h = handlers::at(slot).unwrap();
+        assert_eq!(h.entry, 0x1000);
+        assert!(!h.raw);
+        assert_eq!(h.count, 0);
+    });
+}
+
+/// Dos handlers para la misma interrupcion serian dos codigos peleandose por un
+/// evento: el segundo pediría ganar sin decirlo.
+#[test]
+fn no_se_instalan_dos_para_la_misma_interrupcion() {
+    con_handlers_limpios(|| {
+        handlers::reserve(34, 0x1000, false).unwrap();
+        assert_eq!(handlers::reserve(34, 0x2000, false), Err(handlers::Error::Taken));
+    });
+}
+
+#[test]
+fn la_tabla_de_handlers_tiene_techo() {
+    con_handlers_limpios(|| {
+        for i in 0..handlers::MAX {
+            handlers::reserve(100 + i as u32, 0x1000, false).unwrap();
+        }
+        assert_eq!(
+            handlers::reserve(999, 0x1000, false),
+            Err(handlers::Error::TableFull)
+        );
+    });
+}
+
+/// Si la arquitectura no pudo instalarlo, la ranura se suelta: dejarla tomada
+/// haria que el proximo intento diga "ya instalado" por nada.
+#[test]
+fn una_ranura_que_no_se_uso_se_suelta() {
+    con_handlers_limpios(|| {
+        let slot = handlers::reserve(34, 0x1000, false).unwrap();
+        handlers::release_slot(slot);
+        assert!(handlers::at(slot).is_none());
+        assert_eq!(handlers::slot_of(34), None);
+        // Y se puede volver a pedir.
+        assert!(handlers::reserve(34, 0x2000, false).is_ok());
+    });
+}
+
+/// El agente lee esta cuenta para saber si su aparato esta hablando, sin tener
+/// que instrumentar su propio codigo.
+#[test]
+fn se_cuenta_cada_vez_que_se_atiende() {
+    con_handlers_limpios(|| {
+        let slot = handlers::reserve(34, 0x1000, false).unwrap();
+        handlers::served(slot);
+        handlers::served(slot);
+        assert_eq!(handlers::at(slot).unwrap().count, 2);
+
+        // Una ranura que no existe no rompe nada.
+        handlers::served(handlers::MAX + 5);
     });
 }
