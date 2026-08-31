@@ -3,6 +3,19 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# rustup se puede haber instalado sin tocar el PATH del shell. El cargo esta,
+# pero `cargo` pelado no lo encuentra: se lo agrega aca para que este script
+# ande sin preparativos.
+if ! command -v cargo >/dev/null && [ -x "$HOME/.cargo/bin/cargo" ]; then
+    PATH="$HOME/.cargo/bin:$PATH"
+fi
+
+if ! command -v cargo >/dev/null; then
+    echo "FALTA cargo. Instalar con:" >&2
+    echo "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh" >&2
+    exit 1
+fi
+
 OVMF_CODE=${OVMF_CODE:-/usr/share/OVMF/OVMF_CODE_4M.fd}
 OVMF_VARS=${OVMF_VARS:-/usr/share/OVMF/OVMF_VARS_4M.fd}
 

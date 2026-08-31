@@ -3,7 +3,7 @@
 //! Todo lo que una arquitectura debe proveer vive en este trait. El resto del
 //! kernel no sabe sobre qué silicio corre.
 
-use crate::memory::Machine;
+use crate::machine::Machine;
 use core::fmt::{self, Write};
 
 pub trait Platform {

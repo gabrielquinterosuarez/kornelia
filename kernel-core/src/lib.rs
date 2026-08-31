@@ -7,10 +7,13 @@
 
 #![no_std]
 
+pub mod machine;
 pub mod memory;
 pub mod platform;
+pub mod tables;
 
-pub use memory::{Kind, Machine, Region};
+pub use machine::{Machine, Tables};
+pub use memory::{Kind, Region};
 pub use platform::{Platform, Umbilical};
 
 /// Punto de entrada del kernel, una vez que la arquitectura terminó de arrancar
@@ -28,6 +31,8 @@ pub fn main<P: Platform>(p: &mut P) -> ! {
     u.line("");
 
     describe_memory(&mut u, &machine);
+    u.line("");
+    describe_tables(&mut u, &machine.tables);
 
     u.line("");
     u.line("El cordon umbilical esta vivo.");
@@ -67,5 +72,64 @@ fn describe_memory<P: Platform>(u: &mut Umbilical<'_, P>, m: &Machine) {
             let _ = write!(u, "({n})");
         }
         let _ = u.write_str("\r\n");
+    }
+}
+
+/// Vuelca dónde dejó la máquina su propia descripción, y verifica que esté ahí.
+///
+/// No alcanza con informar el puntero que dio el firmware: se lee el encabezado
+/// para confirmar que apunta a lo que dice. Un puntero que se sigue sin
+/// verificar es una raíz inventada, y todo lo que se deduzca de ella también.
+fn describe_tables<P: Platform>(u: &mut Umbilical<'_, P>, t: &Tables) {
+    use core::fmt::Write;
+
+    u.line("descripcion de la maquina:");
+
+    match t.acpi {
+        None => u.line("  acpi         ausente"),
+        Some(addr) => {
+            let _ = write!(u, "  acpi         {addr:#018x}  ");
+            // SAFETY: la dirección la reportó el firmware en su Configuration
+            // Table, y `read_acpi` verifica firma y checksum antes de creerle.
+            match unsafe { tables::read_acpi(addr) } {
+                None => u.line("NO es un RSDP valido"),
+                Some(a) => {
+                    let _ = write!(u, "rev {}", a.revision);
+                    match a.xsdt {
+                        Some(x) => {
+                            let _ = write!(u, ", xsdt en {x:#x}");
+                        }
+                        None => {
+                            let _ = write!(u, ", rsdt en {:#x}", a.rsdt);
+                        }
+                    }
+                    let _ = u.write_str("\r\n");
+                }
+            }
+        }
+    }
+
+    match t.device_tree {
+        None => u.line("  device tree  ausente"),
+        Some(addr) => {
+            let _ = write!(u, "  device tree  {addr:#018x}  ");
+            // SAFETY: ídem; `read_device_tree` verifica el número mágico.
+            match unsafe { tables::read_device_tree(addr) } {
+                None => u.line("NO tiene el magico 0xd00dfeed"),
+                Some(d) => {
+                    let _ = write!(u, "v{}, ", d.version);
+                    u.size(d.bytes as u64);
+                    let _ = u.write_str("\r\n");
+                }
+            }
+        }
+    }
+
+    match t.smbios {
+        None => u.line("  smbios       ausente"),
+        Some(addr) => {
+            // Todavía no se interpreta: solo se anota dónde está.
+            let _ = write!(u, "  smbios       {addr:#018x}  sin interpretar\r\n");
+        }
     }
 }

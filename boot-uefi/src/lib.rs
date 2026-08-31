@@ -34,7 +34,8 @@
 
 use core::ffi::c_void;
 use core::mem::{offset_of, size_of};
-use kernel_core::memory::{Kind, Machine, Region};
+use kernel_core::machine::{Machine, Tables};
+use kernel_core::memory::{Kind, Region};
 
 // ---------------------------------------------------------------------------
 // Codigos de estado
@@ -144,6 +145,61 @@ struct BootServices {
     // De aca en adelante hay mas servicios que todavia no se usan.
 }
 
+/// Un identificador de 128 bits. UEFI los usa para ofrecer cosas opcionales sin
+/// que el que pregunta tenga que saber de antemano cuales hay: se recorre la
+/// lista comparando GUIDs y se usa lo que aparezca.
+///
+/// Los primeros tres campos son numeros (y por lo tanto little-endian en
+/// memoria); los ultimos ocho son bytes sueltos. Por eso un GUID escrito como
+/// texto no se lee igual que sus bytes en memoria, y aca se transcribe campo
+/// por campo en vez de como un arreglo.
+#[repr(C)]
+#[derive(PartialEq, Eq)]
+struct Guid(u32, u16, u16, [u8; 8]);
+
+/// Un renglon de la Configuration Table: que es, y donde esta.
+#[repr(C)]
+struct ConfigEntry {
+    guid: Guid,
+    table: *mut c_void,
+}
+
+/// Tablas de ACPI 2.0 en adelante. El puntero es al RSDP.
+const ACPI_20: Guid = Guid(
+    0x8868_e871,
+    0xe4f1,
+    0x11d3,
+    [0xbc, 0x22, 0x00, 0x80, 0xc7, 0x3c, 0x88, 0x81],
+);
+/// Tablas de ACPI 1.0. Se usa solo si no esta la de 2.0.
+const ACPI_10: Guid = Guid(
+    0xeb9d_2d30,
+    0x2d88,
+    0x11d3,
+    [0x9a, 0x16, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d],
+);
+/// Device tree aplanado.
+const DTB: Guid = Guid(
+    0xb1b6_21d5,
+    0xf19c,
+    0x41a5,
+    [0x83, 0x0b, 0xd9, 0x15, 0x2c, 0x69, 0xaa, 0xe0],
+);
+/// SMBIOS 3.x (entrada de 64 bits).
+const SMBIOS3: Guid = Guid(
+    0xf2fd_1544,
+    0x9794,
+    0x4a2c,
+    [0x99, 0x2e, 0xe5, 0xbb, 0xcf, 0x20, 0xe3, 0x94],
+);
+/// SMBIOS clasico. Se usa solo si no esta el 3.x.
+const SMBIOS: Guid = Guid(
+    0xeb9d_2d31,
+    0x2d88,
+    0x11d3,
+    [0x9a, 0x16, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d],
+);
+
 /// Un renglon del mapa de memoria. 40 bytes segun la especificacion.
 #[repr(C)]
 struct Descriptor {
@@ -174,6 +230,9 @@ const _: () = assert!(offset_of!(BootServices, exit_boot_services) == 232);
 const _: () = assert!(offset_of!(Descriptor, physical_start) == 8);
 const _: () = assert!(offset_of!(Descriptor, pages) == 24);
 const _: () = assert!(size_of::<Descriptor>() == 40);
+const _: () = assert!(size_of::<Guid>() == 16);
+const _: () = assert!(offset_of!(ConfigEntry, table) == 16);
+const _: () = assert!(size_of::<ConfigEntry>() == 24);
 
 // ---------------------------------------------------------------------------
 // Espacio para el mapa
@@ -229,6 +288,11 @@ pub unsafe fn take_machine(image: *mut c_void, systab: *mut SystemTable) -> Mach
     if (*bs).hdr.signature != BOOT_SERVICES_SIGNATURE {
         return Machine::mute("los Boot Services no tienen la firma 'BOOTSERV'");
     }
+
+    // Primero las tablas: es solo recorrer una lista que ya existe, no asigna
+    // nada y por lo tanto no mueve el mapa de memoria. Tiene que pasar dentro
+    // de la ventana igual (D25), porque despues de salir no hay como volver.
+    let tables = find_tables(systab);
 
     let buffer = &raw mut BUFFER as *mut u8;
 
@@ -286,8 +350,54 @@ pub unsafe fn take_machine(image: *mut c_void, systab: *mut SystemTable) -> Mach
 
     Machine {
         regions: core::slice::from_raw_parts(&raw const REGIONS as *const Region, count),
+        tables,
         failure: None,
     }
+}
+
+/// Recorre la Configuration Table anotando donde esta cada cosa conocida.
+///
+/// Lo que no se reconoce se ignora en silencio: la lista trae cualquier cosa que
+/// el firmware haya querido publicar, y no reconocer un GUID no es un error.
+///
+/// # Safety
+///
+/// `systab` tiene que estar ya verificado por firma.
+unsafe fn find_tables(systab: *mut SystemTable) -> Tables {
+    let mut t = Tables::default();
+
+    let list = (*systab).config_table as *const ConfigEntry;
+    if list.is_null() {
+        return t;
+    }
+
+    // La cantidad la dice el firmware. Se acota por las dudas: si ese numero
+    // viniera con basura, el bucle se iria a recorrer memoria cualquiera.
+    let n = (*systab).config_table_len.min(256);
+
+    for i in 0..n {
+        let entry = &*list.add(i);
+        let addr = entry.table as u64;
+        if addr == 0 {
+            continue;
+        }
+
+        // Las dos versiones de ACPI y de SMBIOS pueden estar las dos a la vez.
+        // El orden de estos `if` hace que la nueva le gane a la vieja sin
+        // importar en que orden aparezcan en la lista.
+        if entry.guid == ACPI_20 {
+            t.acpi = Some(addr);
+        } else if entry.guid == ACPI_10 && t.acpi.is_none() {
+            t.acpi = Some(addr);
+        } else if entry.guid == DTB {
+            t.device_tree = Some(addr);
+        } else if entry.guid == SMBIOS3 {
+            t.smbios = Some(addr);
+        } else if entry.guid == SMBIOS && t.smbios.is_none() {
+            t.smbios = Some(addr);
+        }
+    }
+    t
 }
 
 /// Traduce los descriptores de UEFI al vocabulario del nucleo.

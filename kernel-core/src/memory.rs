@@ -78,35 +78,3 @@ impl Kind {
         }
     }
 }
-
-/// Lo que el entorno de arranque logro averiguar de la maquina.
-///
-/// Es el resultado de la unica ventana que hay para preguntarle al firmware
-/// (D25). Despues de eso, esto es todo lo que se sabe.
-#[derive(Clone, Copy)]
-pub struct Machine {
-    /// El mapa de memoria fisica. Vacio si el arranque no lo pudo obtener.
-    pub regions: &'static [Region],
-    /// Si algo salio mal al describir la maquina, que fue. Un fallo de arranque
-    /// es un dato, no una muerte (P5): el cordon umbilical sigue vivo y hay que
-    /// poder contar que paso.
-    pub failure: Option<&'static str>,
-}
-
-impl Machine {
-    /// Maquina sobre la que no se pudo averiguar nada.
-    pub const fn mute(reason: &'static str) -> Self {
-        Self { regions: &[], failure: Some(reason) }
-    }
-
-    /// Total de bytes de RAM utilizable.
-    pub fn free_bytes(&self) -> u64 {
-        let mut total = 0u64;
-        for r in self.regions {
-            if r.kind == Kind::Free {
-                total = total.saturating_add(r.bytes);
-            }
-        }
-        total
-    }
-}
