@@ -5,12 +5,18 @@
 //! arrancó la máquina. Todo lo que dependa del silicio o del firmware se pide a
 //! través del trait `Platform`. CI falla si esta regla se rompe.
 
-#![no_std]
+// `no_std` salvo al testear: el arnés de tests necesita `std` para correr en la
+// máquina de desarrollo. El kernel de verdad nunca se compila con `cfg(test)`,
+// así que sigue siendo `no_std` en las dos arquitecturas.
+#![cfg_attr(not(test), no_std)]
 
 pub mod machine;
 pub mod memory;
 pub mod platform;
 pub mod tables;
+
+#[cfg(test)]
+mod tests;
 
 pub use machine::{Machine, Tables};
 pub use memory::{Kind, Region};
@@ -39,7 +45,43 @@ pub fn main<P: Platform>(p: &mut P) -> ! {
     u.line("Sin procesos. Sin archivos. Sin shell. Sin usuarios.");
     u.line("");
 
-    p.park()
+    listen(p)
+}
+
+/// Escucha el cordón umbilical e informa cada byte que llega.
+///
+/// **Esto es un andamio, no el destino.** Existe para probar que el camino de
+/// entrada funciona; desaparece cuando esté el bucle CBOR (D6), que es lo que
+/// de verdad va del otro lado.
+///
+/// No interpreta nada, y es a propósito: una shell sería exactamente la capa
+/// antropocéntrica que el proyecto saca (D10). Por eso informa el **byte
+/// crudo** y no una línea de texto — lo que va a viajar por acá es CBOR
+/// binario, no comandos.
+fn listen<P: Platform>(p: &mut P) -> ! {
+    {
+        let mut u = Umbilical::new(p);
+        u.line("escuchando. cada byte que llegue se informa crudo.");
+        u.line("");
+    }
+
+    loop {
+        match p.uart_read_byte() {
+            None => core::hint::spin_loop(),
+            Some(b) => {
+                use core::fmt::Write;
+                let mut u = Umbilical::new(p);
+                let _ = write!(u, "rx {b:#04x}");
+                // Si además es un carácter imprimible, se muestra al lado. No
+                // cambia lo que se recibió: es una ayuda para el humano que
+                // está tecleando.
+                if (0x20..0x7f).contains(&b) {
+                    let _ = write!(u, "  '{}'", b as char);
+                }
+                let _ = u.write_str("\r\n");
+            }
+        }
+    }
 }
 
 /// Vuelca el mapa de memoria por el cordón umbilical.

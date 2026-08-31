@@ -14,6 +14,14 @@ pub trait Platform {
     /// Emite un byte por el cordón umbilical (D5: el UART nunca se abandona).
     fn uart_write_byte(&mut self, b: u8);
 
+    /// Levanta un byte del cordón umbilical si hay alguno esperando.
+    ///
+    /// **No bloquea.** Devuelve `None` si no llegó nada. Es a propósito: el
+    /// kernel va a tener que escuchar por el UART y por el transporte que
+    /// escriba el agente al mismo tiempo (D17), y un `read` que bloquea deja
+    /// sordo al otro canal.
+    fn uart_read_byte(&mut self) -> Option<u8>;
+
     /// Detiene este núcleo para siempre, con el menor consumo posible.
     fn park(&mut self) -> !;
 

@@ -1,0 +1,30 @@
+# D22/D23: "una frontera que no se prueba es ficcion".
+#
+# Este workflow no define los chequeos: llama a scripts/check.sh, que es el
+# mismo que se corre a mano. Si CI hiciera algo distinto, la unica forma de
+# saber si algo pasa seria empujar y esperar.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  porton:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Targets bare-metal
+        run: rustup target add x86_64-unknown-uefi aarch64-unknown-uefi
+
+      # QEMU y firmware UEFI de las dos arquitecturas: el porton no se conforma
+      # con que compile, las bootea.
+      - name: QEMU y firmware UEFI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 qemu-system-arm ovmf qemu-efi-aarch64
+
+      - name: Porton
+        run: ./scripts/check.sh

@@ -20,6 +20,10 @@ impl Platform for X86_64 {
         uart::write_byte(b);
     }
 
+    fn uart_read_byte(&mut self) -> Option<u8> {
+        uart::read_byte()
+    }
+
     fn park(&mut self) -> ! {
         loop {
             unsafe { core::arch::asm!("cli; hlt", options(nomem, nostack)) }

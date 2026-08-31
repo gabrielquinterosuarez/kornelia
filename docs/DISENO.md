@@ -1,8 +1,8 @@
 # Kernel agente-céntrico — Documento de diseño
 
-**Estado:** Hito 1 en verde. Las dos arquitecturas arrancan por UEFI y hablan por el
-cordón umbilical. El diseño de los verbos sigue siendo especificación: `describe`,
-`mem.claim` y `exec` no existen todavía.
+**Estado:** las dos arquitecturas arrancan por UEFI, le toman la máquina al firmware, leen
+el mapa de memoria físico y escuchan el cordón umbilical. El diseño de los verbos sigue
+siendo especificación: `describe`, `mem.claim` y `exec` no existen todavía.
 **Última actualización:** 2026-08-30
 
 ---
@@ -129,12 +129,13 @@ Lo que sí existe:
 | Pieza | Estado |
 |---|---|
 | Arranque UEFI en x86_64 y aarch64 | Andando. ~20 KB por kernel. |
-| Cordón umbilical (UART) — **solo salida** | 16550 por puertos de E/S en x86, PL011 por MMIO en ARM. No hay lectura del UART todavía. |
+| Cordón umbilical (UART) — **entrada y salida** | 16550 por puertos de E/S en x86, PL011 por MMIO en ARM. La lectura no bloquea (D17: hay que poder escuchar dos canales). |
 | `ExitBootServices` (D25) | Andando. El kernel toma la máquina en el arranque, con reintento si el mapa se movió. |
 | **Mapa de memoria físico real** | Andando en las dos arquitecturas. Se captura de UEFI y se normaliza al vocabulario de `kernel-core` (D24). |
-| El trait `Platform` | Cuatro miembros: `ARCH`, `uart_write_byte`, `park`, `maquina`. |
-| `scripts/check-frontera.sh` | Verifica los dos ejes de D23/D24. En verde, y probado que falla cuando debe. |
-| Los diez verbos de la sección 4 | Ninguno todavía. El mapa se imprime como texto, no se sirve como `describe`. |
+| El trait `Platform` | Cinco miembros: `ARCH`, `uart_write_byte`, `uart_read_byte`, `park`, `machine`. |
+| `scripts/check.sh` | El portón: frontera + 15 tests + compila las dos + **las bootea en QEMU** y verifica lo que dicen. Probado que falla cuando debe. |
+| CI (`.github/workflows/ci.yml`) | Llama al mismo portón, para que no haya chequeos que solo existan en una de las dos partes. |
+| Los diez verbos de la sección 4 | Ninguno todavía. El mapa se imprime como texto, no se sirve como `describe`. Lo que hoy escucha el UART es un andamio que informa el byte crudo — **no es una shell** (D10) y desaparece con el bucle CBOR. |
 
 Verificado el 2026-08-30 contra dos fuentes independientes: el mapa que imprime el kernel en
 aarch64 coincide con el device tree que genera QEMU (`memory@40000000` → primera región en esa

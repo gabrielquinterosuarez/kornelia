@@ -12,7 +12,8 @@ const LCR: u16 = COM1 + 3;
 const MCR: u16 = COM1 + 4;
 const LSR: u16 = COM1 + 5;
 
-const LSR_THR_EMPTY: u8 = 1 << 5;
+const LSR_DATA_READY: u8 = 1 << 0; // hay un byte esperando en la FIFO de entrada
+const LSR_THR_EMPTY: u8 = 1 << 5; // el registro de salida quedo libre
 
 unsafe fn outb(port: u16, val: u8) {
     core::arch::asm!("out dx, al", in("dx") port, in("al") val, options(nomem, nostack));
@@ -42,5 +43,16 @@ pub fn write_byte(b: u8) {
             core::hint::spin_loop();
         }
         outb(DATA, b);
+    }
+}
+
+/// Levanta un byte si hay alguno esperando. No bloquea.
+pub fn read_byte() -> Option<u8> {
+    unsafe {
+        if inb(LSR) & LSR_DATA_READY == 0 {
+            None
+        } else {
+            Some(inb(DATA))
+        }
     }
 }

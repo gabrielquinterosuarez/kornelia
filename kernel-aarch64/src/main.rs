@@ -20,6 +20,10 @@ impl Platform for AArch64 {
         uart::write_byte(b);
     }
 
+    fn uart_read_byte(&mut self) -> Option<u8> {
+        uart::read_byte()
+    }
+
     fn park(&mut self) -> ! {
         loop {
             unsafe { core::arch::asm!("msr daifset, #0xf; wfi", options(nomem, nostack)) }

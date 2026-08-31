@@ -12,6 +12,7 @@ const PL011_BASE: usize = 0x0900_0000;
 const UARTDR: usize = PL011_BASE + 0x00; // dato
 const UARTFR: usize = PL011_BASE + 0x18; // banderas
 
+const FR_RXFE: u32 = 1 << 4; // cola de recepción vacía
 const FR_TXFF: u32 = 1 << 5; // cola de transmisión llena
 
 pub fn write_byte(b: u8) {
@@ -20,5 +21,20 @@ pub fn write_byte(b: u8) {
             core::hint::spin_loop();
         }
         core::ptr::write_volatile(UARTDR as *mut u32, b as u32);
+    }
+}
+
+/// Levanta un byte si hay alguno esperando. No bloquea.
+///
+/// El registro de datos es de 32 bits, pero solo los 8 de abajo son el byte:
+/// los de arriba son banderas de error de la línea (paridad, framing, overrun)
+/// que todavía no se miran.
+pub fn read_byte() -> Option<u8> {
+    unsafe {
+        if core::ptr::read_volatile(UARTFR as *const u32) & FR_RXFE != 0 {
+            None
+        } else {
+            Some(core::ptr::read_volatile(UARTDR as *const u32) as u8)
+        }
     }
 }
