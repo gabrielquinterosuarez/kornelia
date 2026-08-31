@@ -1180,3 +1180,154 @@ fn una_spcr_truncada_no_inventa_nada() {
     let (xsdt, _fijas) = maquina_acpi(&[tabla_acpi(b"SPCR", &[0u8; 4])]);
     assert!(leer(&xsdt).serial.is_none());
 }
+
+// ---------------------------------------------------------------------------
+// El segundo canal (D5, D17)
+// ---------------------------------------------------------------------------
+
+use crate::channel;
+
+/// Arma un buzon como lo armaria el agente. Devuelve los bytes, que hay que
+/// mantener vivos mientras se use.
+fn buzon(capacidad: u32) -> Vec<u8> {
+    let mut b = vec![0u8; channel::size_for(capacidad) as usize];
+    b[0..4].copy_from_slice(&channel::EXPECTED_MAGIC.to_le_bytes());
+    b[4..8].copy_from_slice(&channel::EXPECTED_VERSION.to_le_bytes());
+    b[8..12].copy_from_slice(&capacidad.to_le_bytes());
+    b
+}
+
+fn con_buzon_limpio<T>(f: impl FnOnce() -> T) -> T {
+    let _g = CANDADO.lock().unwrap_or_else(|e| e.into_inner());
+    channel::reset();
+    f()
+}
+
+#[test]
+fn se_adopta_un_buzon_bien_armado() {
+    con_buzon_limpio(|| {
+        let b = buzon(64);
+        let m = unsafe { channel::adopt(7, b.as_ptr() as u64, b.len() as u64) }.unwrap();
+        assert_eq!(m.capacity(), 64);
+        assert_eq!(m.handle, 7);
+        assert!(channel::current().is_some());
+
+        assert!(channel::forget(7));
+        assert!(channel::current().is_none());
+        assert!(!channel::forget(7), "olvidarlo dos veces no puede decir que si");
+    });
+}
+
+/// Sin la firma, ahi no hay un buzon: hay memoria con lo que hubiera antes.
+#[test]
+fn sin_firma_no_se_adopta() {
+    con_buzon_limpio(|| {
+        let mut b = buzon(64);
+        b[0] = 0;
+        assert_eq!(
+            unsafe { channel::adopt(1, b.as_ptr() as u64, b.len() as u64) },
+            Err(channel::Error::NoMagic)
+        );
+        assert!(channel::current().is_none());
+    });
+}
+
+#[test]
+fn una_capacidad_imposible_se_rechaza() {
+    con_buzon_limpio(|| {
+        // Cero.
+        let b = buzon(0);
+        assert_eq!(
+            unsafe { channel::adopt(1, b.as_ptr() as u64, b.len() as u64) },
+            Err(channel::Error::BadCapacity)
+        );
+        // Y una que no es potencia de dos: dar la vuelta seria una division.
+        let mut b = buzon(64);
+        b[8..12].copy_from_slice(&100u32.to_le_bytes());
+        assert_eq!(
+            unsafe { channel::adopt(1, b.as_ptr() as u64, b.len() as u64) },
+            Err(channel::Error::BadCapacity)
+        );
+    });
+}
+
+/// Si el buzon no entra en lo que el agente reclamo, el kernel escribiria fuera
+/// de lo que le entregaron.
+#[test]
+fn un_buzon_que_no_entra_se_rechaza() {
+    con_buzon_limpio(|| {
+        let b = buzon(64);
+        let corto = b.len() as u64 - 1;
+        assert_eq!(
+            unsafe { channel::adopt(1, b.as_ptr() as u64, corto) },
+            Err(channel::Error::TooSmall)
+        );
+        // Y ni el encabezado solo.
+        assert_eq!(
+            unsafe { channel::adopt(1, b.as_ptr() as u64, 4) },
+            Err(channel::Error::TooSmall)
+        );
+    });
+}
+
+#[test]
+fn lo_que_deja_el_agente_se_lee_en_orden() {
+    con_buzon_limpio(|| {
+        let mut b = buzon(8);
+        let rings = channel::size_for(0) as usize; // el encabezado
+        b[rings..rings + 3].copy_from_slice(&[0xAA, 0xBB, 0xCC]);
+        // El agente avanza su indice despues de escribir.
+        b[16..20].copy_from_slice(&3u32.to_le_bytes());
+
+        let m = unsafe { channel::adopt(1, b.as_ptr() as u64, b.len() as u64) }.unwrap();
+        unsafe {
+            assert_eq!(m.pop(), Some(0xAA));
+            assert_eq!(m.pop(), Some(0xBB));
+            assert_eq!(m.pop(), Some(0xCC));
+            assert_eq!(m.pop(), None, "leyo mas de lo que el agente escribio");
+        }
+    });
+}
+
+#[test]
+fn las_respuestas_se_dejan_para_el_agente() {
+    con_buzon_limpio(|| {
+        let b = buzon(4);
+        let m = unsafe { channel::adopt(1, b.as_ptr() as u64, b.len() as u64) }.unwrap();
+        unsafe {
+            for x in [1u8, 2, 3, 4] {
+                assert!(m.push(x), "no entro un byte que si tenia lugar");
+            }
+            // Lleno: el agente todavia no leyo nada.
+            assert!(!m.push(5), "escribio de mas y piso lo que el agente no leyo");
+        }
+
+        // El anillo de respuestas arranca despues del de pedidos.
+        let base = channel::size_for(0) as usize + 4;
+        assert_eq!(&b[base..base + 4], &[1, 2, 3, 4]);
+        // Y el indice quedo avanzado para que el agente sepa cuanto hay.
+        assert_eq!(u32::from_le_bytes(b[24..28].try_into().unwrap()), 4);
+    });
+}
+
+/// El anillo da la vuelta: es un anillo, no una cinta.
+#[test]
+fn el_anillo_da_la_vuelta() {
+    con_buzon_limpio(|| {
+        let mut b = buzon(4);
+        let m = unsafe { channel::adopt(1, b.as_ptr() as u64, b.len() as u64) }.unwrap();
+        unsafe {
+            for x in [1u8, 2, 3, 4] {
+                assert!(m.push(x));
+            }
+        }
+        // El agente dice que leyo dos.
+        b[28..32].copy_from_slice(&2u32.to_le_bytes());
+        unsafe {
+            assert!(m.push(9), "no reuso el lugar que el agente libero");
+        }
+        // El 9 fue al lugar 0, que es donde estaba el 1.
+        let base = channel::size_for(0) as usize + 4;
+        assert_eq!(b[base], 9);
+    });
+}

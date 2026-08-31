@@ -12,6 +12,7 @@
 
 pub mod acpi;
 pub mod cbor;
+pub mod channel;
 pub mod claims;
 pub mod cores;
 pub mod fault;

@@ -3,7 +3,7 @@
 Kernel experimental mínimo que supone un **agente de IA como usuario** y quita
 todas las capas posibles entre ese agente y el hardware.
 
-El diseño completo está en [`docs/DISENO.md`](docs/DISENO.md) — 27 decisiones
+El diseño completo está en [`docs/DISENO.md`](docs/DISENO.md) — 28 decisiones
 tomadas, cada una con su justificación. Lo ya descartado, con sus motivos, en
 [`docs/DESCARTADO.md`](docs/DESCARTADO.md).
 
@@ -18,8 +18,8 @@ Arranca por UEFI en **x86_64 y aarch64**, le toma la máquina al firmware
 (`ExitBootServices`) y **habla CBOR por el cordón umbilical** (D6). Corre sobre
 pila y tablas de páginas propias, y captura los faults en vez de reiniciarse.
 
-**Siete de los diez verbos andan:** `describe`, `mem.claim`, `mem.read`,
-`mem.write`, `release`, **`exec`** y **`core.claim`**. Un agente ya puede preguntarle a la máquina
+**Ocho de los once verbos andan:** `describe`, `mem.claim`, `mem.read`,
+`mem.write`, `release`, `exec`, `core.claim` y **`listen`**. Un agente ya puede preguntarle a la máquina
 qué es —memoria, núcleos, controlador de interrupciones, PCIe—, reclamar memoria
 física, subirle código máquina y **correrlo**. Y si ese código falla, el fault
 vuelve como respuesta en vez de matar la máquina: ni siquiera destruyendo el
@@ -79,6 +79,7 @@ un agente: arranca QEMU, espera la marca `-- CBOR --` y habla el protocolo.
 ./scripts/client.py --memoria             # el lazo: claim, write, read, release
 ./scripts/client.py --exec                # sube codigo maquina y lo corre
 ./scripts/client.py --smp 4 --nucleos     # arranca los otros nucleos
+./scripts/client.py --buzon                # arma el segundo canal y le habla por ahi
 ```
 
 Con `--exec` se ve la tesis del proyecto en ocho bytes de código máquina:

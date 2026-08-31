@@ -48,7 +48,7 @@ elif ! command -v python3 >/dev/null; then
 else
     for arq in x86_64 aarch64; do
         paso "arranca $arq y contesta el protocolo"
-        salida=$(timeout 240 ./scripts/client.py --arch "$arq" --smp 4 --what memory,tables --memoria --exec --nucleos 2>&1 || true)
+        salida=$(timeout 240 ./scripts/client.py --arch "$arq" --smp 4 --what memory,tables --memoria --exec --nucleos --buzon 2>&1 || true)
 
         # Lo que tiene que haber dicho en el banner de texto.
         for esperado in "arquitectura: $arq" "memoria:" "tablas:" \
@@ -82,6 +82,13 @@ else
         if ! grep -qFe "nucleos: ok (3 arrancados)" <<<"$salida"; then
             mal "$arq no arranco los otros nucleos"
             printf '%s\n' "$salida" | grep -E "FALLA:|id=" | head -10
+        fi
+
+        # Y el segundo canal: un pedido que entra por el buzon y se contesta
+        # por el buzon, que es lo que promete D17.
+        if ! grep -qFe "buzon: ok" <<<"$salida"; then
+            mal "$arq no cerro el segundo canal"
+            printf '%s\n' "$salida" | grep -E "FALLA:|buzon|listen" | head -10
         fi
 
         n=$(grep -cE '^ +0x[0-9a-f]{16} ' <<<"$salida" || true)

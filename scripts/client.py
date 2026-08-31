@@ -420,6 +420,104 @@ def prueba_de_nucleos(proc, timeout):
     return 0
 
 
+def prueba_de_buzon(proc, timeout):
+    """Arma el segundo canal en memoria y le manda un pedido por ahi (D17).
+
+    El agente de verdad va a llenar ese buzon desde su driver de red. Aca lo
+    llenamos con mem.write, que para el kernel es indistinguible.
+    """
+    import struct
+    fallas = []
+
+    def pedir_verbo(n, verbo, args):
+        resp, _ = pedir(proc, [n, verbo, args], timeout)
+        _, ok, carga = resp
+        return ok, carga
+
+    # El acuerdo lo publica el kernel: no se hornea nada de esto.
+    ok, ch = pedir_verbo(30, "describe", {"what": ["channel"]})
+    if not ok:
+        print("  no se pudo leer el acuerdo del canal")
+        return 1
+    ch = ch["channel"]
+    L = ch["layout"]
+    print(f"  el kernel pide magic={ch['magic']:#x} version={ch['version']}")
+
+    CAP = 1024
+    ok, c = pedir_verbo(31, "mem.claim", {"bytes": 4096, "align": 4096})
+    if not ok:
+        print(f"  no se pudo reclamar memoria: {c}")
+        return 1
+    h = c["handle"]
+
+    # El pedido que va a viajar por el buzon.
+    pedido = enc([777, "describe", {"what": ["channel"]}])
+
+    # El encabezado, armado con los offsets que publico el kernel.
+    cab = bytearray(L["rings"])
+    struct.pack_into("<I", cab, L["magic"], ch["magic"])
+    struct.pack_into("<I", cab, L["version"], ch["version"])
+    struct.pack_into("<I", cab, L["capacity"], CAP)
+    struct.pack_into("<I", cab, L["request_head"], len(pedido))
+
+    ok, _ = pedir_verbo(32, "mem.write", {"handle": h, "off": 0, "bytes": bytes(cab)})
+    if not ok:
+        fallas.append("no se pudo escribir el encabezado")
+    ok, _ = pedir_verbo(33, "mem.write",
+                        {"handle": h, "off": L["rings"], "bytes": pedido})
+    if not ok:
+        fallas.append("no se pudo escribir el pedido en el anillo")
+
+    # Y el kernel lo adopta.
+    ok, r = pedir_verbo(34, "listen", {"handle": h})
+    print(f"  listen     {'ok ' if ok else 'ERROR'} {r}")
+    if not ok:
+        fallas.append(f"listen fallo: {r}")
+        return 1
+
+    # Un pedido por el cable, para despertar al nucleo. Todavia no hay timbre
+    # propio del buzon: eso es lo que sigue.
+    pedir_verbo(35, "describe", {})
+
+    # Y ahora la pregunta: ¿contesto por el buzon?
+    ok, hdr = pedir_verbo(36, "mem.read", {"handle": h, "off": 0, "len": L["rings"]})
+    if not ok:
+        fallas.append("no se pudo leer el encabezado de vuelta")
+        return 1
+    cab = hdr["bytes"]
+    res_cabeza = struct.unpack_from("<I", cab, L["response_head"])[0]
+    ped_cola = struct.unpack_from("<I", cab, L["request_tail"])[0]
+
+    print(f"  el kernel leyo {ped_cola} de {len(pedido)} bytes del pedido")
+    print(f"  y dejo {res_cabeza} bytes de respuesta en el buzon")
+
+    if ped_cola != len(pedido):
+        fallas.append(f"no consumio el pedido entero: {ped_cola}/{len(pedido)}")
+    if res_cabeza == 0:
+        fallas.append("no contesto por el buzon")
+    else:
+        ok, rd = pedir_verbo(37, "mem.read",
+                             {"handle": h, "off": L["rings"] + CAP, "len": res_cabeza})
+        if ok:
+            try:
+                valor, _ = dec(rd["bytes"])
+                print(f"  respuesta por el buzon: id={valor[0]} ok={valor[1]}")
+                if valor[0] != 777:
+                    fallas.append(f"el id no es el del pedido del buzon: {valor[0]}")
+            except Exception as e:
+                fallas.append(f"la respuesta del buzon no decodifica: {e}")
+        else:
+            fallas.append("no se pudo leer la respuesta del buzon")
+
+    print()
+    if fallas:
+        for f in fallas:
+            print(f"  FALLA: {f}")
+        return 1
+    print("  buzon: ok")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -431,6 +529,8 @@ def main():
                     help="cuantos nucleos darle a QEMU")
     ap.add_argument("--exec", action="store_true", dest="ejecutar",
                     help="sube codigo maquina de verdad y lo corre")
+    ap.add_argument("--buzon", action="store_true",
+                    help="arma el segundo canal y le habla por ahi")
     ap.add_argument("--nucleos", action="store_true",
                     help="reclama los otros nucleos y los arranca")
     ap.add_argument("--memoria", action="store_true",
@@ -483,6 +583,9 @@ def main():
         if args.nucleos:
             print()
             rc |= prueba_de_nucleos(proc, args.timeout)
+        if args.buzon:
+            print()
+            rc |= prueba_de_buzon(proc, args.timeout)
         return rc
     finally:
         proc.kill()

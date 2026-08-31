@@ -33,6 +33,7 @@
 
 use crate::cbor::{self, Reader, Scan, Writer};
 use crate::acpi::Hardware;
+use crate::channel;
 use crate::claims;
 use crate::cores;
 use crate::machine::Machine;
@@ -56,6 +57,18 @@ const MAX_LECTURA: u64 = 32 * 1024;
 static mut INBOX: [u8; MAX_REQUEST] = [0; MAX_REQUEST];
 static mut OUTBOX: [u8; MAX_RESPONSE] = [0; MAX_RESPONSE];
 
+/// Por donde llego el pedido que se esta atendiendo.
+///
+/// D17: el kernel contesta **por donde le llegaron**. Si contestara siempre por
+/// el cable, el canal rapido serviria para preguntar y no para escuchar.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Origen {
+    Cable,
+    Buzon,
+}
+
+static mut ORIGEN: Origen = Origen::Cable;
+
 /// La linea que avisa que de aca en adelante lo que sale es binario.
 ///
 /// El arranque habla en texto porque hace falta poder enchufar una terminal y
@@ -71,7 +84,8 @@ pub fn serve<P: Platform>(p: &mut P, m: &Machine, hw: &Hardware, con_timbre: boo
         // Con timbre, los bytes los dejó quien atendió el timbre y acá solo se
         // sacan; sin timbre hay que preguntarle al UART, que es lo que quema un
         // núcleo entero y por lo que existe todo esto.
-        let llegado = if con_timbre {
+        // Primero el cable, que es el que nunca se abandona (D17).
+        let del_cable = if con_timbre {
             // SAFETY: el bucle corre con el timbre apagado salvo mientras
             // duerme, así que nadie más está en el anillo ahora.
             unsafe { serial::pop() }
@@ -79,10 +93,33 @@ pub fn serve<P: Platform>(p: &mut P, m: &Machine, hw: &Hardware, con_timbre: boo
             p.uart_read_byte()
         };
 
+        // Y si por ahí no vino nada, el buzón del agente, si armó uno.
+        let llegado = match del_cable {
+            Some(b) => {
+                unsafe { ORIGEN = Origen::Cable };
+                Some(b)
+            }
+            None => match channel::current() {
+                None => None,
+                // SAFETY: el buzón se verificó al adoptarlo y vive en memoria
+                // que el agente reclamó, así que sigue mapeada.
+                Some(m) => unsafe {
+                    m.pop().map(|b| {
+                        ORIGEN = Origen::Buzon;
+                        b
+                    })
+                },
+            },
+        };
+
         let Some(b) = llegado else {
             if con_timbre {
                 // Nada que hacer: dormir hasta que alguien hable. Es lo que
                 // convierte un núcleo quemado en un núcleo reservado.
+                //
+                // TODO: mientras el buzón no tenga timbre propio, un pedido que
+                // llega solo por ahí espera hasta la próxima vez que el cable
+                // despierte al núcleo. Está anotado en DISENO.md.
                 p.sleep();
             } else {
                 core::hint::spin_loop();
@@ -146,6 +183,7 @@ fn atender<P: Platform>(p: &mut P, req: &[u8], m: &Machine, hw: &Hardware) {
         "release" => release(p, id, &mut r),
         "exec" => exec(p, id, &mut r),
         "core.claim" => core_claim(p, id, &mut r, hw),
+        "listen" => listen(p, id, &mut r),
         _ => responder_error(p, id, "unknown verb"),
     }
 }
@@ -167,6 +205,8 @@ struct Pedido {
     pcie: bool,
     /// Los nucleos que el agente tiene reclamados y andando (D13).
     cores: bool,
+    /// El acuerdo del segundo canal, para que el agente no lo hornee (D17).
+    channel: bool,
     /// Si no vino la clave `what`, se devuelve el indice (D16).
     indice: bool,
 }
@@ -202,6 +242,7 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
                     Some("interrupts") => q.interrupts = true,
                     Some("pcie") => q.pcie = true,
                     Some("cores") => q.cores = true,
+                    Some("channel") => q.channel = true,
                     // Contestar solo con lo que se reconocio, callado, seria
                     // mentir por omision.
                     Some(_) => return responder_error(p, id, "unknown section in what"),
@@ -231,7 +272,7 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
         if q.claims {
             secciones += 1;
         }
-        for extra in [q.cpus, q.interrupts, q.pcie, q.cores] {
+        for extra in [q.cpus, q.interrupts, q.pcie, q.cores, q.channel] {
             if extra {
                 secciones += 1;
             }
@@ -315,6 +356,10 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
                 escribir_core(&mut w, &c);
             }
         }
+        if q.channel {
+            w.text("channel");
+            escribir_canal(&mut w);
+        }
         if q.pcie {
             w.text("pcie");
             match hw.pcie {
@@ -344,13 +389,13 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
 
 /// El indice: que hay para pedir, y cuanto de cada cosa.
 fn escribir_indice(w: &mut Writer<'_>, m: &Machine, hw: &Hardware, arch: &str) {
-    w.map(9);
+    w.map(10);
 
     w.text("arch");
     w.text(arch);
 
     w.text("sections");
-    w.array(7);
+    w.array(8);
     w.text("memory");
     w.text("tables");
     w.text("claims");
@@ -358,6 +403,7 @@ fn escribir_indice(w: &mut Writer<'_>, m: &Machine, hw: &Hardware, arch: &str) {
     w.text("interrupts");
     w.text("pcie");
     w.text("cores");
+    w.text("channel");
 
     w.text("memory");
     w.map(2);
@@ -394,6 +440,9 @@ fn escribir_indice(w: &mut Writer<'_>, m: &Machine, hw: &Hardware, arch: &str) {
 
     w.text("cores");
     w.uint(cores::count() as u64);
+
+    w.text("channel");
+    w.bool(channel::current().is_some());
 }
 
 /// El mapa de memoria: un arreglo de `[inicio, bytes, clase]`.
@@ -529,7 +578,22 @@ fn responder_error<P: Platform>(p: &mut P, id: u64, motivo: &str) {
     }
 }
 
+/// Contesta por donde llegó el pedido (D17).
 fn emitir<P: Platform>(p: &mut P, bytes: &[u8]) {
+    let por_el_buzon = unsafe { ORIGEN } == Origen::Buzon;
+
+    if por_el_buzon {
+        if let Some(m) = channel::current() {
+            // SAFETY: verificado al adoptarlo, y en memoria reclamada.
+            let entero = unsafe { bytes.iter().all(|b| m.push(*b)) };
+            if entero {
+                return;
+            }
+            // No entró. El cable siempre está, así que se contesta por ahí en
+            // vez de perder la respuesta en silencio.
+        }
+    }
+
     for b in bytes {
         p.uart_write_byte(*b);
     }
@@ -916,4 +980,85 @@ fn escribir_core(w: &mut Writer<'_>, c: &cores::Core) {
 
 fn responder_fallo_core<P: Platform>(p: &mut P, id: u64, e: cores::Error) {
     responder_error(p, id, e.code());
+}
+
+// ---------------------------------------------------------------------------
+// listen
+// ---------------------------------------------------------------------------
+
+/// Adopta el buzon que armo el agente como segundo canal (D5, D17).
+///
+/// Es el verbo numero once, y se agrego a proposito: D17 promete que el kernel
+/// escucha por el transporte que escribe el agente, y no habia forma de
+/// entregarselo. Un acuerdo implicito hubiera mantenido la lista de diez a costa
+/// de esconder complejidad donde nadie la ve.
+///
+/// El kernel sigue sin saber nada de red: recibe un pedazo de memoria con una
+/// forma acordada y mira ahi. Quien mueve los paquetes es el agente (D4).
+fn listen<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
+    let Some(a) = leer_args(r) else {
+        return responder_error(p, id, "malformed arguments");
+    };
+    let Some(handle) = a.handle else {
+        return responder_error(p, id, "listen needs handle");
+    };
+
+    // Tiene que ser memoria que el agente reclamo: el kernel no adopta un
+    // puntero suelto, adopta algo que ya esta anotado como suyo.
+    let Some(c) = claims::get(handle) else {
+        return responder_fallo(p, id, claims::Error::NoSuchHandle);
+    };
+
+    // SAFETY: el reclamo esta vigente y el identity map cubre toda la memoria.
+    match unsafe { channel::adopt(handle, c.start, c.bytes) } {
+        Err(e) => responder_error(p, id, e.code()),
+        Ok(m) => {
+            let out = unsafe { &mut *core::ptr::addr_of_mut!(OUTBOX) };
+            let mut w = Writer::new(out);
+            w.array(3);
+            w.uint(id);
+            w.bool(true);
+            w.map(2);
+            w.text("handle");
+            w.uint(handle);
+            w.text("capacity");
+            w.uint(m.capacity() as u64);
+            terminar(p, id, w);
+        }
+    }
+}
+
+/// El acuerdo del segundo canal: que escribir, donde, y que forma tiene.
+///
+/// Se publica en vez de documentarse aparte para que el agente no lo tenga
+/// horneado: si algun dia cambia, lo pregunta y se enteró (P4).
+fn escribir_canal(w: &mut Writer<'_>) {
+    w.map(4);
+
+    // Lo que el agente tiene que escribir para que el kernel lo reconozca.
+    w.text("magic");
+    w.uint(channel::EXPECTED_MAGIC as u64);
+    w.text("version");
+    w.uint(channel::EXPECTED_VERSION as u64);
+
+    // Donde va cada campo del encabezado.
+    w.text("layout");
+    w.map(channel::LAYOUT.len());
+    for (nombre, off) in channel::LAYOUT {
+        w.text(nombre);
+        w.uint(*off);
+    }
+
+    // Y si ya hay uno adoptado.
+    w.text("adopted");
+    match channel::current() {
+        None => w.null(),
+        Some(m) => {
+            w.map(2);
+            w.text("handle");
+            w.uint(m.handle);
+            w.text("capacity");
+            w.uint(m.capacity() as u64);
+        }
+    }
 }

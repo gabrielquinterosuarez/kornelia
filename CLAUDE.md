@@ -30,7 +30,7 @@ líneas. Escribí en español. Los comentarios del código van en español.
 
 ## Decisiones ya tomadas
 
-**27 decisiones (D1–D27) están cerradas en `docs/DISENO.md`, cada una con su
+**28 decisiones (D1–D28) están cerradas en `docs/DISENO.md`, cada una con su
 justificación. No las reabras sin motivo nuevo.** Las más importantes:
 
 - **D1** El agente es externo (cliente), no residente — pero la puerta a residente queda abierta.
@@ -46,15 +46,17 @@ justificación. No las reabras sin motivo nuevo.** Las más importantes:
 - **D22/D23** x86_64 **y** aarch64 en verde desde el primer commit; la frontera la verifica CI.
 - **D24** La frontera son **dos ejes**: arquitectura (`asm!`) y entorno de arranque (UEFI). El código UEFI va en `boot-uefi/`, compartido; los tipos normalizados en `kernel-core/`.
 - **D25** Al firmware se le pide todo (mapa de memoria, ACPI/DT, blob) **antes** de `ExitBootServices`, que se llama una sola vez. Después no hay segunda oportunidad, y solo el firmware sabe leer FAT32.
+- **D28** `listen` es el verbo **once**: el agente arma un buzón en memoria y se lo entrega como segundo canal. Se agregó en vez de esconderlo en un acuerdo implícito — un número redondo no es un principio.
 - **D27** El agente **declara** si su código corre `supervised` (anillo bajo, no puede colgar la máquina) o `raw` (privilegio completo). El kernel ofrece los dos y no elige (P6). **Solo cubre `exec`:** un handler de `irq.install` corre siempre privilegiado porque el hardware no entrega interrupciones sin privilegio.
 - **D26** El serie va **crudo**: `-serial stdio`, nunca `mon:stdio`. El multiplexor se come el `0x01` como escape y por ahí viaja CBOR. Se sale de QEMU con `Ctrl-C`.
 
 ## Superficie del kernel
 
-Esto es el kernel entero. No hay más verbos.
+Esto es el kernel entero. **Son once** (D28: el once se agregó porque D17
+prometía algo que los diez no podían pedir).
 
 `describe` · `mem.claim` · `mem.read` · `mem.write` · `core.claim` · `exec` ·
-`irq.install` · `irq.install_raw` · `dma.allow` · `release`
+`irq.install` · `irq.install_raw` · `dma.allow` · `release` · `listen`
 
 ## Reglas de código
 
@@ -83,8 +85,8 @@ captura los faults en vez de reiniciarse. **El núcleo que atiende duerme entre
 pedidos**: el cable serie tiene timbre (interrupción), así que ya no gira
 preguntando.
 
-**Siete de los diez verbos andan:** `describe`, `mem.claim`, `mem.read`,
-`mem.write`, `release`, **`exec`** y **`core.claim`**. El agente sube código máquina, lo corre, y
+**Ocho de los once verbos andan:** `describe`, `mem.claim`, `mem.read`,
+`mem.write`, `release`, `exec`, `core.claim` y **`listen`**. El agente sube código máquina, lo corre, y
 si falla **el fault vuelve como respuesta en vez de matar la máquina** (P5) —
 ni siquiera destruyendo el puntero de pila, porque las excepciones entran en una
 pila aparte (IST en x86_64, `SP_EL1` en aarch64).
@@ -107,12 +109,17 @@ de commitear; CI corre exactamente ese script.
 argumentos en `docs/DISENO.md` §8. Los tres verbos que faltan son grandes y
 ninguno bloquea a los otros:
 
-1. **Darle trabajo a los núcleos reclamados.** Hoy arrancan y quedan esperando,
+1. **El timbre del buzón.** Hoy un pedido que llega solo por el segundo canal
+   espera hasta la próxima vez que el cable despierte al núcleo. Falta que el
+   agente pueda tocarle el timbre — una interrupción entre procesadores, la
+   misma maquinaria del APIC/GIC que ya está puesta, con prioridad más baja que
+   el cable para que el cordón pase primero.
+2. **Darle trabajo a los núcleos reclamados.** Hoy arrancan y quedan esperando,
    pero `exec` corre siempre en el que atiende el protocolo. Falta un buzón por
    núcleo y que `exec` acepte a cuál mandárselo (sección 4: `exec(core, ...)`).
-2. `irq.install` — handlers del agente (D9). Falta sacar de la MADT las rutas de
-   interrupción.
-3. `dma.allow` — el IOMMU. El más grande del proyecto y el más específico de
+3. `irq.install` — handlers del agente (D9). Las rutas de interrupción ya salen
+   de la MADT.
+4. `dma.allow` — el IOMMU. El más grande del proyecto y el más específico de
    cada fabricante; es lo que más gana con silicio real.
 
 Deudas anotadas en `docs/DISENO.md` §7. La más viva: **un núcleo reclamado
