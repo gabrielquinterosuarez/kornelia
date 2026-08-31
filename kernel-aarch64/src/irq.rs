@@ -59,6 +59,18 @@ const GICC_EOIR: u64 = 0x010;
 /// eso lo hace cumplir el silicio del GIC, no una decision del kernel (D17, P6).
 const PRIORIDAD_SERIE: u8 = 0x00;
 
+/// El numero de timbre del buzon del agente.
+///
+/// Del 0 al 15 son las que un nucleo se manda a otro. La 8 esta libre.
+const SGI_BUZON: u32 = 8;
+
+/// La prioridad del buzon: **mas baja que la del cable** (numero mas grande).
+/// Por mas que el agente inunde de llamadas, el cordon pasa primero (D17, P6).
+const PRIORIDAD_BUZON: u8 = 0x80;
+
+/// Donde se dispara una interrupcion de nucleo a nucleo.
+const GICD_SGIR: u64 = 0xF00;
+
 /// El numero de interrupcion que no significa nada: el GIC lo devuelve cuando
 /// no habia ninguna de verdad.
 const ESPURIA: u32 = 1023;
@@ -140,7 +152,10 @@ pub fn sleep() {
             if id == ESPURIA {
                 break;
             }
-            if id == CABLE {
+            if id == SGI_BUZON {
+                // Solo despierta. El trabajo lo hace el bucle.
+                kernel_core::channel::rang();
+            } else if id == CABLE {
                 // Vaciar la cola del UART: si quedara un byte, el timbre
                 // volveria a sonar de inmediato.
                 crate::uart::clear_rx_interrupt();
@@ -152,4 +167,27 @@ pub fn sleep() {
             escribir(GICC, GICC_EOIR, cual);
         }
     }
+}
+
+/// Programa el timbre del buzon: una interrupcion de nucleo a nucleo.
+///
+/// # Safety
+///
+/// `install` tiene que haber corrido antes: comparten el GIC.
+pub unsafe fn install_doorbell() -> Result<kernel_core::channel::Doorbell, &'static str> {
+    if GICD == 0 {
+        return Err("el GIC todavia no esta encendido");
+    }
+
+    escribir_byte(GICD, GICD_IPRIORITYR + SGI_BUZON as u64, PRIORIDAD_BUZON);
+    escribir(GICD, GICD_ISENABLER, 1 << SGI_BUZON);
+
+    // Una sola escritura: los bits de arriba dicen a que nucleos, los de abajo
+    // que numero de timbre. El bit 16 es el primer nucleo.
+    let valor = (1u64 << 16) | SGI_BUZON as u64;
+    Ok(kernel_core::channel::Doorbell {
+        writes: [(GICD + GICD_SGIR, valor, 4), (0, 0, 0)],
+        count: 1,
+        id: SGI_BUZON,
+    })
 }

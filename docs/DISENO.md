@@ -146,6 +146,7 @@ Lo que sí existe:
 | **`describe`** | Andando: sirve `memory`, `tables`, `claims`, `cpus`, `interrupts` y `pcie`. Sin argumentos devuelve el índice, no un volcado (D16). |
 | **Lectura de ACPI** | Andando en las dos. MADT (núcleos y controlador de interrupciones) y MCFG (PCIe), con el checksum verificado tabla por tabla. |
 | **`mem.claim` · `mem.read` · `mem.write` · `release`** | Andando. Reclamos por tamaño o por dirección exacta (así se pide MMIO), con alineación y tope. Los handles son de la máquina y no se reusan (D14). |
+| **Timbre del buzón** | Andando en las dos. El agente lo toca con código máquina propio: un IPI por el APIC en x86_64, un SGI por el GIC en aarch64. **Con prioridad más baja que el cable**, así que por más que el agente inunde de llamadas el cordón pasa primero (D17, P6). El kernel cuenta cuántas veces sonó, que es lo que permite comprobarlo. |
 | **`listen`** | Andando en las dos. El kernel escucha por el cable y por el buzón, y contesta por donde le llegó (D17). El acuerdo lo publica `describe`. |
 | **`core.claim`** | Andando en las dos. PSCI en aarch64; INIT/SIPI más un trampolín de 16→32→64 bits en x86_64. El núcleo nuevo copia las tablas de páginas y la captura de faults, y avisa por un atómico. |
 | **`exec`** | Andando en las dos. **El fault vuelve como respuesta, no como muerte** (P5): el handler desvía el regreso al punto de recuperación en vez de detener el núcleo. El agente corre en pila propia y las excepciones en otra, así que ni destruyendo el puntero de pila se lleva la máquina. |
@@ -207,17 +208,23 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
    No se corrompe nada —el estado del fault ya es por núcleo— pero el texto sale mezclado y se
    lee mal. Cuando los faults viajen por CBOR en vez de por texto deja de importar.
 
-8. **Un núcleo reclamado todavía no puede recibir trabajo.** Arranca, se configura solo y queda
+8. **Un pedido que llega solo por el buzón ya despierta al núcleo** — el timbre existe. Lo que
+   falta es que el **driver** que lo toque sea de verdad: hoy nadie puede llenar el buzón salvo
+   el cliente con `mem.write`, porque el agente todavía no puede atender la interrupción de una
+   placa de red. Eso es `irq.install` (D9), y es lo que convierte el segundo canal en algo
+   usable.
+
+9. **Un núcleo reclamado todavía no puede recibir trabajo.** Arranca, se configura solo y queda
    esperando, pero `exec` corre siempre en el núcleo que atiende el protocolo: falta un buzón por
    núcleo y que `exec` acepte a cuál mandarle el trabajo, que es lo que la sección 4 especifica
    (`exec(core, handle, off, regs)`).
 
-9. **Un test falló una vez y no reprodujo.** Ocurrió una sola vez en la suite de `kernel-core` y
+10. **Un test falló una vez y no reprodujo.** Ocurrió una sola vez en la suite de `kernel-core` y
    no se repitió en veinte corridas seguidas. Se auditó lo único que puede causarlo —los tests
    que tocan las tablas globales de reclamos y de núcleos— y todos toman el mismo candado. **No
    está diagnosticado**; queda anotado para no darlo por inexistente si vuelve a pasar.
 
-10. **Los atributos de cacheabilidad que informa UEFI se descartan.** D12 anda igual porque la
+11. **Los atributos de cacheabilidad que informa UEFI se descartan.** D12 anda igual porque la
    cacheabilidad se deduce de la *clase* de cada región, pero UEFI informa además atributos por
    región (`UC`, `WC`, `WT`, `WB`) que son más precisos que esa deducción. Mientras el grano del
    mapeo sea 1 GiB casi no cambia nada; cuando haya que mapear MMIO fino con `mem.claim`, sí.
@@ -262,7 +269,7 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
    —que no tiene ACPI— no reporta ni núcleos ni buses. Es también lo que haría falta para sacar
    la dirección del PL011 de su fuente legítima en vez de tenerla horneada (deuda 2).
 
-3. **Qué del System Table cruza la frontera.** El mapa de memoria *normalizado* es portable;
+3. **~~Qué del System Table cruza la frontera.~~ CERRADA por D24.** El mapa de memoria *normalizado* es portable;
    cómo se obtiene (UEFI vs device tree vs ROM de arranque) no lo es. Se decide con `describe`.
 
 ---

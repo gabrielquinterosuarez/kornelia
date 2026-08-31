@@ -109,17 +109,15 @@ de commitear; CI corre exactamente ese script.
 argumentos en `docs/DISENO.md` §8. Los tres verbos que faltan son grandes y
 ninguno bloquea a los otros:
 
-1. **El timbre del buzón.** Hoy un pedido que llega solo por el segundo canal
-   espera hasta la próxima vez que el cable despierte al núcleo. Falta que el
-   agente pueda tocarle el timbre — una interrupción entre procesadores, la
-   misma maquinaria del APIC/GIC que ya está puesta, con prioridad más baja que
-   el cable para que el cordón pase primero.
+1. **`irq.install`** — handlers del agente (D9). Es lo que convierte el segundo
+   canal en algo usable: hoy el buzón y su timbre andan, pero nadie puede
+   llenarlo salvo el cliente, porque el agente no puede atender la interrupción
+   de una placa de red. Las rutas ya salen de la MADT y los dos controladores
+   ya están encendidos.
 2. **Darle trabajo a los núcleos reclamados.** Hoy arrancan y quedan esperando,
    pero `exec` corre siempre en el que atiende el protocolo. Falta un buzón por
    núcleo y que `exec` acepte a cuál mandárselo (sección 4: `exec(core, ...)`).
-3. `irq.install` — handlers del agente (D9). Las rutas de interrupción ya salen
-   de la MADT.
-4. `dma.allow` — el IOMMU. El más grande del proyecto y el más específico de
+3. `dma.allow` — el IOMMU. El más grande del proyecto y el más específico de
    cada fabricante; es lo que más gana con silicio real.
 
 Deudas anotadas en `docs/DISENO.md` §7. La más viva: **un núcleo reclamado

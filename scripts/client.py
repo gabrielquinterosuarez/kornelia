@@ -420,6 +420,111 @@ def prueba_de_nucleos(proc, timeout):
     return 0
 
 
+def emitir_escrituras(arch, writes):
+    """Codigo maquina que hace esas escrituras de 32 bits y vuelve.
+
+    Es lo que haria el driver de red del agente para tocar el timbre. Se genera
+    a mano porque el kernel publica direcciones, no codigo.
+    """
+    if arch == "x86_64":
+        code = b""
+        for addr, val, _ancho in writes:
+            code += b"\x48\xb8" + addr.to_bytes(8, "little")   # mov rax, addr
+            code += b"\xc7\x00" + (val & 0xFFFFFFFF).to_bytes(4, "little")  # mov [rax], val
+        return code + b"\xc3"                                   # ret
+
+    # aarch64: armar la direccion en x0 y el valor en w1, y guardar.
+    def mov_x0(v):
+        out = b""
+        primero = True
+        for hw in range(4):
+            trozo = (v >> (16 * hw)) & 0xFFFF
+            if trozo == 0 and not primero:
+                continue
+            base = 0xD2800000 if primero else 0xF2800000
+            out += (base | (hw << 21) | (trozo << 5) | 0).to_bytes(4, "little")
+            primero = False
+        return out or (0xD2800000).to_bytes(4, "little")
+
+    def mov_w1(v):
+        out = b""
+        primero = True
+        for hw in range(2):
+            trozo = (v >> (16 * hw)) & 0xFFFF
+            if trozo == 0 and not primero:
+                continue
+            base = 0x52800000 if primero else 0x72800000
+            out += (base | (hw << 21) | (trozo << 5) | 1).to_bytes(4, "little")
+            primero = False
+        return out or (0x52800000 | 1).to_bytes(4, "little")
+
+    code = b""
+    for addr, val, _ancho in writes:
+        code += mov_x0(addr) + mov_w1(val & 0xFFFFFFFF)
+        code += (0xB9000001).to_bytes(4, "little")   # str w1, [x0]
+    return code + (0xD65F03C0).to_bytes(4, "little")  # ret
+
+
+def prueba_de_timbre(proc, timeout, arch):
+    """El agente toca el timbre del kernel con codigo maquina propio.
+
+    Es lo que va a hacer su driver de red: dejar el pedido en el buzon y avisar.
+    """
+    fallas = []
+
+    def pedir_verbo(n, verbo, args):
+        resp, _ = pedir(proc, [n, verbo, args], timeout)
+        _, ok, carga = resp
+        return ok, carga
+
+    ok, d = pedir_verbo(40, "describe", {"what": ["channel"]})
+    if not ok:
+        print("  no se pudo leer el acuerdo del canal")
+        return 1
+    ch = d["channel"]
+    campana = ch.get("doorbell")
+    if not campana:
+        print("  el kernel no publica timbre del buzon")
+        return 1
+
+    antes = ch["rings"]
+    print(f"  el timbre es el {campana['id']}, sono {antes} veces hasta ahora")
+    for a, v, w in campana["writes"]:
+        print(f"    escribir {v:#x} ({w} bytes) en {a:#x}")
+
+    # Codigo maquina que hace esas escrituras: exactamente lo que haria el
+    # driver del agente.
+    codigo = emitir_escrituras(arch, campana["writes"])
+    ok, c = pedir_verbo(41, "mem.claim", {"bytes": 4096, "align": 4096})
+    if not ok:
+        print(f"  no se pudo reclamar memoria: {c}")
+        return 1
+    h = c["handle"]
+    pedir_verbo(42, "mem.write", {"handle": h, "bytes": codigo})
+
+    print(f"  el agente toca el timbre: {codigo.hex()}")
+    ok, r = pedir_verbo(43, "exec", {"handle": h})
+    if not ok or r.get("faulted"):
+        fallas.append(f"el codigo del timbre fallo: {r}")
+
+    ok, d = pedir_verbo(44, "describe", {"what": ["channel"]})
+    despues = d["channel"]["rings"] if ok else -1
+    print(f"  y ahora sono {despues} veces")
+
+    if despues <= antes:
+        fallas.append("el timbre no sono: la interrupcion del agente no llego")
+
+    pedir_verbo(45, "release", {"handle": h})
+
+    print()
+    if fallas:
+        for f in fallas:
+            print(f"  FALLA: {f}")
+        return 1
+    print("  timbre: ok")
+    return 0
+
+
 def prueba_de_buzon(proc, timeout):
     """Arma el segundo canal en memoria y le manda un pedido por ahi (D17).
 
@@ -529,6 +634,8 @@ def main():
                     help="cuantos nucleos darle a QEMU")
     ap.add_argument("--exec", action="store_true", dest="ejecutar",
                     help="sube codigo maquina de verdad y lo corre")
+    ap.add_argument("--timbre", action="store_true",
+                    help="el agente toca el timbre del kernel con codigo propio")
     ap.add_argument("--buzon", action="store_true",
                     help="arma el segundo canal y le habla por ahi")
     ap.add_argument("--nucleos", action="store_true",
@@ -586,6 +693,9 @@ def main():
         if args.buzon:
             print()
             rc |= prueba_de_buzon(proc, args.timeout)
+        if args.timbre:
+            print()
+            rc |= prueba_de_timbre(proc, args.timeout, args.arch)
         return rc
     finally:
         proc.kill()

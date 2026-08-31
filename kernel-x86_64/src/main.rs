@@ -69,6 +69,13 @@ impl Platform for X86_64 {
         irq::install(hw)
     }
 
+    unsafe fn install_doorbell(
+        &mut self,
+        _hw: &kernel_core::acpi::Hardware,
+    ) -> Result<kernel_core::channel::Doorbell, &'static str> {
+        irq::install_doorbell()
+    }
+
     fn sleep(&mut self) {
         irq::sleep();
     }

@@ -60,6 +60,13 @@ pub fn main<P: Platform>(p: &mut P) -> ! {
     let timbre = unsafe { p.install_serial_interrupt(&hw) };
     let con_timbre = reportar_timbre(p, timbre);
 
+    // Y el timbre del buzón, para que el agente pueda despertar al núcleo sin
+    // pasar por el cable. SAFETY: el del cable ya está, y comparten controlador.
+    if con_timbre {
+        let campana = unsafe { p.install_doorbell(&hw) };
+        reportar_campana(p, campana);
+    }
+
     // La marca va última: de acá en adelante lo que sale es binario, así que
     // cualquier texto después la convierte en basura para el cliente.
     {
@@ -326,4 +333,26 @@ fn leer_hardware<P: Platform>(p: &mut P, m: &Machine) -> acpi::Hardware {
         );
     }
     hw
+}
+
+/// Cuenta si el buzón quedó con timbre propio (D17).
+fn reportar_campana<P: Platform>(p: &mut P, r: Result<channel::Doorbell, &'static str>) {
+    use core::fmt::Write;
+    let mut u = Umbilical::new(p);
+
+    match r {
+        Ok(d) => {
+            channel::set_doorbell(d);
+            let _ = write!(
+                u,
+                "buzon: timbre {}, {} escritura(s) para tocarlo\r\n",
+                d.id, d.count
+            );
+        }
+        Err(motivo) => {
+            u.line("buzon: SIN TIMBRE PROPIO");
+            u.kv("  motivo", motivo);
+            u.line("  un pedido que llegue solo por ahi espera al cable.");
+        }
+    }
 }

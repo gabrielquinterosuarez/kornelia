@@ -1033,7 +1033,7 @@ fn listen<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
 /// Se publica en vez de documentarse aparte para que el agente no lo tenga
 /// horneado: si algun dia cambia, lo pregunta y se enteró (P4).
 fn escribir_canal(w: &mut Writer<'_>) {
-    w.map(4);
+    w.map(6);
 
     // Lo que el agente tiene que escribir para que el kernel lo reconozca.
     w.text("magic");
@@ -1048,6 +1048,34 @@ fn escribir_canal(w: &mut Writer<'_>) {
         w.text(nombre);
         w.uint(*off);
     }
+
+    // Como tocarle el timbre al kernel: una lista de escrituras a hacer en
+    // orden. Se describe asi y no como "escribile al APIC" a proposito: el
+    // agente hace las escrituras que le dijeron y no necesita saber que
+    // controlador de interrupciones tiene la maquina (P4).
+    w.text("doorbell");
+    match channel::doorbell() {
+        None => w.null(),
+        Some(d) => {
+            w.map(2);
+            w.text("id");
+            w.uint(d.id as u64);
+            w.text("writes");
+            w.array(d.count);
+            for (addr, val, ancho) in &d.writes[..d.count] {
+                w.array(3);
+                w.uint(*addr);
+                w.uint(*val);
+                w.uint(*ancho as u64);
+            }
+        }
+    }
+
+    // Cuantas veces sono. Es lo que permite comprobar que el timbre anda: el
+    // unico canal por el que un cliente puede mirar es el cable, y usarlo
+    // despierta al nucleo igual — asi que sin este numero no seria observable.
+    w.text("rings");
+    w.uint(channel::rings());
 
     // Y si ya hay uno adoptado.
     w.text("adopted");

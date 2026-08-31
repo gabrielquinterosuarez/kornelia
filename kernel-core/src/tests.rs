@@ -69,6 +69,13 @@ impl Platform for Fake {
         Err("la plataforma de prueba no tiene timbre")
     }
 
+    unsafe fn install_doorbell(
+        &mut self,
+        _hw: &crate::acpi::Hardware,
+    ) -> Result<crate::channel::Doorbell, &'static str> {
+        Err("la plataforma de prueba no tiene timbre")
+    }
+
     fn sleep(&mut self) {}
 
     fn uart_address(&self) -> Option<u64> {

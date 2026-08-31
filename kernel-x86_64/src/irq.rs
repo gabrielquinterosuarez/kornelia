@@ -36,6 +36,20 @@ const VECTOR_SERIE: u8 = 0x40;
 /// El cable del puerto serie en la PC original.
 const CABLE_SERIE: u8 = 4;
 
+/// El numero de timbre del buzon del agente.
+///
+/// **Mas bajo que el del cable a proposito.** En x86 la prioridad sale del
+/// numero: el CPU atiende primero los de numero mas alto, en grupos de 16. Con
+/// el cable en 0x40 (grupo 4) y el buzon en 0x30 (grupo 3), por mas que el
+/// agente inunde de llamadas el cordon pasa primero (D17, P6).
+const VECTOR_BUZON: u8 = 0x30;
+
+/// Registro de control de interrupciones del APIC local: la parte de abajo
+/// dispara el envio, la de arriba dice a quien. Son los mismos que usa `smp`
+/// para arrancar los otros nucleos — un IPI es un IPI.
+const ICR_BAJO: u64 = 0x300;
+const ICR_ALTO: u64 = 0x310;
+
 /// Donde el APIC local dice "ya atendi".
 const EOI: u64 = 0xB0;
 /// Registro de interrupcion espuria: su bit 8 prende el APIC local.
@@ -83,11 +97,45 @@ irq_serie_stub:
     pop rcx
     pop rax
     iretq
+
+.globl irq_buzon_stub
+
+// Lo que corre cuando el agente toca el timbre del buzon. Solo despierta: el
+// trabajo lo hace el bucle cuando termina lo que estaba haciendo.
+irq_buzon_stub:
+    push rax
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push rbx
+
+    mov rbx, rsp
+    and rsp, -16
+    call irq_buzon_rust
+    mov rsp, rbx
+
+    pop rbx
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rax
+    iretq
 "#
 );
 
 extern "sysv64" {
     fn irq_serie_stub();
+    fn irq_buzon_stub();
 }
 
 /// Vacia la cola del UART y avisa que ya atendio.
@@ -99,6 +147,20 @@ extern "sysv64" fn irq_serie_rust() {
         // el timbre apagado, asi que no hay dos manos en el anillo a la vez.
         unsafe { kernel_core::serial::push(b) };
     }
+
+    // SAFETY: `install` dejo la direccion del APIC, que el identity map cubre.
+    unsafe {
+        let apic = APIC;
+        if apic != 0 {
+            core::ptr::write_volatile((apic + EOI) as *mut u32, 0);
+        }
+    }
+}
+
+/// Anota que sono y avisa que ya atendio. Nada mas.
+#[no_mangle]
+extern "sysv64" fn irq_buzon_rust() {
+    kernel_core::channel::rang();
 
     // SAFETY: `install` dejo la direccion del APIC, que el identity map cubre.
     unsafe {
@@ -173,4 +235,29 @@ pub unsafe fn install(hw: &Hardware) -> Result<u8, &'static str> {
 /// —dormir y despues habilitar— se perderia ese despertador.
 pub fn sleep() {
     unsafe { core::arch::asm!("sti; hlt; cli", options(nomem, nostack)) }
+}
+
+/// Programa el timbre del buzon: un IPI que el agente se manda a este nucleo.
+///
+/// # Safety
+///
+/// `install` tiene que haber corrido antes: comparten el APIC.
+pub unsafe fn install_doorbell() -> Result<kernel_core::channel::Doorbell, &'static str> {
+    if APIC == 0 {
+        return Err("el APIC todavia no esta encendido");
+    }
+
+    crate::idt::set_gate(VECTOR_BUZON as usize, irq_buzon_stub as *const () as u64)?;
+
+    // Dos escrituras, y en este orden: la primera dice a quien, la segunda
+    // dispara la llamada. Al reves se mandaria a quien hubiera quedado antes.
+    let destino = (crate::smp::this_core() as u64) << 24;
+    Ok(kernel_core::channel::Doorbell {
+        writes: [
+            (APIC + ICR_ALTO, destino, 4),
+            (APIC + ICR_BAJO, VECTOR_BUZON as u64, 4),
+        ],
+        count: 2,
+        id: VECTOR_BUZON as u32,
+    })
 }

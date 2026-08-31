@@ -248,3 +248,61 @@ pub const EXPECTED_VERSION: u32 = VERSION;
 pub fn reset() {
     unsafe { ADOPTADO = None }
 }
+
+// ---------------------------------------------------------------------------
+// El timbre
+// ---------------------------------------------------------------------------
+
+/// Como tocarle el timbre al kernel.
+///
+/// Se describe como **una lista de escrituras a hacer en orden**, y no como
+/// "escribile al APIC" o "escribile al GIC", a proposito: asi el agente no
+/// necesita saber que controlador de interrupciones tiene la maquina. Hace las
+/// escrituras que le dijeron y listo (P4).
+///
+/// En aarch64 alcanza una; en x86_64 son dos, porque el registro que dispara la
+/// llamada esta separado del que dice a quien.
+#[derive(Clone, Copy)]
+pub struct Doorbell {
+    /// (direccion, valor, cuantos bytes escribir).
+    pub writes: [(u64, u64, u8); 2],
+    pub count: usize,
+    /// El numero de timbre, para poder informarlo.
+    pub id: u32,
+}
+
+impl Doorbell {
+    pub const fn vacio() -> Self {
+        Self { writes: [(0, 0, 0); 2], count: 0, id: 0 }
+    }
+}
+
+static mut CAMPANA: Option<Doorbell> = None;
+
+/// Anota como se toca el timbre, para que `describe` lo publique.
+pub fn set_doorbell(d: Doorbell) {
+    unsafe { CAMPANA = Some(d) }
+}
+
+/// Como se toca el timbre, si hay.
+pub fn doorbell() -> Option<Doorbell> {
+    unsafe { CAMPANA }
+}
+
+/// Cuantas veces sono el timbre.
+///
+/// Se cuenta para poder **comprobar que el mecanismo anda**, que de otra forma
+/// no seria observable: el unico canal por el que un cliente puede mirar es el
+/// cable, y usarlo despierta al nucleo igual. Si este numero sube, la
+/// interrupcion del agente llego y el kernel la atendio.
+static TIMBRES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Lo llama quien atiende el timbre. Nada mas: el trabajo lo hace el bucle.
+pub fn rang() {
+    TIMBRES.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Cuantas veces sono.
+pub fn rings() -> u64 {
+    TIMBRES.load(Ordering::Relaxed)
+}

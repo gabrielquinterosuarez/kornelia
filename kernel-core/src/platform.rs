@@ -4,6 +4,7 @@
 //! kernel no sabe sobre qué silicio corre.
 
 use crate::acpi::Hardware;
+use crate::channel::Doorbell;
 use crate::cores;
 use crate::fault::{Fault, Outcome};
 use crate::machine::Machine;
@@ -106,6 +107,22 @@ pub trait Platform {
     /// Las tablas de páginas y la captura de excepciones tienen que estar
     /// puestas: el timbre puede sonar apenas se enciende.
     unsafe fn install_serial_interrupt(&mut self, hw: &Hardware) -> Result<u8, &'static str>;
+
+    /// Programa el timbre del buzón: una interrupción que el **agente** puede
+    /// disparar para despertar al núcleo del protocolo (D17).
+    ///
+    /// Va con prioridad más baja que el cable serie a propósito. Por más que el
+    /// agente inunde de llamadas, el cordón umbilical pasa primero — y eso lo
+    /// hace cumplir el controlador de interrupciones, no una decisión del
+    /// kernel (P6).
+    ///
+    /// Devuelve las escrituras que el agente tiene que hacer para tocarlo.
+    ///
+    /// # Safety
+    ///
+    /// El timbre del cable tiene que estar instalado antes: comparten
+    /// controlador.
+    unsafe fn install_doorbell(&mut self, hw: &Hardware) -> Result<Doorbell, &'static str>;
 
     /// Duerme este núcleo hasta que suene algún timbre.
     ///
