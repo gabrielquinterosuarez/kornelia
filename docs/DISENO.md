@@ -189,7 +189,19 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
 
 1. **Dónde se publica el código.** Hay repositorio git local desde el Hito 1 (rama `main`).
    El alojamiento remoto sigue sin definir: repo aparte, no en empujoneducativo.
-2. **Qué del System Table cruza la frontera.** El mapa de memoria *normalizado* es portable;
+2. **Por dónde seguir: excepciones o `mem.claim`.** Las dos están desbloqueadas.
+
+   A favor de **excepciones primero**: hoy no hay IDT ni tabla de vectores, así que cualquier
+   error escala a triple fault y la máquina se reinicia muda. Ya estamos escribiendo tablas de
+   páginas y cambiando `CR3`; si algo queda sutilmente mal, depurar es a ciegas. Con captura de
+   faults el mismo error llega por el cordón con causa, dirección y registros. Y `exec` sin esto
+   es inservible, porque su sentido es que el agente suba código que puede estar mal.
+
+   A favor de **`mem.claim` primero**: son cuatro verbos que caen juntos (`claim`, `read`,
+   `write`, `release`), ya no tienen nada bloqueándolos, y cierran el primer lazo visible —
+   el agente reclama memoria, sube bytes y los lee de vuelta.
+
+3. **Qué del System Table cruza la frontera.** El mapa de memoria *normalizado* es portable;
    cómo se obtiene (UEFI vs device tree vs ROM de arranque) no lo es. Se decide con `describe`.
 
 ---
