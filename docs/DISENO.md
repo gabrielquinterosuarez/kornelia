@@ -213,17 +213,29 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
 
 1. **Dónde se publica el código.** Hay repositorio git local desde el Hito 1 (rama `main`).
    El alojamiento remoto sigue sin definir: repo aparte, no en empujoneducativo.
-2. **Por dónde seguir: excepciones o `mem.claim`.** Las dos están desbloqueadas.
+2. **Por dónde seguir: cuál de los tres verbos que faltan.** Los tres son grandes y ninguno
+   bloquea a los otros.
 
-   A favor de **excepciones primero**: hoy no hay IDT ni tabla de vectores, así que cualquier
-   error escala a triple fault y la máquina se reinicia muda. Ya estamos escribiendo tablas de
-   páginas y cambiando `CR3`; si algo queda sutilmente mal, depurar es a ciegas. Con captura de
-   faults el mismo error llega por el cordón con causa, dirección y registros. Y `exec` sin esto
-   es inservible, porque su sentido es que el agente suba código que puede estar mal.
+   - **`core.claim`** — arrancar los otros núcleos. Ya sabemos cuántos hay y con qué
+     identificador se los nombra (la MADT lo dice). En aarch64 es una llamada PSCI al
+     firmware, que es corto; en x86_64 hay que mandar INIT/SIPI por el APIC, que es más largo.
+     No se parecen en nada.
+   - **`irq.install`** — que el agente ponga sus propios handlers (D9). Hace falta programar el
+     controlador de interrupciones, y falta leer de la MADT las rutas de interrupción, que hoy
+     no se sacan.
+   - **`dma.allow`** — el IOMMU. **Es el más grande de todo el proyecto** y el más específico
+     de cada fabricante: VT-d en Intel, SMMU en ARM, sin nada en común. Y D8 lo pone encendido
+     por defecto, así que no es opcional. Además es el que más gana con silicio real: el IOMMU
+     emulado de QEMU no es el de verdad.
 
-   A favor de **`mem.claim` primero**: son cuatro verbos que caen juntos (`claim`, `read`,
-   `write`, `release`), ya no tienen nada bloqueándolos, y cierran el primer lazo visible —
-   el agente reclama memoria, sube bytes y los lee de vuelta.
+3. **Si `exec` debe recibir un estado inicial de registros.** La sección 4 lo especifica
+   (`exec(core, handle, off, regs)`) y hoy no lo hace: el código recibe solo su propia
+   dirección. Sumarlo es fácil; la pregunta es qué nombres se aceptan, y ahí manda D3 — tendrían
+   que ser los que informa `describe`, no una lista horneada.
+
+4. **Leer el device tree.** Hoy se sabe encontrarlo pero no se lee, así que una placa embebida
+   —que no tiene ACPI— no reporta ni núcleos ni buses. Es también lo que haría falta para sacar
+   la dirección del PL011 de su fuente legítima en vez de tenerla horneada (deuda 2).
 
 3. **Qué del System Table cruza la frontera.** El mapa de memoria *normalizado* es portable;
    cómo se obtiene (UEFI vs device tree vs ROM de arranque) no lo es. Se decide con `describe`.

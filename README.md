@@ -20,8 +20,10 @@ pila y tablas de páginas propias, y captura los faults en vez de reiniciarse.
 
 **Seis de los diez verbos andan:** `describe`, `mem.claim`, `mem.read`,
 `mem.write`, `release` y **`exec`**. Un agente ya puede preguntarle a la máquina
-qué es, reclamar memoria física, subirle código máquina y **correrlo** — y si
-ese código falla, el fault vuelve como respuesta en vez de matar la máquina.
+qué es —memoria, núcleos, controlador de interrupciones, PCIe—, reclamar memoria
+física, subirle código máquina y **correrlo**. Y si ese código falla, el fault
+vuelve como respuesta en vez de matar la máquina: ni siquiera destruyendo el
+puntero de pila, porque las excepciones entran en una pila aparte.
 
 Faltan `core.claim`, `irq.install`, `irq.install_raw` y `dma.allow`.
 
@@ -71,6 +73,7 @@ un agente: arranca QEMU, espera la marca `-- CBOR --` y habla el protocolo.
 ```bash
 ./scripts/client.py                       # el indice de lo que se puede pedir (D16)
 ./scripts/client.py --what memory         # el mapa de memoria
+./scripts/client.py --what cpus,interrupts,pcie
 ./scripts/client.py --what tables --raw   # mostrando los bytes que viajan
 ./scripts/client.py --arch aarch64
 ./scripts/client.py --memoria             # el lazo: claim, write, read, release

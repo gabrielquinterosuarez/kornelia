@@ -82,7 +82,13 @@ captura los faults en vez de reiniciarse.
 
 **Seis de los diez verbos andan:** `describe`, `mem.claim`, `mem.read`,
 `mem.write`, `release` y **`exec`**. El agente sube código máquina, lo corre, y
-si falla **el fault vuelve como respuesta en vez de matar la máquina** (P5).
+si falla **el fault vuelve como respuesta en vez de matar la máquina** (P5) —
+ni siquiera destruyendo el puntero de pila, porque las excepciones entran en una
+pila aparte (IST en x86_64, `SP_EL1` en aarch64).
+
+`describe` sirve mapa de memoria, tablas, reclamos, núcleos, controlador de
+interrupciones y PCIe, leídos de ACPI.
+
 Faltan `core.claim`, `irq.install`, `irq.install_raw` y `dma.allow`.
 
 El portón es `./scripts/check.sh`: frontera + 26 tests + compila las dos + las
@@ -91,14 +97,16 @@ de commitear; CI corre exactamente ese script.
 
 ## Lo que sigue
 
-1. **Tapar el agujero que queda en P5:** si el código del agente rompe el
-   puntero de pila y después falla, todavía se lleva la máquina. Hace falta una
-   pila de excepción aparte — IST en x86_64 (con GDT y TSS propios), `SP_EL0`
-   para el agente y `SP_EL1` para las excepciones en aarch64.
-2. Parsear las tablas de ACPI que ya sabemos encontrar, para que `describe`
-   devuelva núcleos, PCIe y el controlador de interrupciones.
-3. `core.claim`, `irq.install` y `dma.allow`. El último es el más grande:
-   IOMMU es VT-d en Intel y SMMU en ARM.
+**La decisión está abierta y es de Gabriel** — está planteada con sus
+argumentos en `docs/DISENO.md` §8. Los tres verbos que faltan son grandes y
+ninguno bloquea a los otros:
+
+1. `core.claim` — arrancar los otros núcleos. PSCI en aarch64 (corto), INIT/SIPI
+   por el APIC en x86_64 (largo). Ya sabemos cuántos hay y cómo se llaman.
+2. `irq.install` — handlers del agente (D9). Falta sacar de la MADT las rutas de
+   interrupción.
+3. `dma.allow` — el IOMMU. El más grande del proyecto y el más específico de
+   cada fabricante; es lo que más gana con silicio real.
 
 Deudas anotadas en `docs/DISENO.md` §7. Las que bloqueaban `mem.claim` ya están
 cerradas: el kernel corre sobre **pila propia** y **tablas de páginas propias**,
