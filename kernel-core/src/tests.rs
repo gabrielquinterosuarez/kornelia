@@ -5,6 +5,7 @@
 //! el ciclo "compilar, bootear QEMU, leer el serie" es lento y no falla fuerte
 //! — un tamano mal redondeado se lee igual de bien que uno bien.
 
+use crate::cbor::{scan, Reader, Scan, Writer};
 use crate::machine::{Machine, Tables};
 use crate::memory::{Kind, Region};
 use crate::platform::{Platform, Umbilical};
@@ -222,4 +223,180 @@ fn rechaza_el_magico_al_reves() {
     let mut b = dtb();
     b[0..4].copy_from_slice(&0xd00d_feedu32.to_le_bytes());
     assert!(unsafe { read_device_tree(b.as_ptr() as u64) }.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// CBOR
+// ---------------------------------------------------------------------------
+
+/// Codifica con el Writer y devuelve los bytes.
+fn enc(f: impl FnOnce(&mut Writer<'_>)) -> Vec<u8> {
+    let mut buf = [0u8; 512];
+    let n = {
+        let mut w = Writer::new(&mut buf);
+        f(&mut w);
+        w.finish().expect("no entro").len()
+    };
+    buf[..n].to_vec()
+}
+
+/// Los ejemplos canonicos del RFC 8949. Si estos dan, la codificacion es CBOR
+/// de verdad y no un formato binario propio que se le parece.
+#[test]
+fn los_enteros_se_codifican_como_manda_el_rfc() {
+    assert_eq!(enc(|w| w.uint(0)), [0x00]);
+    assert_eq!(enc(|w| w.uint(23)), [0x17]);
+    // 24 ya no entra en los 5 bits del encabezado: pasa a un byte aparte.
+    assert_eq!(enc(|w| w.uint(24)), [0x18, 0x18]);
+    assert_eq!(enc(|w| w.uint(255)), [0x18, 0xff]);
+    assert_eq!(enc(|w| w.uint(256)), [0x19, 0x01, 0x00]);
+    assert_eq!(enc(|w| w.uint(65535)), [0x19, 0xff, 0xff]);
+    assert_eq!(enc(|w| w.uint(65536)), [0x1a, 0x00, 0x01, 0x00, 0x00]);
+    assert_eq!(
+        enc(|w| w.uint(u64::MAX)),
+        [0x1b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]
+    );
+}
+
+#[test]
+fn cadenas_arreglos_y_simples_como_manda_el_rfc() {
+    assert_eq!(enc(|w| w.text("")), [0x60]);
+    assert_eq!(enc(|w| w.text("a")), [0x61, 0x61]);
+    assert_eq!(enc(|w| w.text("IETF")), [0x64, 0x49, 0x45, 0x54, 0x46]);
+    assert_eq!(enc(|w| w.bytes(&[1, 2, 3, 4])), [0x44, 1, 2, 3, 4]);
+    assert_eq!(enc(|w| w.bool(false)), [0xf4]);
+    assert_eq!(enc(|w| w.bool(true)), [0xf5]);
+    assert_eq!(enc(|w| w.null()), [0xf6]);
+    assert_eq!(
+        enc(|w| {
+            w.array(3);
+            w.uint(1);
+            w.uint(2);
+            w.uint(3);
+        }),
+        [0x83, 0x01, 0x02, 0x03]
+    );
+}
+
+/// Lo que hace posible leer del UART de a un byte sin saber cuanto viene.
+#[test]
+fn un_mensaje_a_medias_se_reconoce_como_incompleto() {
+    let entero = enc(|w| {
+        w.array(3);
+        w.uint(7);
+        w.text("describe");
+        w.map(0);
+    });
+
+    // Cada prefijo estricto tiene que decir "falta mas", nunca "listo".
+    for corte in 0..entero.len() {
+        assert_eq!(
+            scan(&entero[..corte]),
+            Scan::Incomplete,
+            "el prefijo de {corte} bytes se dio por completo"
+        );
+    }
+    assert_eq!(scan(&entero), Scan::Complete(entero.len()));
+}
+
+/// Si vienen dos pedidos pegados, el primero tiene que medirse solo.
+#[test]
+fn dos_mensajes_pegados_no_se_confunden() {
+    let mut flujo = enc(|w| {
+        w.array(3);
+        w.uint(1);
+        w.text("describe");
+        w.map(0);
+    });
+    let primero = flujo.len();
+    flujo.extend_from_slice(&enc(|w| w.uint(42)));
+
+    assert_eq!(scan(&flujo), Scan::Complete(primero));
+}
+
+#[test]
+fn lo_que_no_es_cbor_se_rechaza_sin_esperar_mas() {
+    // 0x1c, 0x1d y 0x1e no existen en la especificacion.
+    assert_eq!(scan(&[0x1c]), Scan::Malformed);
+    // 0x1f es largo indefinido: valido en CBOR, no soportado acá a proposito.
+    assert_eq!(scan(&[0x9f]), Scan::Malformed);
+}
+
+/// Un mensaje hostil no puede hacer que el kernel se quede sin pila.
+#[test]
+fn el_anidamiento_tiene_techo() {
+    // 20 arreglos de un elemento, uno adentro del otro.
+    let hondo = vec![0x81u8; 20];
+    assert_eq!(scan(&hondo), Scan::Malformed);
+}
+
+#[test]
+fn se_lee_lo_que_se_escribio() {
+    let msg = enc(|w| {
+        w.array(3);
+        w.uint(9);
+        w.text("describe");
+        w.map(1);
+        w.text("what");
+        w.array(1);
+        w.text("memory");
+    });
+
+    let mut r = Reader::new(&msg);
+    assert_eq!(r.array(), Some(3));
+    assert_eq!(r.uint(), Some(9));
+    assert_eq!(r.text(), Some("describe"));
+    assert_eq!(r.map(), Some(1));
+    assert_eq!(r.text(), Some("what"));
+    assert_eq!(r.array(), Some(1));
+    assert_eq!(r.text(), Some("memory"));
+}
+
+/// Pedir el tipo equivocado no puede mover el cursor: si lo moviera, el resto
+/// del mensaje se leeria corrido y el kernel contestaria cualquier cosa.
+#[test]
+fn pedir_el_tipo_equivocado_no_pierde_el_hilo() {
+    let msg = enc(|w| w.text("hola"));
+    let mut r = Reader::new(&msg);
+
+    assert_eq!(r.uint(), None);
+    assert_eq!(r.array(), None);
+    assert_eq!(r.text(), Some("hola"));
+}
+
+/// Saltear una clave desconocida es lo que permite agregar argumentos nuevos
+/// sin romper a un kernel viejo.
+#[test]
+fn se_puede_saltear_un_valor_cualquiera() {
+    let msg = enc(|w| {
+        w.array(2);
+        w.map(1);
+        w.text("adentro");
+        w.array(2);
+        w.uint(1);
+        w.uint(2);
+        w.text("despues");
+    });
+
+    let mut r = Reader::new(&msg);
+    assert_eq!(r.array(), Some(2));
+    assert_eq!(r.skip(), Some(())); // se saltea el mapa entero
+    assert_eq!(r.text(), Some("despues"));
+}
+
+/// Que no entre en el buffer no puede ser un panico ni una escritura afuera.
+#[test]
+fn si_no_entra_se_avisa_en_vez_de_romper() {
+    let mut chico = [0u8; 4];
+    let mut w = Writer::new(&mut chico);
+    w.text("esto es mucho mas largo que cuatro bytes");
+    assert!(w.finish().is_none());
+}
+
+#[test]
+fn el_texto_invalido_en_utf8_se_rechaza() {
+    // Encabezado de texto de 2 bytes, seguido de una secuencia UTF-8 rota.
+    let msg = [0x62u8, 0xff, 0xfe];
+    let mut r = Reader::new(&msg);
+    assert_eq!(r.text(), None);
 }

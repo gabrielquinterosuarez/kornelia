@@ -25,9 +25,18 @@ cp target/aarch64-unknown-uefi/release/kernel.efi target/esp-aarch64/EFI/BOOT/BO
 
 cp -f "$AAVMF_VARS" target/AAVMF_VARS-aarch64.fd
 
+# OJO: `-serial stdio` va SIN el prefijo `mon:`, y no es un olvido.
+#
+# Con `mon:` QEMU multiplexa su monitor sobre la misma terminal, y ese
+# multiplexor se come el byte 0x01 (Ctrl-A) como escape junto con el que le
+# sigue. Por este puerto viaja CBOR y, mas adelante, codigo maquina (D6): ahi
+# 0x01 es un byte tan legitimo como cualquier otro, y perderlo corrompe el
+# mensaje en silencio.
+#
+# El costo es que Ctrl-A X no sale. Se sale con Ctrl-C.
 exec qemu-system-aarch64 \
     -machine virt -cpu cortex-a57 -m 512 \
     -drive if=pflash,format=raw,unit=0,readonly=on,file="$AAVMF_CODE" \
     -drive if=pflash,format=raw,unit=1,file=target/AAVMF_VARS-aarch64.fd \
     -drive format=raw,file=fat:rw:target/esp-aarch64 \
-    -serial mon:stdio -display none -no-reboot "$@"
+    -serial stdio -display none -no-reboot "$@"

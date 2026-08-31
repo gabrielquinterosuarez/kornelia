@@ -62,6 +62,26 @@ pub enum Kind {
 }
 
 impl Kind {
+    /// El identificador que viaja por el protocolo (D6).
+    ///
+    /// Va aparte de `name()` a proposito: `name()` es para que un humano lea el
+    /// serie y puede cambiar de redaccion cuando quiera; esto es interfaz, y si
+    /// cambia se rompe el cliente del otro lado.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Kind::Free => "free",
+            Kind::Kernel => "kernel",
+            Kind::Firmware => "firmware",
+            Kind::AcpiTables => "acpi",
+            Kind::FirmwareNvs => "acpi-nvs",
+            Kind::Mmio => "mmio",
+            Kind::Reserved => "reserved",
+            Kind::Broken => "broken",
+            Kind::Persistent => "persistent",
+            Kind::Other(_) => "other",
+        }
+    }
+
     /// Nombre corto para el cordon umbilical. ASCII puro.
     pub fn name(&self) -> &'static str {
         match self {

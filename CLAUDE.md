@@ -30,7 +30,7 @@ líneas. Escribí en español. Los comentarios del código van en español.
 
 ## Decisiones ya tomadas
 
-**25 decisiones (D1–D25) están cerradas en `docs/DISENO.md`, cada una con su
+**26 decisiones (D1–D26) están cerradas en `docs/DISENO.md`, cada una con su
 justificación. No las reabras sin motivo nuevo.** Las más importantes:
 
 - **D1** El agente es externo (cliente), no residente — pero la puerta a residente queda abierta.
@@ -46,6 +46,7 @@ justificación. No las reabras sin motivo nuevo.** Las más importantes:
 - **D22/D23** x86_64 **y** aarch64 en verde desde el primer commit; la frontera la verifica CI.
 - **D24** La frontera son **dos ejes**: arquitectura (`asm!`) y entorno de arranque (UEFI). El código UEFI va en `boot-uefi/`, compartido; los tipos normalizados en `kernel-core/`.
 - **D25** Al firmware se le pide todo (mapa de memoria, ACPI/DT, blob) **antes** de `ExitBootServices`, que se llama una sola vez. Después no hay segunda oportunidad, y solo el firmware sabe leer FAT32.
+- **D26** El serie va **crudo**: `-serial stdio`, nunca `mon:stdio`. El multiplexor se come el `0x01` como escape y por ahí viaja CBOR. Se sale de QEMU con `Ctrl-C`.
 
 ## Superficie del kernel
 
@@ -75,22 +76,32 @@ Esto es el kernel entero. No hay más verbos.
 
 ## Estado actual
 
-**Hito 1 completo:** arranca por UEFI en x86_64 y aarch64, y habla por el cordón
-umbilical. Verificado en QEMU en las dos arquitecturas. ~4 KB por kernel.
+Arranca por UEFI en x86_64 y aarch64, le toma la máquina al firmware y **habla
+CBOR** por el cordón umbilical. `describe` sirve el mapa de memoria físico real y
+dónde están ACPI / device tree / SMBIOS. Los otros nueve verbos no existen.
+
+El portón es `./scripts/check.sh`: frontera + 26 tests + compila las dos + las
+bootea en QEMU y les habla el protocolo con `scripts/client.py`. Corrélo antes
+de commitear; CI corre exactamente ese script.
 
 ## Lo que sigue
 
-1. `describe` — devolver el hardware real: mapa de memoria (de UEFI antes de
-   `ExitBootServices`), núcleos, dispositivos PCIe. Consultable, no un volcado fijo (D16).
-2. El protocolo CBOR sobre el UART, reemplazando el texto de arranque.
-3. `mem.claim` y `exec`: reclamar memoria física, subir código máquina, saltar,
-   devolver el estado de los registros.
-4. Captura de faults como datos estructurados (D7).
+1. Parsear las tablas de ACPI que ya sabemos encontrar, para que `describe`
+   devuelva núcleos, PCIe y el controlador de interrupciones.
+2. `mem.claim` y `mem.write`: reclamar memoria física y subirle bytes.
+3. `exec` y la captura de faults como datos (D7/D11). **Ese es el hito que
+   importa**: ahí el agente escribe código máquina, lo corre, y recibe el fault
+   como valor de retorno en vez de un SIGSEGV.
+
+Deudas anotadas en `docs/DISENO.md` §7. La grave: **la pila del kernel vive en
+memoria que hoy se informa como libre**, así que `mem.claim` no puede entregarla
+hasta que el kernel se mude a una pila propia.
 
 ## Cómo correrlo
 
 ```bash
-./scripts/run-x86_64.sh      # Ctrl-A luego X para salir
+./scripts/run-x86_64.sh      # Ctrl-C para salir (NO Ctrl-A X: ver D26)
 ./scripts/run-aarch64.sh
-./scripts/check-frontera.sh
+./scripts/client.py --what memory   # hablarle el protocolo
+./scripts/check.sh                  # el porton entero
 ```

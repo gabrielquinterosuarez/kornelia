@@ -3,7 +3,7 @@
 Kernel experimental mínimo que supone un **agente de IA como usuario** y quita
 todas las capas posibles entre ese agente y el hardware.
 
-El diseño completo está en [`docs/DISENO.md`](docs/DISENO.md) — 25 decisiones
+El diseño completo está en [`docs/DISENO.md`](docs/DISENO.md) — 26 decisiones
 tomadas, cada una con su justificación. Lo ya descartado, con sus motivos, en
 [`docs/DESCARTADO.md`](docs/DESCARTADO.md).
 
@@ -15,11 +15,11 @@ falta volver a explicar nada.
 ## Estado
 
 Arranca por UEFI en **x86_64 y aarch64**, le toma la máquina al firmware
-(`ExitBootServices`), vuelca por el cordón umbilical el **mapa de memoria física
-real** y dónde la máquina guarda su propia descripción (ACPI, device tree,
-SMBIOS). El cordón ya es bidireccional: el kernel escucha.
+(`ExitBootServices`) y **habla CBOR por el cordón umbilical** (D6). El primero
+de los diez verbos, `describe`, ya sirve el mapa de memoria físico real y dónde
+la máquina guarda su propia descripción (ACPI, device tree, SMBIOS).
 
-Los diez verbos del protocolo todavía no existen.
+Faltan los otros nueve.
 
 ## Requisitos
 
@@ -45,29 +45,53 @@ compila perfecto.
 Los scripts pasan a QEMU cualquier argumento extra, así que `./scripts/run-x86_64.sh -m 1G`
 arranca con 1 GiB y el mapa de memoria tiene que reflejarlo.
 
-**Para salir de QEMU: `Ctrl-A`, soltar, y después `X`.**
+**Para salir de QEMU: `Ctrl-C`.**
 
-`Ctrl-A` funciona porque los scripts usan `-serial mon:stdio`: el prefijo `mon:`
-multiplexa el monitor de QEMU y el puerto serie sobre la misma terminal, y es
-ese multiplexor el que implementa los escapes. Sin `mon:` no hay escape ninguno
-y el `Ctrl-A` le llega al kernel como un byte más.
+No es `Ctrl-A X`, y eso tiene una razón de peso (D26): ese atajo lo implementa
+un multiplexor que **se come el byte `0x01` como escape junto con el que le
+sigue**. Por el serie viaja CBOR, donde `0x01` es un byte como cualquier otro.
+Se descubrió cuando el primer pedido del cliente empezaba con `83 01 68` y QEMU
+contestó su pantalla de ayuda: había leído `Ctrl-A h`.
 
-Los otros dos que sirven:
+Si hace falta el monitor de QEMU, va por otro lado y no por el serie:
 
-| Tecla | Qué hace |
-|---|---|
-| `Ctrl-A` `X` | Sale de QEMU. |
-| `Ctrl-A` `C` | Alterna entre el kernel y el monitor de QEMU. |
-| `Ctrl-A` `H` | Lista todo lo demás. |
+```bash
+./scripts/run-x86_64.sh -monitor telnet:127.0.0.1:5555,server,nowait
+```
 
-Desde el monitor se puede mirar la máquina por fuera del kernel — útil para
-contrastar lo que el kernel dice contra lo que QEMU sabe:
+## Hablarle al kernel
+
+`scripts/client.py` es el primer programa que usa el kernel como lo va a usar
+un agente: arranca QEMU, espera la marca `-- CBOR --` y habla el protocolo.
+
+```bash
+./scripts/client.py                       # el indice de lo que se puede pedir (D16)
+./scripts/client.py --what memory         # el mapa de memoria
+./scripts/client.py --what tables --raw   # mostrando los bytes que viajan
+./scripts/client.py --arch aarch64
+```
+
+Con `--raw` se ve el intercambio completo, que son 12 bytes de ida:
 
 ```
-(qemu) info mtree     # el mapa de memoria segun QEMU
-(qemu) info registers # el estado del CPU
-(qemu) xp /16xb 0x0   # volcar memoria fisica
+-> 8301686465736372696265a0
+<- 8301f5a46461726368667838365f36346873656374696f6e7382666d656d6f7279...
+
+respuesta id=1 ok=True
+  arch: x86_64
+  sections: ['memory', 'tables']
+  memory: {'regions': 110, 'free': 127528960}
+  tables: {'acpi': True, 'device_tree': False, 'smbios': True}
 ```
+
+Eso es D16 en acción: **sin argumentos el kernel no vuelca todo, devuelve el
+índice** de lo que hay para pedir. Volcar todo ahogaría a un cliente chico y
+resumir le sacaría información a uno grande, así que cada uno pide la
+profundidad que quiere y el kernel no tiene que suponer con quién habla.
+
+El cliente trae su propio CBOR en unas 60 líneas a propósito: si usara una
+biblioteca, un desacuerdo entre el kernel y esa biblioteca se leería como "el
+kernel está bien" cuando quizá los dos estén mal de la misma manera.
 
 Salida esperada (recortada — el mapa real trae decenas de regiones, y son
 distintas en cada arquitectura porque son de máquinas distintas):
@@ -75,32 +99,16 @@ distintas en cada arquitectura porque son de máquinas distintas):
 ```
 == kernel agente-centrico ==
 arquitectura: aarch64
+memoria: 81 regiones, 518576 KiB libres
+tablas: acpi=si device-tree=no smbios=si
 
-mapa de memoria: 81 regiones, 518576 KiB libres
-  0x0000000040000000      64 MiB  libre
-  0x0000000044000000     128 KiB  libre
-  ...
-  0x000000005fe20000     576 KiB  firmware
-  0x0000000009010000       4 KiB  mmio
-
-El cordon umbilical esta vivo.
 Sin procesos. Sin archivos. Sin shell. Sin usuarios.
-
-escuchando. cada byte que llegue se informa crudo.
+-- CBOR --
 ```
 
-**El kernel escucha.** Si tecleás algo en la terminal de QEMU, contesta con el
-byte crudo que recibió:
-
-```
-rx 0x48  'H'
-rx 0x6f  'o'
-```
-
-Informa el byte y no la línea a propósito: lo que va a viajar por acá es CBOR
-binario, no comandos. **No es una shell** — eso sería la capa antropocéntrica
-que el proyecto saca (D10). Es un andamio para probar el camino de entrada, y
-desaparece cuando esté el protocolo.
+El banner es corto a propósito: alcanza para saber si la máquina está viva y
+qué encontró. El detalle va por `describe`, que manda lo que le pidan. Desde la
+marca `-- CBOR --`, lo que sale es binario.
 
 Ese volcado se puede contrastar contra el device tree que genera QEMU, que es
 una fuente independiente:
@@ -121,21 +129,23 @@ grep -ao '[a-z0-9-]*@[0-9a-f]*' virt.dtb | sort -u
 | `kernel-core/src/memory.rs` | El vocabulario normalizado del mapa de memoria, que hablan todos los entornos de arranque. |
 | `kernel-core/src/machine.rs` | Lo que se sabe de la máquina: regiones y dónde están ACPI y el device tree. |
 | `kernel-core/src/tables.rs` | Lee y **verifica** los encabezados de ACPI y del device tree. |
-| `kernel-core/src/tests.rs` | Tests que corren en la máquina de desarrollo, sin bootear nada. |
+| `kernel-core/src/cbor.rs` | El formato binario del protocolo (D6), escrito a mano. |
+| `kernel-core/src/protocol.rs` | Los verbos. Hoy: `describe`. |
+| `kernel-core/src/tests.rs` | 26 tests que corren en la máquina de desarrollo, sin bootear nada. |
 | `boot-uefi/` | El entorno de arranque UEFI, compartido por las dos arquitecturas. Sin `asm!`. |
 | `kernel-x86_64/` | Arranque UEFI + UART 16550 en puertos de E/S. |
 | `kernel-aarch64/` | Arranque UEFI + UART PL011 en MMIO. |
-| `scripts/` | Correr en QEMU, y `check.sh`, que es el portón que corre CI. |
+| `scripts/` | Correr en QEMU, `client.py` para hablarle, y `check.sh`, que es el portón que corre CI. |
 | `docs/DISENO.md` | El documento vivo de diseño. |
 
 ## Lo que sigue
 
-1. El protocolo CBOR sobre el UART (D6), reemplazando el texto y el andamio de
-   escucha. Es lo que convierte esto en algo que un agente puede usar.
-2. `describe` sirviendo de verdad lo que ya sabemos: el mapa de memoria y dónde
-   están las tablas.
-3. Parsear ACPI para sacar núcleos, PCIe y el controlador de interrupciones.
-4. `mem.claim` y `exec`.
+1. Parsear las tablas de ACPI que ya sabemos encontrar, para que `describe`
+   devuelva núcleos, PCIe y el controlador de interrupciones.
+2. `mem.claim` y `mem.write`: reclamar memoria física y subirle bytes.
+3. `exec` y la captura de faults como datos (D7/D11). **Ese es el hito que
+   importa**: ahí el agente escribe código máquina, lo corre, y recibe el fault
+   como un valor de retorno en vez de un SIGSEGV.
 
 Las deudas anotadas están en [`docs/DISENO.md`](docs/DISENO.md) §7 — la más
 importante es que la pila del kernel vive dentro de memoria que hoy se informa

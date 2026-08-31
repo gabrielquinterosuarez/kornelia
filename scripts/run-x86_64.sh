@@ -26,9 +26,18 @@ cp target/x86_64-unknown-uefi/release/kernel.efi target/esp-x86_64/EFI/BOOT/BOOT
 # Las variables UEFI tienen que ser escribibles: copia propia.
 cp -f "$OVMF_VARS" target/OVMF_VARS-x86_64.fd
 
+# OJO: `-serial stdio` va SIN el prefijo `mon:`, y no es un olvido.
+#
+# Con `mon:` QEMU multiplexa su monitor sobre la misma terminal, y ese
+# multiplexor se come el byte 0x01 (Ctrl-A) como escape junto con el que le
+# sigue. Por este puerto viaja CBOR y, mas adelante, codigo maquina (D6): ahi
+# 0x01 es un byte tan legitimo como cualquier otro, y perderlo corrompe el
+# mensaje en silencio.
+#
+# El costo es que Ctrl-A X no sale. Se sale con Ctrl-C.
 exec qemu-system-x86_64 \
     -machine q35 \
     -drive if=pflash,format=raw,unit=0,readonly=on,file="$OVMF_CODE" \
     -drive if=pflash,format=raw,unit=1,file=target/OVMF_VARS-x86_64.fd \
     -drive format=raw,file=fat:rw:target/esp-x86_64 \
-    -serial mon:stdio -display none -no-reboot "$@"
+    -serial stdio -display none -no-reboot "$@"

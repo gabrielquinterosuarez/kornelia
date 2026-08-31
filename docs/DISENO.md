@@ -1,8 +1,8 @@
 # Kernel agente-céntrico — Documento de diseño
 
-**Estado:** las dos arquitecturas arrancan por UEFI, le toman la máquina al firmware, leen
-el mapa de memoria físico y escuchan el cordón umbilical. El diseño de los verbos sigue
-siendo especificación: `describe`, `mem.claim` y `exec` no existen todavía.
+**Estado:** las dos arquitecturas arrancan por UEFI, le toman la máquina al firmware y
+**hablan el protocolo CBOR** por el cordón umbilical. `describe` ya sirve el mapa de memoria
+y las tablas. Los otros nueve verbos siguen siendo especificación.
 **Última actualización:** 2026-08-30
 
 ---
@@ -60,6 +60,7 @@ cuando el operador deja de ser una persona.
 | D23 | **La frontera de portabilidad la verifica el compilador y CI.** El crate portable no lleva una sola línea de `#[cfg(target_arch)]`; habla con el hardware solo por un trait. CI falla si aparece `target_arch` fuera de `arch/`. | Una frontera que no se prueba es ficción. El chequeo mecánico es lo único que de verdad frena la filtración de x86 al resto. |
 | D24 | **La frontera se parte en dos ejes, no en uno: arquitectura y entorno de arranque.** El código de UEFI vive en un crate propio (`boot-uefi`) que no lleva `asm!` y lo comparten las dos arquitecturas. Los **tipos normalizados** (región de memoria, dispositivo) viven en `kernel-core`. | `kernel-x86_64` en realidad significaba "x86_64 **+ UEFI**": el `asm!` varía por arquitectura, pero cómo se pide el mapa de memoria varía por entorno de arranque, y el *formato* de ese mapa no varía por ninguno de los dos (UEFI lo estandarizó). Meter UEFI en cada crate de arquitectura lo duplicaría idéntico; meterlo en `kernel-core` dejaría a `check-frontera.sh` dando verde sobre un núcleo casado con UEFI — un falso positivo, peor que un rojo. D18 ya anticipa el segundo eje ("en ARM/RISC-V embebido el equivalente es la ROM de arranque"): con esta partición, un `boot-embedded` entra sin tocar `kernel-core`. **Los tipos normalizados van en `kernel-core` o esto degenera:** si se los queda `boot-uefi`, cada entorno de arranque inventa su propio vocabulario y no hay frontera. |
 | D25 | **Al firmware se le pide todo antes de `ExitBootServices`, que se llama una sola vez, en el arranque.** Mapa de memoria, punteros a ACPI / device tree y el blob (D19): todo en esa ventana. | No hay segunda oportunidad: después de salir, llamar a un Boot Service es un crash. Y hay una dependencia que obliga: **lo único que sabe leer FAT32 es el firmware**, así que el blob de D19 —que vive en la partición EFI al lado del kernel— solo se puede cargar antes de salir. Salir apenas arranca haría imposible D18/D19. Además `ExitBootServices` exige la *llave* del mapa más reciente: si algo pide memoria entremedio, la llave queda vieja y la llamada falla. El orden es rígido y conviene que sea un único momento fijo, no un estado que el kernel tenga que rastrear. |
+| D26 | **El puerto serie va crudo: sin multiplexor de monitor.** Los scripts usan `-serial stdio`, **nunca** `-serial mon:stdio`. Se sale de QEMU con `Ctrl-C`. | Con `mon:`, QEMU multiplexa su monitor sobre la misma terminal, y ese multiplexor **se come el byte `0x01` (Ctrl-A) como escape junto con el que le sigue**. Por este puerto viaja CBOR y, más adelante, código máquina (D6): ahí `0x01` es un byte tan legítimo como cualquier otro. Se descubrió de la peor manera posible — el primer pedido del cliente empezaba con `83 01 68` y QEMU contestó su pantalla de ayuda, porque leyó `Ctrl-A h`. La comodidad de `Ctrl-A X` no vale un canal que corrompe mensajes en silencio. |
 
 ---
 
@@ -135,7 +136,9 @@ Lo que sí existe:
 | El trait `Platform` | Cinco miembros: `ARCH`, `uart_write_byte`, `uart_read_byte`, `park`, `machine`. |
 | `scripts/check.sh` | El portón: frontera + 15 tests + compila las dos + **las bootea en QEMU** y verifica lo que dicen. Probado que falla cuando debe. |
 | CI (`.github/workflows/ci.yml`) | Llama al mismo portón, para que no haya chequeos que solo existan en una de las dos partes. |
-| Los diez verbos de la sección 4 | Ninguno todavía. El mapa se imprime como texto, no se sirve como `describe`. Lo que hoy escucha el UART es un andamio que informa el byte crudo — **no es una shell** (D10) y desaparece con el bucle CBOR. |
+| **El protocolo CBOR** (D6) | Andando. Escrito a mano, sin dependencias; verificado contra los vectores canónicos del RFC 8949. |
+| **`describe`** | Andando: sirve `memory` y `tables`. Sin argumentos devuelve el índice, no un volcado (D16). |
+| Los otros nueve verbos | Ninguno todavía. |
 
 Verificado el 2026-08-30 contra dos fuentes independientes: el mapa que imprime el kernel en
 aarch64 coincide con el device tree que genera QEMU (`memory@40000000` → primera región en esa

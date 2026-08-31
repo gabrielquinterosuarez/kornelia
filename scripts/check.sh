@@ -31,48 +31,40 @@ for arq in x86_64 aarch64; do
     cargo build --release -p "kernel-$arq" --target "$arq-unknown-uefi" || mal "compilar $arq"
 done
 
-# --- 4. Las dos arquitecturas ARRANCAN (D22) --------------------------------
+# --- 4. Las dos arquitecturas ARRANCAN Y CONTESTAN (D22) --------------------
 # Que compile no prueba nada: un puntero mal leido compila perfecto. Se bootean
-# las dos en QEMU y se busca en el serie lo que tienen que decir.
+# las dos en QEMU y se les habla en CBOR, que es como las va a usar un agente.
+#
+# El cliente hace las dos verificaciones de una: mira el banner de texto del
+# arranque y despues pide `describe` por el protocolo.
 #
 # CHECK_SIN_QEMU=1 lo saltea, para una maquina sin firmware UEFI instalado.
 if [ "${CHECK_SIN_QEMU:-0}" = "1" ]; then
-    paso "arranque en QEMU"
+    paso "arranque y protocolo"
     echo "SALTEADO por CHECK_SIN_QEMU=1"
+elif ! command -v python3 >/dev/null; then
+    paso "arranque y protocolo"
+    mal "falta python3, que es lo que corre el cliente"
 else
-    tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
-
     for arq in x86_64 aarch64; do
-        paso "arranca $arq en QEMU"
-        # El kernel ya no se cuelga: se queda escuchando el UART. Por eso hay
-        # que matarlo, y por eso el timeout no es una falla.
-        timeout -s KILL 90 "./scripts/run-$arq.sh" </dev/null >"$tmp/$arq.log" 2>&1 || true
-        salida=$(tr -d '\r' <"$tmp/$arq.log")
+        paso "arranca $arq y contesta el protocolo"
+        salida=$(timeout 240 ./scripts/client.py --arch "$arq" --what memory,tables 2>&1 || true)
 
-        for esperado in \
-            "arquitectura: $arq" \
-            "mapa de memoria:" \
-            "descripcion de la maquina:" \
-            "El cordon umbilical esta vivo." \
-            "escuchando."
-        do
-            if ! grep -qF "$esperado" <<<"$salida"; then
-                mal "$arq no dijo: $esperado"
-            fi
+        # Lo que tiene que haber dicho en el banner de texto.
+        for esperado in "arquitectura: $arq" "memoria:" "tablas:" "-- CBOR --"; do
+            grep -qFe "$esperado" <<<"$salida" || mal "$arq no dijo: $esperado"
         done
 
-        # El mapa tiene que traer regiones de verdad, no venir vacio.
-        n=$(grep -cE '^  0x[0-9a-f]{16}' <<<"$salida" || true)
-        if [ "$n" -lt 5 ]; then
-            mal "$arq reporto solo $n regiones de memoria"
-        else
-            echo "  $n regiones de memoria"
-        fi
+        # Y lo que tiene que haber contestado por el protocolo.
+        grep -qFe "ok=True" <<<"$salida" || mal "$arq no contesto ok por el protocolo"
+        grep -qFe "tables:" <<<"$salida" || mal "$arq no devolvio la seccion tables"
 
-        # Y el mapa NO se tuvo que haber caido a la rama de error.
-        if grep -qF "NO SE PUDO OBTENER" <<<"$salida"; then
-            mal "$arq no pudo describir la maquina"
+        n=$(grep -cE '^ +0x[0-9a-f]{16} ' <<<"$salida" || true)
+        if [ "$n" -lt 5 ]; then
+            mal "$arq devolvio solo $n regiones por el protocolo"
+            printf '%s\n' "$salida" | tail -5
+        else
+            echo "  $n regiones por el protocolo"
         fi
     done
 fi

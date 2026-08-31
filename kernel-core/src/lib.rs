@@ -10,9 +10,11 @@
 // así que sigue siendo `no_std` en las dos arquitecturas.
 #![cfg_attr(not(test), no_std)]
 
+pub mod cbor;
 pub mod machine;
 pub mod memory;
 pub mod platform;
+pub mod protocol;
 pub mod tables;
 
 #[cfg(test)]
@@ -29,149 +31,53 @@ pub fn main<P: Platform>(p: &mut P) -> ! {
     // exclusiva.
     let machine = p.machine();
 
+    saludar(p, &machine);
+
+    // Desde acá manda el protocolo: lo que sale es binario (D6).
+    protocol::serve(p, &machine)
+}
+
+/// La señal de vida, en texto, antes de que empiece el protocolo.
+///
+/// Es la única concesión a la legibilidad humana, y existe para que enchufar
+/// una terminal alcance para saber si la máquina está viva y qué encontró. El
+/// detalle **no** va acá: va por `describe`, que es quien decide cuánto manda
+/// según lo que le pidan (D16). Volcar 110 renglones por serie en cada arranque
+/// sería el kernel decidiendo por el cliente.
+fn saludar<P: Platform>(p: &mut P, m: &Machine) {
+    use core::fmt::Write;
+
     let mut u = Umbilical::new(p);
 
     u.line("");
     u.line("== kernel agente-centrico ==");
     u.kv("arquitectura", P::ARCH);
-    u.line("");
 
-    describe_memory(&mut u, &machine);
-    u.line("");
-    describe_tables(&mut u, &machine.tables);
-
-    u.line("");
-    u.line("El cordon umbilical esta vivo.");
-    u.line("Sin procesos. Sin archivos. Sin shell. Sin usuarios.");
-    u.line("");
-
-    listen(p)
-}
-
-/// Escucha el cordón umbilical e informa cada byte que llega.
-///
-/// **Esto es un andamio, no el destino.** Existe para probar que el camino de
-/// entrada funciona; desaparece cuando esté el bucle CBOR (D6), que es lo que
-/// de verdad va del otro lado.
-///
-/// No interpreta nada, y es a propósito: una shell sería exactamente la capa
-/// antropocéntrica que el proyecto saca (D10). Por eso informa el **byte
-/// crudo** y no una línea de texto — lo que va a viajar por acá es CBOR
-/// binario, no comandos.
-fn listen<P: Platform>(p: &mut P) -> ! {
-    {
-        let mut u = Umbilical::new(p);
-        u.line("escuchando. cada byte que llegue se informa crudo.");
-        u.line("");
-    }
-
-    loop {
-        match p.uart_read_byte() {
-            None => core::hint::spin_loop(),
-            Some(b) => {
-                use core::fmt::Write;
-                let mut u = Umbilical::new(p);
-                let _ = write!(u, "rx {b:#04x}");
-                // Si además es un carácter imprimible, se muestra al lado. No
-                // cambia lo que se recibió: es una ayuda para el humano que
-                // está tecleando.
-                if (0x20..0x7f).contains(&b) {
-                    let _ = write!(u, "  '{}'", b as char);
-                }
-                let _ = u.write_str("\r\n");
-            }
-        }
-    }
-}
-
-/// Vuelca el mapa de memoria por el cordón umbilical.
-///
-/// Esto es un anticipo en texto de lo que va a devolver `describe`. Cuando
-/// exista el protocolo CBOR (D6), el agente va a recibir estos mismos datos en
-/// binario y esta función queda solo para depurar desde una terminal.
-fn describe_memory<P: Platform>(u: &mut Umbilical<'_, P>, m: &Machine) {
-    use core::fmt::Write;
-
-    if let Some(reason) = m.failure {
+    match m.failure {
         // Un arranque que no pudo describir la máquina no es una muerte: es un
         // dato que hay que poder contar (P5).
-        u.line("mapa de memoria: NO SE PUDO OBTENER");
-        u.kv("  motivo", reason);
-        return;
-    }
-
-    let _ = write!(u, "mapa de memoria: {} regiones, ", m.regions.len());
-    u.size(m.free_bytes());
-    let _ = u.write_str(" libres\r\n");
-
-    for r in m.regions {
-        let _ = write!(u, "  {:#018x}  ", r.start);
-        u.size(r.bytes);
-        let _ = write!(u, "  {}", r.kind.name());
-        // Un tipo que este kernel no conoce se informa con su número crudo en
-        // vez de inventarle un significado (P4).
-        if let Kind::Other(n) = r.kind {
-            let _ = write!(u, "({n})");
+        Some(reason) => {
+            u.line("NO SE PUDO DESCRIBIR LA MAQUINA");
+            u.kv("  motivo", reason);
         }
-        let _ = u.write_str("\r\n");
-    }
-}
+        None => {
+            let _ = write!(u, "memoria: {} regiones, ", m.regions.len());
+            u.size(m.free_bytes());
+            let _ = u.write_str(" libres\r\n");
 
-/// Vuelca dónde dejó la máquina su propia descripción, y verifica que esté ahí.
-///
-/// No alcanza con informar el puntero que dio el firmware: se lee el encabezado
-/// para confirmar que apunta a lo que dice. Un puntero que se sigue sin
-/// verificar es una raíz inventada, y todo lo que se deduzca de ella también.
-fn describe_tables<P: Platform>(u: &mut Umbilical<'_, P>, t: &Tables) {
-    use core::fmt::Write;
-
-    u.line("descripcion de la maquina:");
-
-    match t.acpi {
-        None => u.line("  acpi         ausente"),
-        Some(addr) => {
-            let _ = write!(u, "  acpi         {addr:#018x}  ");
-            // SAFETY: la dirección la reportó el firmware en su Configuration
-            // Table, y `read_acpi` verifica firma y checksum antes de creerle.
-            match unsafe { tables::read_acpi(addr) } {
-                None => u.line("NO es un RSDP valido"),
-                Some(a) => {
-                    let _ = write!(u, "rev {}", a.revision);
-                    match a.xsdt {
-                        Some(x) => {
-                            let _ = write!(u, ", xsdt en {x:#x}");
-                        }
-                        None => {
-                            let _ = write!(u, ", rsdt en {:#x}", a.rsdt);
-                        }
-                    }
-                    let _ = u.write_str("\r\n");
-                }
+            let _ = u.write_str("tablas:");
+            for (nombre, hay) in [
+                ("acpi", m.tables.acpi.is_some()),
+                ("device-tree", m.tables.device_tree.is_some()),
+                ("smbios", m.tables.smbios.is_some()),
+            ] {
+                let _ = write!(u, " {nombre}={}", if hay { "si" } else { "no" });
             }
+            let _ = u.write_str("\r\n");
         }
     }
 
-    match t.device_tree {
-        None => u.line("  device tree  ausente"),
-        Some(addr) => {
-            let _ = write!(u, "  device tree  {addr:#018x}  ");
-            // SAFETY: ídem; `read_device_tree` verifica el número mágico.
-            match unsafe { tables::read_device_tree(addr) } {
-                None => u.line("NO tiene el magico 0xd00dfeed"),
-                Some(d) => {
-                    let _ = write!(u, "v{}, ", d.version);
-                    u.size(d.bytes as u64);
-                    let _ = u.write_str("\r\n");
-                }
-            }
-        }
-    }
-
-    match t.smbios {
-        None => u.line("  smbios       ausente"),
-        Some(addr) => {
-            // Todavía no se interpreta: solo se anota dónde está.
-            let _ = write!(u, "  smbios       {addr:#018x}  sin interpretar\r\n");
-        }
-    }
+    u.line("");
+    u.line("Sin procesos. Sin archivos. Sin shell. Sin usuarios.");
+    u.line(protocol::MARCA);
 }
