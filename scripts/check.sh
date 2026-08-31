@@ -48,7 +48,7 @@ elif ! command -v python3 >/dev/null; then
 else
     for arq in x86_64 aarch64; do
         paso "arranca $arq y contesta el protocolo"
-        salida=$(timeout 240 ./scripts/client.py --arch "$arq" --smp 4 --what memory,tables --memoria --exec --nucleos --buzon --timbre --handler 2>&1 || true)
+        salida=$(timeout 240 ./scripts/client.py --arch "$arq" --smp 4 --what memory,tables --memoria --exec --nucleos --buzon --timbre --handler --durante 2>&1 || true)
 
         # Lo que tiene que haber dicho en el banner de texto.
         for esperado in "arquitectura: $arq" "memoria:" "tablas:" \
@@ -103,6 +103,14 @@ else
         if ! grep -qFe "handler: ok" <<<"$salida"; then
             mal "$arq no cerro los handlers del agente"
             printf '%s\n' "$salida" | grep -E "FALLA:|irq.install|atendida" | head -10
+        fi
+
+        # Y que el handler corra DURANTE un exec (D9, D29). La prueba no admite
+        # interpretacion: el codigo del agente espera a su propio handler, asi
+        # que si las interrupciones estuvieran cerradas no volveria nunca.
+        if ! grep -qFe "handler durante exec: ok" <<<"$salida"; then
+            mal "$arq no atiende interrupciones durante un exec"
+            printf '%s\n' "$salida" | grep -E "FALLA:|durante" | head -10
         fi
 
         n=$(grep -cE '^ +0x[0-9a-f]{16} ' <<<"$salida" || true)

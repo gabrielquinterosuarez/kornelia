@@ -420,7 +420,21 @@ def prueba_de_nucleos(proc, timeout):
     return 0
 
 
-def emitir_escrituras(arch, writes):
+def mov_reg_imm64(reg, v):
+    """movz/movk para dejar un inmediato de 64 bits en xN (aarch64)."""
+    out = b""
+    primero = True
+    for hw in range(4):
+        trozo = (v >> (16 * hw)) & 0xFFFF
+        if trozo == 0 and not primero:
+            continue
+        base = 0xD2800000 if primero else 0xF2800000
+        out += (base | (hw << 21) | (trozo << 5) | reg).to_bytes(4, "little")
+        primero = False
+    return out or (0xD2800000 | reg).to_bytes(4, "little")
+
+
+def emitir_escrituras(arch, writes, con_ret=True):
     """Codigo maquina que hace esas escrituras de 32 bits y vuelve.
 
     Es lo que haria el driver de red del agente para tocar el timbre. Se genera
@@ -431,7 +445,7 @@ def emitir_escrituras(arch, writes):
         for addr, val, _ancho in writes:
             code += b"\x48\xb8" + addr.to_bytes(8, "little")   # mov rax, addr
             code += b"\xc7\x00" + (val & 0xFFFFFFFF).to_bytes(4, "little")  # mov [rax], val
-        return code + b"\xc3"                                   # ret
+        return code + (b"\xc3" if con_ret else b"")            # ret
 
     # aarch64: armar la direccion en x0 y el valor en w1, y guardar.
     def mov_x0(v):
@@ -462,7 +476,7 @@ def emitir_escrituras(arch, writes):
     for addr, val, _ancho in writes:
         code += mov_x0(addr) + mov_w1(val & 0xFFFFFFFF)
         code += (0xB9000001).to_bytes(4, "little")   # str w1, [x0]
-    return code + (0xD65F03C0).to_bytes(4, "little")  # ret
+    return code + ((0xD65F03C0).to_bytes(4, "little") if con_ret else b"")  # ret
 
 
 def prueba_de_timbre(proc, timeout, arch):
@@ -522,6 +536,103 @@ def prueba_de_timbre(proc, timeout, arch):
             print(f"  FALLA: {f}")
         return 1
     print("  timbre: ok")
+    return 0
+
+
+def prueba_durante_exec(proc, timeout, arch):
+    """El handler del agente corre DURANTE un exec largo (D9, D29).
+
+    La prueba es de las que no admiten interpretacion: el codigo del agente
+    dispara su interrupcion y despues se queda esperando a que su propio handler
+    le escriba una bandera. Si las interrupciones estuvieran cerradas durante el
+    exec, esa espera no terminaria nunca y esto colgaria.
+    """
+    fallas = []
+
+    def pedir_verbo(n, verbo, args):
+        resp, _ = pedir(proc, [n, verbo, args], timeout)
+        _, ok, carga = resp
+        return ok, carga
+
+    # Otra interrupcion que la que usa --handler: son dos pruebas que pueden
+    # correr en el mismo arranque, y un handler ya instalado no se reemplaza.
+    INT = 35 if arch == "aarch64" else 6
+    FLAG_OFF = 2048
+
+    ok, c = pedir_verbo(70, "mem.claim", {"bytes": 4096, "align": 4096})
+    if not ok:
+        print(f"  no se pudo reclamar: {c}")
+        return 1
+    h, base = c["handle"], c["start"]
+    flag = base + FLAG_OFF
+
+    # El handler: escribe 1 en la bandera y vuelve.
+    if arch == "x86_64":
+        handler = b"\x48\xb8" + flag.to_bytes(8, "little") + b"\xc6\x00\x01\xc3"
+    else:
+        handler = mov_reg_imm64(0, flag) + \
+                  (0x52800021).to_bytes(4, "little") + \
+                  (0x39000001).to_bytes(4, "little") + \
+                  (0xD65F03C0).to_bytes(4, "little")
+    pedir_verbo(71, "mem.write", {"handle": h, "off": 0, "bytes": handler})
+    pedir_verbo(72, "mem.write", {"handle": h, "off": FLAG_OFF, "bytes": b"\x00"})
+
+    ok, r = pedir_verbo(73, "irq.install", {"handle": h, "interrupt": INT})
+    if not ok:
+        print(f"  no se pudo instalar el handler: {r}")
+        return 1
+
+    ok, d = pedir_verbo(74, "describe", {"what": ["handlers"]})
+    # El de esta prueba, que puede no ser el unico instalado.
+    hh = next(x for x in d["handlers"] if x["interrupt"] == INT)
+    antes = hh["served"]
+
+    # El codigo del agente: disparar y esperar la bandera. Sin el `ret` del
+    # disparo, porque despues viene la espera — y el largo del `ret` no es el
+    # mismo en las dos arquitecturas, asi que se pide sin el en vez de recortarlo.
+    disparo = emitir_escrituras(arch, hh["trigger"], con_ret=False)
+    if arch == "x86_64":
+        espera = b"\x48\xb8" + flag.to_bytes(8, "little")   # mov rax, flag
+        espera += b"\x80\x38\x00"                          # cmp byte [rax], 0
+        espera += b"\x74\xfb"                               # je -5
+        espera += b"\xc3"                                    # ret
+    else:
+        espera = mov_reg_imm64(0, flag)
+        espera += (0x39400001).to_bytes(4, "little")          # ldrb w1, [x0]
+        espera += (0x34FFFFC1).to_bytes(4, "little")          # cbz w1, -8
+        espera += (0xD65F03C0).to_bytes(4, "little")          # ret
+
+    ok, c2 = pedir_verbo(75, "mem.claim", {"bytes": 4096, "align": 4096})
+    h2 = c2["handle"]
+    pedir_verbo(76, "mem.write", {"handle": h2, "bytes": disparo + espera})
+
+    print("  el agente dispara su interrupcion y espera a su propio handler...")
+    try:
+        ok, r = pedir_verbo(77, "exec", {"handle": h2})
+    except TimeoutError:
+        print("  FALLA: el exec no volvio — el handler no corrio durante el exec")
+        return 1
+
+    if not ok or r.get("faulted"):
+        fallas.append(f"el exec fallo: {r}")
+    else:
+        print("  volvio: el handler corrio mientras el exec seguia")
+
+    ok, d = pedir_verbo(78, "describe", {"what": ["handlers"]})
+    despues = -1
+    if ok:
+        for x in d.get("handlers", []):
+            if x["interrupt"] == INT:
+                despues = x["served"]
+    if despues <= antes:
+        fallas.append(f"la cuenta no subio: {antes} -> {despues}")
+
+    print()
+    if fallas:
+        for f in fallas:
+            print(f"  FALLA: {f}")
+        return 1
+    print("  handler durante exec: ok")
     return 0
 
 
@@ -715,6 +826,8 @@ def main():
                     help="cuantos nucleos darle a QEMU")
     ap.add_argument("--exec", action="store_true", dest="ejecutar",
                     help="sube codigo maquina de verdad y lo corre")
+    ap.add_argument("--durante", action="store_true",
+                    help="el handler del agente corre durante un exec largo")
     ap.add_argument("--handler", action="store_true",
                     help="instala un handler de interrupcion del agente y lo hace sonar")
     ap.add_argument("--timbre", action="store_true",
@@ -782,6 +895,9 @@ def main():
         if args.handler:
             print()
             rc |= prueba_de_handler(proc, args.timeout, args.arch)
+        if args.durante:
+            print()
+            rc |= prueba_durante_exec(proc, args.timeout, args.arch)
         return rc
     finally:
         proc.kill()

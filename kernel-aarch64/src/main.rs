@@ -85,6 +85,16 @@ impl Platform for AArch64 {
         irq::install_agente(hw, interrupt, slot, raw)
     }
 
+    fn set_interrupts(&mut self, on: bool) {
+        unsafe {
+            if on {
+                core::arch::asm!("msr daifclr, #2", options(nomem, nostack));
+            } else {
+                core::arch::asm!("msr daifset, #2", options(nomem, nostack));
+            }
+        }
+    }
+
     fn sleep(&mut self) {
         irq::sleep();
     }

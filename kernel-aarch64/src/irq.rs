@@ -133,48 +133,70 @@ pub unsafe fn install(hw: &Hardware) -> Result<u8, &'static str> {
     Ok(n as u8)
 }
 
-/// Duerme hasta que suene algun timbre, y despues vacia lo que llego.
+/// Atiende todos los timbres que haya sonado.
 ///
-/// Las interrupciones quedan enmascaradas todo el tiempo: `wfi` despierta con
-/// una pendiente igual, y asi nadie corre en medio del bucle.
-pub fn sleep() {
-    unsafe {
-        core::arch::asm!("wfi", options(nomem, nostack));
-
-        if GICC == 0 {
-            return;
+/// Lo llama el handler de la tabla de vectores. Se llama tambien desde `sleep`
+/// para el caso en que el timbre llego con la atencion cerrada: ahi el hardware
+/// no salta a la tabla, la interrupcion queda pendiente, y hay que ir a buscarla.
+///
+/// # Safety
+///
+/// Solo desde el nucleo que atiende, y sin reentrar.
+pub unsafe fn atender() {
+    if GICC == 0 {
+        return;
+    }
+    // Preguntar que sono. Leer el registro ya es reconocer la interrupcion.
+    loop {
+        let cual = leer(GICC, GICC_IAR);
+        let id = cual & 0x3FF;
+        if id == ESPURIA {
+            break;
         }
-
-        // Preguntar que sono. Leer el registro ya es reconocer la interrupcion.
-        loop {
-            let cual = leer(GICC, GICC_IAR);
-            let id = cual & 0x3FF;
-            if id == ESPURIA {
-                break;
-            }
-            if id == SGI_BUZON {
+        if id == SGI_BUZON {
                 // Solo despierta. El trabajo lo hace el bucle.
-                kernel_core::channel::rang();
-            } else if id == CABLE {
+            kernel_core::channel::rang();
+        } else if id == CABLE {
                 // Vaciar la cola del UART: si quedara un byte, el timbre
                 // volveria a sonar de inmediato.
-                crate::uart::clear_rx_interrupt();
-                while let Some(b) = crate::uart::read_byte() {
-                    kernel_core::serial::push(b);
-                }
-            } else if let Some(slot) = kernel_core::handlers::slot_of(id) {
+            crate::uart::clear_rx_interrupt();
+            while let Some(b) = crate::uart::read_byte() {
+                kernel_core::serial::push(b);
+            }
+        } else if let Some(slot) = kernel_core::handlers::slot_of(id) {
                 // Un aparato del agente. El prologo y el epilogo que D9 dice
                 // que pone el kernel son, aca, este mismo camino: los registros
                 // ya estan a salvo porque esto es una llamada normal.
-                if let Some(h) = kernel_core::handlers::at(slot) {
-                    kernel_core::handlers::served(slot);
-                    let f: extern "C" fn() = core::mem::transmute(h.entry);
-                    f();
-                }
+            if let Some(h) = kernel_core::handlers::at(slot) {
+                kernel_core::handlers::served(slot);
+                let f: extern "C" fn() = core::mem::transmute(h.entry);
+                f();
             }
-            // "Ya atendi", con el mismo numero que vino.
-            escribir(GICC, GICC_EOIR, cual);
         }
+        // "Ya atendi", con el mismo numero que vino.
+        escribir(GICC, GICC_EOIR, cual);
+    }
+}
+
+/// Duerme hasta que suene algun timbre.
+///
+/// El bucle corre con la atencion cerrada, para que no se pierda un despertador
+/// entre "no hay nada" y "me duermo". `wfi` despierta con una interrupcion
+/// pendiente **aunque este cerrada**, y eso es lo que hace que ese hueco no
+/// exista.
+///
+/// Al volver se abre y se cierra la atencion: en esa rendija el hardware salta a
+/// la tabla y atiende lo que estaba esperando. Si no llegara a saltar, la
+/// interrupcion sigue pendiente y el proximo `wfi` vuelve enseguida — asi que el
+/// avance esta garantizado igual.
+pub fn sleep() {
+    unsafe {
+        core::arch::asm!(
+            "wfi",
+            "msr daifclr, #2",
+            "msr daifset, #2",
+            options(nomem, nostack)
+        );
     }
 }
 

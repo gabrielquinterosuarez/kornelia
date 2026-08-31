@@ -36,17 +36,28 @@ fn selector_tss(ranura: usize) -> u16 {
 /// Cual de las siete pilas de la IST usan las excepciones. La 1.
 pub const IST_FAULTS: u8 = 1;
 
+/// Y cual usan los timbres de aparato. La 2, aparte de la de los faults.
+///
+/// Aparte por dos razones. Una: durante un `exec` la pila en uso es la del
+/// agente, y si la rompio el timbre se estrellaria al entrar. Dos: compartirla
+/// con la de los faults seria que un timbre que llega mientras se atiende un
+/// fault le pise el marco.
+pub const IST_IRQ: u8 = 2;
+
+/// Cuantas pilas de la IST se usan.
+const PILAS_IST: usize = 2;
+
 /// 16 KiB. Solo tiene que aguantar el marco de excepcion y lo que use el
 /// handler, que trabaja sobre buffers estaticos y no sobre la pila.
 const TAM_PILA: usize = 16 * 1024;
 
 #[repr(C, align(16))]
-struct Pilas([[u8; TAM_PILA]; crate::percpu::RANURAS]);
+struct Pilas([[u8; TAM_PILA]; crate::percpu::RANURAS * PILAS_IST]);
 
 /// Una pila de excepcion por nucleo. Compartirlas seria que dos nucleos que
 /// fallan a la vez se pisen el marco de excepcion — corrupcion adentro del
 /// mecanismo que existe para que nada se corrompa en silencio.
-static mut PILAS_EXCEPCION: Pilas = Pilas([[0; TAM_PILA]; crate::percpu::RANURAS]);
+static mut PILAS_EXCEPCION: Pilas = Pilas([[0; TAM_PILA]; crate::percpu::RANURAS * PILAS_IST]);
 
 /// El TSS de 64 bits. De todo lo que tiene, lo unico que se usa es `ist[0]`.
 ///
@@ -110,9 +121,12 @@ pub unsafe fn install(ranura: usize) -> Result<(), &'static str> {
 
     let tss = &mut (*core::ptr::addr_of_mut!(TSS_POR_NUCLEO))[ranura];
 
-    // La pila crece hacia abajo, asi que la IST apunta al final de la suya.
+    // Dos pilas por nucleo, y la IST apunta al final de cada una porque crecen
+    // hacia abajo.
     let pilas = core::ptr::addr_of!(PILAS_EXCEPCION) as u64;
-    tss.ist[(IST_FAULTS - 1) as usize] = pilas + ((ranura + 1) * TAM_PILA) as u64;
+    let mia = ranura * PILAS_IST;
+    tss.ist[(IST_FAULTS - 1) as usize] = pilas + ((mia + 1) * TAM_PILA) as u64;
+    tss.ist[(IST_IRQ - 1) as usize] = pilas + ((mia + 2) * TAM_PILA) as u64;
 
     let gdt = &mut *core::ptr::addr_of_mut!(GDT);
     gdt.0[0] = 0;

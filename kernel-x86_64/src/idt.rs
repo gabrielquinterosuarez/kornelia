@@ -350,9 +350,11 @@ pub unsafe fn set_gate(vector: usize, handler: u64) -> Result<(), &'static str> 
     idt.0[vector] = Entrada {
         off_baja: handler as u16,
         selector: crate::gdt::CODIGO,
-        // Sin IST: un timbre de aparato no es un fault, y llega con la pila del
-        // codigo interrumpido en buen estado.
-        ist: 0,
+        // Con pila propia: durante un `exec` la pila en uso es la del agente, y
+        // si la rompio el timbre se estrellaria justo al entrar (D29: en este
+        // nucleo la interrupcion tiene prioridad, asi que tiene que poder
+        // entrar siempre).
+        ist: crate::gdt::IST_IRQ,
         tipo: 0x8E,
         off_media: (handler >> 16) as u16,
         off_alta: (handler >> 32) as u32,

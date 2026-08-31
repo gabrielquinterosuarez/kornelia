@@ -3,7 +3,7 @@
 Kernel experimental mínimo que supone un **agente de IA como usuario** y quita
 todas las capas posibles entre ese agente y el hardware.
 
-El diseño completo está en [`docs/DISENO.md`](docs/DISENO.md) — 28 decisiones
+El diseño completo está en [`docs/DISENO.md`](docs/DISENO.md) — 29 decisiones
 tomadas, cada una con su justificación. Lo ya descartado, con sus motivos, en
 [`docs/DESCARTADO.md`](docs/DESCARTADO.md).
 

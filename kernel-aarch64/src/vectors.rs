@@ -48,10 +48,12 @@ core::arch::global_asm!(
     r#"
 .section .text
 
-// Cada entrada de la tabla son 128 bytes. Con saltar al handler comun alcanza:
-// de que se trata lo dice ESR_EL1, no la posicion.
-.macro ENTRADA
-    b vec_common
+// Cada entrada de la tabla son 128 bytes. Alcanza con saltar a donde
+// corresponda: de que se trata una excepcion sincronica lo dice ESR_EL1, no la
+// posicion — pero un IRQ **si** se distingue por la posicion, y tiene que ir a
+// otro lado: para el handler de faults un IRQ seria un error sin causa.
+.macro ENTRADA destino
+    b \destino
     .balign 0x80
 .endm
 
@@ -59,22 +61,22 @@ core::arch::global_asm!(
 .balign 2048
 .globl VECTORES
 VECTORES:
-    ENTRADA   // mismo EL, SP0:  sincronica
-    ENTRADA   //                 IRQ
-    ENTRADA   //                 FIQ
-    ENTRADA   //                 SError
-    ENTRADA   // mismo EL, SPx:  sincronica   <- por aca entra lo nuestro
-    ENTRADA   //                 IRQ
-    ENTRADA   //                 FIQ
-    ENTRADA   //                 SError
-    ENTRADA   // EL mas bajo, 64 bits: sincronica
-    ENTRADA   //                       IRQ
-    ENTRADA   //                       FIQ
-    ENTRADA   //                       SError
-    ENTRADA   // EL mas bajo, 32 bits: sincronica
-    ENTRADA   //                       IRQ
-    ENTRADA   //                       FIQ
-    ENTRADA   //                       SError
+    ENTRADA vec_common   // mismo EL, SP0:  sincronica
+    ENTRADA vec_irq      //                 IRQ  <- durante un exec entra aca
+    ENTRADA vec_common   //                 FIQ
+    ENTRADA vec_common   //                 SError
+    ENTRADA vec_common   // mismo EL, SPx:  sincronica
+    ENTRADA vec_irq      //                 IRQ  <- y aca si corre el kernel
+    ENTRADA vec_common   //                 FIQ
+    ENTRADA vec_common   //                 SError
+    ENTRADA vec_common   // EL mas bajo, 64 bits: sincronica
+    ENTRADA vec_irq      //                       IRQ
+    ENTRADA vec_common   //                       FIQ
+    ENTRADA vec_common   //                       SError
+    ENTRADA vec_common   // EL mas bajo, 32 bits: sincronica
+    ENTRADA vec_irq      //                       IRQ
+    ENTRADA vec_common   //                       FIQ
+    ENTRADA vec_common   //                       SError
 
 vec_common:
     // 34 huecos de 8 bytes: 31 registros, ELR, SPSR y uno de relleno para que
@@ -129,8 +131,49 @@ vec_common:
 
     add sp, sp, #(34 * 8)
     eret
+
+// Lo que corre cuando suena un timbre. No es un fault: no hay causa que leer ni
+// registros que informar, solo hay que atender y volver.
+//
+// Se salva lo que la convencion de llamadas permite pisar —x0 a x18 y x30, que
+// es donde `bl` deja la direccion de retorno—. Los demas los salva Rust.
+vec_irq:
+    sub sp, sp, #(20 * 8)
+    stp x0,  x1,  [sp, #(0 * 8)]
+    stp x2,  x3,  [sp, #(2 * 8)]
+    stp x4,  x5,  [sp, #(4 * 8)]
+    stp x6,  x7,  [sp, #(6 * 8)]
+    stp x8,  x9,  [sp, #(8 * 8)]
+    stp x10, x11, [sp, #(10 * 8)]
+    stp x12, x13, [sp, #(12 * 8)]
+    stp x14, x15, [sp, #(14 * 8)]
+    stp x16, x17, [sp, #(16 * 8)]
+    stp x18, x30, [sp, #(18 * 8)]
+
+    bl irq_rust
+
+    ldp x0,  x1,  [sp, #(0 * 8)]
+    ldp x2,  x3,  [sp, #(2 * 8)]
+    ldp x4,  x5,  [sp, #(4 * 8)]
+    ldp x6,  x7,  [sp, #(6 * 8)]
+    ldp x8,  x9,  [sp, #(8 * 8)]
+    ldp x10, x11, [sp, #(10 * 8)]
+    ldp x12, x13, [sp, #(12 * 8)]
+    ldp x14, x15, [sp, #(14 * 8)]
+    ldp x16, x17, [sp, #(16 * 8)]
+    ldp x18, x30, [sp, #(18 * 8)]
+    add sp, sp, #(20 * 8)
+    eret
 "#
 );
+
+/// Lo que llama `vec_irq`. El reparto vive en `irq`.
+#[no_mangle]
+extern "C" fn irq_rust() {
+    // SAFETY: corre con los timbres cerrados por el hardware, asi que nadie mas
+    // esta adentro del reparto.
+    unsafe { crate::irq::atender() }
+}
 
 extern "C" {
     static VECTORES: u8;

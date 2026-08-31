@@ -86,6 +86,16 @@ impl Platform for X86_64 {
         irq::install_agente(hw, interrupt, slot, raw)
     }
 
+    fn set_interrupts(&mut self, on: bool) {
+        unsafe {
+            if on {
+                core::arch::asm!("sti", options(nomem, nostack));
+            } else {
+                core::arch::asm!("cli", options(nomem, nostack));
+            }
+        }
+    }
+
     fn sleep(&mut self) {
         irq::sleep();
     }

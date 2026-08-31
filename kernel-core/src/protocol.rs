@@ -885,7 +885,13 @@ fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
     // SAFETY: la direccion esta dentro de un reclamo vigente, y el identity map
     // de D12 cubre toda la memoria de la maquina. Lo que haya ahi puede ser
     // cualquier cosa — de eso se trata.
+    // En el nucleo del kernel la interrupcion tiene prioridad sobre el codigo
+    // del agente (D29): se prenden los timbres mientras corre, asi un `exec`
+    // largo no deja al cordon sin atender. El bucle vuelve a apagarlos al salir
+    // porque su propio diseno depende de eso.
+    p.set_interrupts(true);
     let salida = unsafe { p.exec(entrada, (c.start, c.bytes)) };
+    p.set_interrupts(false);
 
     let out = unsafe { &mut *core::ptr::addr_of_mut!(OUTBOX) };
     let mut w = Writer::new(out);

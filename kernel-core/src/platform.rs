@@ -150,6 +150,17 @@ pub trait Platform {
         raw: bool,
     ) -> Result<Doorbell, handlers::Error>;
 
+    /// Prende o apaga la atención a los timbres en **este** núcleo.
+    ///
+    /// Existe para **establecer** el estado en vez de heredarlo del firmware.
+    /// El bucle del protocolo corre con los timbres apagados —para que no se
+    /// pierda un despertador entre "no hay nada" y "me duermo"— y eso tiene que
+    /// ser un hecho puesto, no una suposición sobre lo que dejó UEFI.
+    ///
+    /// Y se prenden durante un `exec`: en el núcleo del kernel la interrupción
+    /// tiene prioridad sobre el código del agente (D29).
+    fn set_interrupts(&mut self, on: bool);
+
     /// Duerme este núcleo hasta que suene algún timbre.
     ///
     /// Es lo que convierte un núcleo quemado en un núcleo reservado: mientras

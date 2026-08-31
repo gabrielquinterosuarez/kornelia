@@ -76,6 +76,11 @@ pub fn main<P: Platform>(p: &mut P) -> ! {
     }
 
     // Desde acá manda el protocolo: lo que sale es binario (D6).
+    // El bucle corre con los timbres apagados. Se **establece** acá en vez de
+    // heredar lo que dejó el firmware: el diseño del bucle depende de esto y una
+    // dependencia heredada es una suposición sin dueño.
+    p.set_interrupts(false);
+
     protocol::serve(p, &machine, &hw, con_timbre)
 }
 

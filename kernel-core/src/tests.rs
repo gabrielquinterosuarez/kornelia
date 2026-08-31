@@ -86,6 +86,8 @@ impl Platform for Fake {
         Err(crate::handlers::Error::NoSuchInterrupt)
     }
 
+    fn set_interrupts(&mut self, _on: bool) {}
+
     fn sleep(&mut self) {}
 
     fn uart_address(&self) -> Option<u64> {
