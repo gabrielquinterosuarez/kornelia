@@ -159,8 +159,10 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
 2. **La dirección del PL011 sigue horneada** en `kernel-aarch64/src/uart.rs` (`0x0900_0000`, la
    placa `virt` de QEMU). La fuente legítima es el device tree —o la tabla SPCR de ACPI—, que
    todavía no leemos. Mientras siga así, el cordón umbilical solo funciona en esa placa.
-3. **La Configuration Table no se captura.** Es donde viven los punteros a ACPI y al device
-   tree. Sin eso no hay núcleos, ni PCIe, ni interrupciones: es lo próximo de `describe`.
+3. **Las tablas de ACPI se encuentran pero no se leen.** Se captura el puntero al RSDP y se
+   verifica, pero nadie recorre la MADT (dónde están los núcleos y el controlador de
+   interrupciones) ni la MCFG (dónde está el espacio de configuración de PCIe). Sin eso,
+   `core.claim`, `irq.install` y el descubrimiento de dispositivos no tienen de dónde salir.
 4. **~~Seguimos sobre las tablas de páginas del firmware.~~ RESUELTO (D12).** El kernel arma
    las suyas y las carga: identity map con páginas de 1 GiB, tablas en arreglos estáticos —
    o sea dentro de la imagen, en memoria `Kind::Kernel`. El registro raíz (`CR3` / `TTBR0_EL1`)
@@ -170,8 +172,16 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
    Con esto quedan cerradas las dos cosas nuestras que vivían en memoria reclamable, que era
    lo que bloqueaba `mem.claim`.
 
-5. **Los atributos de cacheabilidad se descartan.** UEFI los informa por región y D12 los va a
-   necesitar para mapear MMIO no-cacheable. Se normalizan cuando haga falta.
+5. **Los atributos de cacheabilidad que informa UEFI se descartan.** D12 anda igual porque la
+   cacheabilidad se deduce de la *clase* de cada región, pero UEFI informa además atributos por
+   región (`UC`, `WC`, `WT`, `WB`) que son más precisos que esa deducción. Mientras el grano del
+   mapeo sea 1 GiB casi no cambia nada; cuando haya que mapear MMIO fino con `mem.claim`, sí.
+
+6. **No hay manejo de excepciones.** No hay IDT en x86 ni tabla de vectores en aarch64: hoy un
+   page fault escala a triple fault y la máquina se reinicia sin decir una palabra. **P5 —"los
+   faults son datos, no muerte"— es uno de los seis principios y no está implementado en
+   absoluto.** `exec` sin esto es inservible: el sentido de `exec` es que el agente suba código
+   que puede estar mal.
 
 ---
 
