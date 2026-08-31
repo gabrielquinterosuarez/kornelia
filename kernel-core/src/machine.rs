@@ -52,6 +52,30 @@ impl Machine {
         }
     }
 
+    /// La region que contiene esa direccion fisica, si alguna la contiene.
+    pub fn region_containing(&self, addr: u64) -> Option<&Region> {
+        self.regions.iter().find(|r| addr >= r.start && addr < r.end())
+    }
+
+    /// Comprueba que un rango entero caiga en memoria que nunca se va a
+    /// entregar.
+    ///
+    /// Existe para no dar por sentado donde quedo la pila (ver `stack`). Que el
+    /// razonamiento cierre en el papel no alcanza: el que reparte las clases es
+    /// el firmware, y hay firmwares raros.
+    pub fn is_ours(&self, start: u64, len: u64) -> bool {
+        let end = start.saturating_add(len);
+        let mut addr = start;
+        while addr < end {
+            match self.region_containing(addr) {
+                Some(r) if r.kind == Kind::Kernel => addr = r.end(),
+                // Ni una region ajena, ni un hueco sin mapear.
+                _ => return false,
+            }
+        }
+        true
+    }
+
     /// Total de bytes de RAM utilizable.
     pub fn free_bytes(&self) -> u64 {
         let mut total = 0u64;

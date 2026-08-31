@@ -147,17 +147,28 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
 
 ### Deudas anotadas
 
-1. **La pila del kernel está dentro de memoria marcada como libre.** UEFI clasifica la pila
-   que nos dio como `BootServicesData`, que tras `ExitBootServices` pasa a ser RAM libre — y
-   así se informa, porque es lo que la máquina dice (P4). Hoy es inofensivo porque el mapa solo
-   se imprime, pero **`mem.claim` no puede entregar esa región hasta que el kernel se mude a
-   una pila propia.** Es corrupción silenciosa si se olvida.
+1. **~~La pila del kernel vive en memoria reclamable.~~ RESUELTO.** El kernel se muda a una
+   pila propia (`kernel-core/src/stack.rs`) apenas deja de necesitar al firmware. Al ser un
+   arreglo estático vive dentro de la imagen, que UEFI cargó como `LoaderData` y el mapa
+   informa como `Kind::Kernel` — una clase que no se entrega nunca. No se da por sentado: el
+   arranque comprueba contra el mapa real que la pila haya caído ahí, y lo dice por el cordón.
+
+   **Pero el problema de fondo no está cerrado:** la pila era *una* de las cosas nuestras que
+   vivían en memoria que `ExitBootServices` convirtió en libre. Sigue estando la siguiente.
 2. **La dirección del PL011 sigue horneada** en `kernel-aarch64/src/uart.rs` (`0x0900_0000`, la
    placa `virt` de QEMU). La fuente legítima es el device tree —o la tabla SPCR de ACPI—, que
    todavía no leemos. Mientras siga así, el cordón umbilical solo funciona en esa placa.
 3. **La Configuration Table no se captura.** Es donde viven los punteros a ACPI y al device
    tree. Sin eso no hay núcleos, ni PCIe, ni interrupciones: es lo próximo de `describe`.
-4. **Los atributos de cacheabilidad se descartan.** UEFI los informa por región y D12 los va a
+4. **Seguimos corriendo sobre las tablas de páginas del firmware.** UEFI las dejó armadas y
+   las heredamos; nunca armamos las nuestras. Esas tablas viven en memoria del firmware que
+   ahora se informa como libre, así que es exactamente el mismo problema que tenía la pila,
+   con dos agravantes: no se puede "mudar" con un `mov`, y si el agente las pisa no falla al
+   escribir sino en la próxima traducción de dirección, en cualquier parte. **Esto es D12** —
+   identity map de toda la RAM con páginas de 1 GiB, armado por nosotros — y es requisito de
+   `mem.claim`, no algo para después.
+
+5. **Los atributos de cacheabilidad se descartan.** UEFI los informa por región y D12 los va a
    necesitar para mapear MMIO no-cacheable. Se normalizan cuando haga falta.
 
 ---

@@ -51,7 +51,8 @@ else
         salida=$(timeout 240 ./scripts/client.py --arch "$arq" --what memory,tables 2>&1 || true)
 
         # Lo que tiene que haber dicho en el banner de texto.
-        for esperado in "arquitectura: $arq" "memoria:" "tablas:" "-- CBOR --"; do
+        for esperado in "arquitectura: $arq" "memoria:" "tablas:" \
+                        "en memoria del kernel" "-- CBOR --"; do
             grep -qFe "$esperado" <<<"$salida" || mal "$arq no dijo: $esperado"
         done
 

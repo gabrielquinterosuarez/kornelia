@@ -93,9 +93,10 @@ de commitear; CI corre exactamente ese script.
    importa**: ahí el agente escribe código máquina, lo corre, y recibe el fault
    como valor de retorno en vez de un SIGSEGV.
 
-Deudas anotadas en `docs/DISENO.md` §7. La grave: **la pila del kernel vive en
-memoria que hoy se informa como libre**, así que `mem.claim` no puede entregarla
-hasta que el kernel se mude a una pila propia.
+Deudas anotadas en `docs/DISENO.md` §7. La que bloquea `mem.claim`: **seguimos
+sobre las tablas de páginas del firmware**, que viven en memoria hoy informada
+como libre. Es D12 (identity map propio) y es requisito, no algo para después.
+La pila ya se resolvió: el kernel se muda a una propia y lo verifica.
 
 ## Cómo correrlo
 

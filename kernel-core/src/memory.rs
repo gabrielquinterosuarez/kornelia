@@ -34,7 +34,10 @@ impl Region {
 /// Que se puede hacer con una region.
 ///
 /// No es la taxonomia del firmware: es la que necesita `mem.claim`.
+// Debug solo al testear: en el kernel de verdad no hay a quien mostrarselo, y
+// el formateo derivado es codigo que se lleva puesto bytes al pedo.
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(test, derive(Debug))]
 pub enum Kind {
     /// RAM utilizable. Es lo unico que `mem.claim` puede entregar como memoria.
     Free,

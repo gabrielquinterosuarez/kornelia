@@ -400,3 +400,63 @@ fn el_texto_invalido_en_utf8_se_rechaza() {
     let mut r = Reader::new(&msg);
     assert_eq!(r.text(), None);
 }
+
+// ---------------------------------------------------------------------------
+// De quien es cada direccion
+// ---------------------------------------------------------------------------
+
+/// Dos regiones del kernel PEGADAS, una libre en el medio del mapa, y un hueco
+/// sin mapear a partir de 0x5000.
+static MAPA: [Region; 4] = [
+    Region { start: 0x1000, bytes: 0x1000, kind: Kind::Kernel },
+    Region { start: 0x2000, bytes: 0x1000, kind: Kind::Kernel },
+    Region { start: 0x3000, bytes: 0x1000, kind: Kind::Free },
+    Region { start: 0x4000, bytes: 0x1000, kind: Kind::Firmware },
+];
+
+fn maquina() -> Machine {
+    Machine { regions: &MAPA, tables: Tables::default(), failure: None }
+}
+
+#[test]
+fn se_encuentra_la_region_de_una_direccion() {
+    let m = maquina();
+    assert_eq!(m.region_containing(0x1000).map(|r| r.kind), Some(Kind::Kernel));
+    assert_eq!(m.region_containing(0x1fff).map(|r| r.kind), Some(Kind::Kernel));
+    assert_eq!(m.region_containing(0x3500).map(|r| r.kind), Some(Kind::Free));
+    // El final de una region ya no le pertenece.
+    assert!(m.region_containing(0x5000).is_none());
+}
+
+#[test]
+fn lo_que_esta_entero_en_memoria_del_kernel_es_nuestro() {
+    let m = maquina();
+    assert!(m.is_ours(0x1000, 0x1000));
+    // A caballo de dos regiones del kernel pegadas: sigue siendo nuestro.
+    assert!(m.is_ours(0x1800, 0x1000));
+    assert!(m.is_ours(0x1000, 0x2000));
+}
+
+/// Este es el caso que motiva todo: una pila que empieza en memoria nuestra
+/// pero se pasa a memoria que `mem.claim` podria entregar.
+#[test]
+fn lo_que_se_pasa_a_memoria_reclamable_no_es_nuestro() {
+    let m = maquina();
+    assert!(!m.is_ours(0x2800, 0x1000), "se metio en la region libre");
+    assert!(!m.is_ours(0x3000, 0x100), "arranca en memoria libre");
+    assert!(!m.is_ours(0x4000, 0x100), "arranca en memoria del firmware");
+}
+
+#[test]
+fn un_hueco_sin_mapear_tampoco_es_nuestro() {
+    let m = maquina();
+    assert!(!m.is_ours(0x9000, 0x100));
+    // Empieza bien y se cae por un hueco.
+    assert!(!m.is_ours(0x4f00, 0x1000));
+}
+
+#[test]
+fn sin_mapa_no_hay_nada_nuestro() {
+    // Una maquina muda no puede afirmar que algo sea suyo.
+    assert!(!Machine::mute("sin datos").is_ours(0x1000, 0x10));
+}

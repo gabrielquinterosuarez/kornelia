@@ -15,6 +15,7 @@ pub mod machine;
 pub mod memory;
 pub mod platform;
 pub mod protocol;
+pub mod stack;
 pub mod tables;
 
 #[cfg(test)]
@@ -77,7 +78,36 @@ fn saludar<P: Platform>(p: &mut P, m: &Machine) {
         }
     }
 
+    verificar_la_pila(&mut u, m);
+
     u.line("");
     u.line("Sin procesos. Sin archivos. Sin shell. Sin usuarios.");
     u.line(protocol::MARCA);
+}
+
+/// Comprueba contra el mapa real que la pila esté en memoria del kernel.
+///
+/// El razonamiento dice que tiene que estarlo: la pila es un arreglo estático,
+/// y por lo tanto vive dentro de la imagen que UEFI cargó como `LoaderData`.
+/// Pero el que reparte las clases es el firmware, y esto se comprueba en vez de
+/// suponerse — si algún día no se cumple, el síntoma sería que el agente
+/// reclama memoria legítimamente libre y le pisa la pila al kernel, que es la
+/// clase de falla que aparece lejos de su causa.
+fn verificar_la_pila<P: Platform>(u: &mut Umbilical<'_, P>, m: &Machine) {
+    use core::fmt::Write;
+
+    let base = stack::base();
+
+    if m.regions.is_empty() {
+        // Sin mapa no hay contra qué comprobar. Se dice, en vez de dar por
+        // bueno lo que no se miró.
+        let _ = write!(u, "pila: {base:#x}, sin mapa para verificarla\r\n");
+    } else if m.is_ours(base, stack::size()) {
+        let _ = write!(u, "pila: {base:#x}, en memoria del kernel\r\n");
+    } else {
+        // No es fatal todavía porque nadie puede reclamar memoria: `mem.claim`
+        // no existe. Cuando exista, esto sí lo es.
+        let _ = write!(u, "pila: {base:#x} FUERA DE LA MEMORIA DEL KERNEL\r\n");
+        u.line("  mem.claim podria entregar esta memoria. NO habilitarlo asi.");
+    }
 }
