@@ -252,20 +252,9 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
 
 1. **Dónde se publica el código.** Hay repositorio git local desde el Hito 1 (rama `main`).
    El alojamiento remoto sigue sin definir: repo aparte, no en empujoneducativo.
-2. **Por dónde seguir: cuál de los tres verbos que faltan.** Los tres son grandes y ninguno
-   bloquea a los otros.
-
-   - **`core.claim`** — arrancar los otros núcleos. Ya sabemos cuántos hay y con qué
-     identificador se los nombra (la MADT lo dice). En aarch64 es una llamada PSCI al
-     firmware, que es corto; en x86_64 hay que mandar INIT/SIPI por el APIC, que es más largo.
-     No se parecen en nada.
-   - **`irq.install`** — que el agente ponga sus propios handlers (D9). Hace falta programar el
-     controlador de interrupciones, y falta leer de la MADT las rutas de interrupción, que hoy
-     no se sacan.
-   - **`dma.allow`** — el IOMMU. **Es el más grande de todo el proyecto** y el más específico
-     de cada fabricante: VT-d en Intel, SMMU en ARM, sin nada en común. Y D8 lo pone encendido
-     por defecto, así que no es opcional. Además es el que más gana con silicio real: el IOMMU
-     emulado de QEMU no es el de verdad.
+2. **Por dónde seguir.** Queda un solo verbo, `dma.allow` —el IOMMU, el más grande del proyecto
+   y el que más gana con silicio real—, y dos deudas grandes: terminar D27 (la transición de
+   privilegio; la mitad de abajo ya está) y darle trabajo a los núcleos reclamados.
 
 3. **Si `exec` debe recibir un estado inicial de registros.** La sección 4 lo especifica
    (`exec(core, handle, off, regs)`) y hoy no lo hace: el código recibe solo su propia

@@ -101,15 +101,14 @@ trampolín de 16→32→64 bits en x86_64.
 
 Falta uno: `dma.allow`, el IOMMU.
 
-El portón es `./scripts/check.sh`: frontera + 69 tests + compila las dos + las
+El portón es `./scripts/check.sh`: frontera + 87 tests + compila las dos + las
 bootea en QEMU y les habla el protocolo con `scripts/client.py`. Corrélo antes
 de commitear; CI corre exactamente ese script.
 
 ## Lo que sigue
 
-**La decisión está abierta y es de Gabriel** — está planteada con sus
-argumentos en `docs/DISENO.md` §8. Los tres verbos que faltan son grandes y
-ninguno bloquea a los otros:
+Queda **un solo verbo** sin hacer, más dos deudas grandes. Las preguntas
+abiertas están en `docs/DISENO.md` §8.
 
 1. **Terminar D27: la transición de privilegio.** La mitad de abajo ya está —
    `mem.claim {user: true}` entrega memoria del agente y el hardware lo hace

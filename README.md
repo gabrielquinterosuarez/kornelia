@@ -184,7 +184,7 @@ grep -ao '[a-z0-9-]*@[0-9a-f]*' virt.dtb | sort -u
 | `kernel-core/src/cores.rs` | Los núcleos que el agente tiene reclamados (D13). |
 | `kernel-core/src/paging.rs` | El **plan** de mapeo: qué va cacheable y qué no (D12). |
 | `kernel-core/src/stack.rs` | La pila propia del kernel, verificada contra el mapa real. |
-| `kernel-core/src/tests.rs` | 69 tests que corren en la máquina de desarrollo, sin bootear nada. |
+| `kernel-core/src/tests.rs` | 87 tests que corren en la máquina de desarrollo, sin bootear nada. |
 | `boot-uefi/` | El entorno de arranque UEFI, compartido por las dos arquitecturas. Sin `asm!`. |
 | `kernel-x86_64/` | Arranque UEFI + UART 16550 en puertos de E/S. |
 | `kernel-aarch64/` | Arranque UEFI + UART PL011 en MMIO. |
