@@ -113,8 +113,11 @@ abiertas están en `docs/DISENO.md` §8.
 1. **Terminar D27: la transición de privilegio.** La mitad de abajo ya está —
    `mem.claim {user: true}` entrega memoria del agente y el hardware lo hace
    cumplir. Falta entrar a anillo 3 / EL0 en `exec supervised`, y la ventanilla
-   (`int 0x80` / `svc`) para que el agente pueda volver: desde el nivel bajo un
-   `ret` común no vuelve.
+   (`int` / `svc`) para volver: desde el nivel bajo un `ret` común no vuelve.
+   **La mecánica está resuelta y escrita** en la deuda 12 de `docs/DISENO.md`
+   §7 — selectores, el marco del `iretq`, los dos lugares donde el desvío de
+   faults hay que corregir, y las dos comprobaciones que el verbo debe hacer.
+   Leela antes de empezar: ahorra volver a derivarla.
 2. **Darle trabajo a los núcleos reclamados.** Hoy arrancan y quedan esperando,
    pero `exec` corre siempre en el que atiende el protocolo. Falta un buzón por
    núcleo y que `exec` acepte a cuál mandárselo (sección 4: `exec(core, ...)`).

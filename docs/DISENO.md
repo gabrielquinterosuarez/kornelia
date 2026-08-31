@@ -236,6 +236,46 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
    región (`UC`, `WC`, `WT`, `WB`) que son más precisos que esa deducción. Mientras el grano del
    mapeo sea 1 GiB casi no cambia nada; cuando haya que mapear MMIO fino con `mem.claim`, sí.
 
+12. **Falta la transición de privilegio de D27.** La mitad de abajo está: `mem.claim {user: true}`
+    entrega memoria del agente y el hardware lo hace cumplir. Falta que `exec` entre al nivel sin
+    privilegio. **La mecánica ya está resuelta en el papel** — se escribe acá para no volver a
+    derivarla:
+
+    **x86_64.** La GDT necesita dos descriptores más, de anillo 3: código (tipo `0xFA` en vez de
+    `0x9A`) y datos (`0xF2` en vez de `0x92`). Hoy la tabla es `0=nulo, 1=código0, 2=datos0,
+    3+=TSS` con dos entradas por TSS, así que los nuevos van en 3 y 4 y **la base de los TSS se
+    corre a 5** — hay que mover `selector_tss`. Y el `TSS.RSP0`, que hoy está en cero sin usar,
+    tiene que apuntar a la pila del kernel: es donde el CPU aterriza cuando llega un trap desde
+    anillo 3.
+
+    La entrada se arma a mano: apilar `SS`(datos3), el puntero de pila del agente, `RFLAGS`
+    **con el bit de interrupciones prendido** (D29), `CS`(código3) y la dirección de entrada, y
+    hacer `iretq`. La vuelta es una compuerta de la IDT con `DPL=3` —así el agente la puede
+    invocar con `int`— cuyo stub corre ya en anillo 0 sobre `TSS.RSP0`.
+
+    **Cuidado con el desvío de faults:** hoy el handler solo reescribe `RIP`. Viniendo de anillo
+    3 hay que reescribir también `CS`, `SS` y el puntero de pila, o el `iretq` vuelve a anillo 3
+    a una dirección del kernel y falla de nuevo.
+
+    **aarch64.** Más corto: `eret` con `SPSR_EL1.M = 0b0000` (EL0t), `ELR_EL1` en la entrada,
+    `SP_EL0` en la pila del agente y el bit `I` limpio. La vuelta es `svc` desde EL0, que entra
+    por el offset `0x400` de la tabla de vectores —donde hoy está `vec_common`— y se distingue
+    de un fault real por `EC == 0x15`. Un IRQ desde EL0 entra por `0x480`, que ya apunta a
+    `vec_irq`: eso no hay que tocarlo.
+
+    **Cuidado:** el desvío de faults hoy hace `m.spsr |= 1` para volver a `SP_EL1`. Viniendo de
+    EL0 hay que poner el campo `M` entero en `0b0101` (EL1h), no prender un bit.
+
+    **Y en las dos:** conviene **un solo punto de aterrizaje** con una bandera en el bloque por
+    núcleo que distinga "volvió" de "falló", en vez de dos puntos — el ensamblador queda mucho
+    más corto. Agregar ese campo corre los offsets del bloque, que el ensamblador usa a mano;
+    los `offset_of!` avisan al compilar.
+
+    **Dos comprobaciones que el verbo tiene que hacer**, y que no son opcionales:
+    `exec supervised` exige memoria reclamada con `user: true` y `exec raw` exige que **no** lo
+    sea —la misma página no puede ser las dos cosas—, y en el núcleo del protocolo solo se
+    admite `supervised` (D29).
+
 4b. **~~No hay manejo de excepciones.~~ RESUELTO (P5, D7).** IDT en x86_64, tabla de vectores en
    aarch64. Un fault devuelve causa normalizada, el número crudo que usó la máquina, la
    dirección tocada y los registros con **sus** nombres (D3). El arranque provoca un breakpoint
