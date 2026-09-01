@@ -106,7 +106,28 @@ impl Fault {
 /// los pone la arquitectura. Escribe sobre cualquier `Write`, y no sobre
 /// `Umbilical`, porque desde adentro de un handler no hay una `Platform` a mano
 /// — ahi solo se tiene el UART pelado.
+/// Un candado para que dos nucleos que fallan a la vez no entrelacen el texto.
+///
+/// El estado del fault ya es por nucleo, asi que nada se corrompe — lo que se
+/// pierde es la posibilidad de **leerlo**: dos reportes intercalados byte a byte
+/// son dos reportes ilegibles, y este texto existe justo para el momento en que
+/// algo salio mal y no hay otra forma de mirar.
+///
+/// Es un candado de girar, y esta bien que lo sea: quien lo espera ya se estaba
+/// deteniendo. No se libera nunca si el que lo tiene se cuelga, y tambien esta
+/// bien: si un nucleo se colgo adentro del reporte de un fault, que el otro no
+/// escriba encima es lo que mas ayuda a entender que paso.
+static PRINTING: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
 pub fn report(f: &Fault, names: &[&str], out: &mut impl core::fmt::Write) {
+    use core::sync::atomic::Ordering;
+    while PRINTING
+        .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        core::hint::spin_loop();
+    }
     let _ = writeln!(out, "FAULT: {} (crudo {}, detalle {:#x})\r", f.cause.code(), f.raw, f.detail);
     let _ = writeln!(out, "  pc {:#018x}\r", f.pc);
     if let Some(a) = f.address {
@@ -127,6 +148,8 @@ pub fn report(f: &Fault, names: &[&str], out: &mut impl core::fmt::Write) {
     if f.regs.len() % 4 != 0 {
         let _ = write!(out, "\r\n");
     }
+
+    PRINTING.store(false, Ordering::Release);
 }
 
 /// Como termino un `exec`.

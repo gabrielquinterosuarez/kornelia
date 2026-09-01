@@ -211,9 +211,13 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
    código recibe en el primer registro de argumento su propia dirección, y nada más. Y no se
    puede elegir núcleo, porque `core.claim` no existe.
 
-7. **Al reportar un fault, dos núcleos que fallan a la vez entrelazan la salida del cordón.**
-   No se corrompe nada —el estado del fault ya es por núcleo— pero el texto sale mezclado y se
-   lee mal. Cuando los faults viajen por CBOR en vez de por texto deja de importar.
+7. **~~Al reportar un fault, dos núcleos que fallan a la vez entrelazan la salida.~~ RESUELTO.**
+   El reporte toma un candado. No se corrompía nada —el estado del fault ya era por núcleo—,
+   pero se perdía lo único que ese texto sirve: poder leerlo. Dos reportes intercalados byte a
+   byte son dos reportes ilegibles, justo en el momento en que no hay otra forma de mirar.
+
+   El candado es de girar y no se suelta si el que lo tiene se cuelga, a propósito: si un núcleo
+   se colgó adentro del reporte de un fault, que el otro no escriba encima es lo que más ayuda.
 
 8. **~~Los handlers del agente corren diferidos.~~ RESUELTO (D9, D29).** Durante un `exec` las
    interrupciones quedan abiertas, así que un handler entra al instante y el `exec` sigue
