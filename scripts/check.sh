@@ -147,14 +147,10 @@ else
         # declarado** y la memoria tiene que quedar intacta; declarado, la misma
         # escritura tiene que llegar; y al soltar el reclamo, dejar de llegar.
         #
-        # En x86_64 se exige que ande. En aarch64 todavia no se programa el
-        # SMMUv3, y lo que se exige es que **lo diga** en vez de callarlo.
-        if [ "$arch" = "x86_64" ]; then
-            expected_dma="dma: ok"
-        else
-            expected_dma="dma: el kernel todavia no programa este iommu"
-        fi
-        if ! grep -qFe "$expected_dma" <<<"$output"; then
+        # Se exige en las dos, y con el mismo texto: VT-d en x86_64, SMMUv3 en
+        # aarch64. Que el kernel diga "todavia no lo programo" dejo de alcanzar
+        # el dia que hubo con que programarlo.
+        if ! grep -qFe "dma: ok" <<<"$output"; then
             bad "$arch no cerro la prueba del IOMMU"
             printf '%s\n' "$output" | grep -E "FALLA:|iommu|dma|memoria quedo" | head -10
         fi

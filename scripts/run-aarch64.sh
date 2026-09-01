@@ -39,7 +39,10 @@ exec qemu-system-aarch64 \
     `# DMA que se maneja con cuatro escrituras: es lo que permite comprobar que` \
     `# el IOMMU bloquea de verdad, en vez de creerle al kernel.` \
     -machine virt,iommu=smmuv3 -cpu cortex-a57 -m 512 \
-    -device edu \
+    `# dma_mask: sin esto el aparato recorta la direccion de DMA a 28 bits, en` \
+    `# silencio. Como aca la RAM arranca en 1 GiB, ningun destino podia llegar` \
+    `# nunca — y un DMA que no ocurre se ve igual que uno que el IOMMU bloqueo.` \
+    -device edu,dma_mask=0xffffffffffff \
     -drive if=pflash,format=raw,unit=0,readonly=on,file="$AAVMF_CODE" \
     -drive if=pflash,format=raw,unit=1,file=target/AAVMF_VARS-aarch64.fd \
     -drive format=raw,file=fat:rw:target/esp-aarch64 \

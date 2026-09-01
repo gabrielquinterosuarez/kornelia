@@ -45,7 +45,12 @@ exec qemu-system-x86_64 \
     `# DMA que se maneja con cuatro escrituras: es lo que permite comprobar que` \
     `# el IOMMU bloquea de verdad, en vez de creerle al kernel.` \
     -device intel-iommu \
-    -device edu \
+    `# dma_mask: sin esto el aparato recorta la direccion de DMA a 28 bits, en` \
+    `# silencio. Aca no se notaba —la RAM arranca en cero y el buffer del agente` \
+    `# cae abajo de 256 MiB— pero en aarch64, donde la RAM arranca en 1 GiB,` \
+    `# ningun destino podia llegar nunca. Se pone en las dos: una prueba que` \
+    `# pasa porque las direcciones son chicas pasa por casualidad.` \
+    -device edu,dma_mask=0xffffffffffff \
     -drive if=pflash,format=raw,unit=0,readonly=on,file="$OVMF_CODE" \
     -drive if=pflash,format=raw,unit=1,file=target/OVMF_VARS-x86_64.fd \
     -drive format=raw,file=fat:rw:target/esp-x86_64 \

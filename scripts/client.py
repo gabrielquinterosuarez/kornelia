@@ -454,35 +454,38 @@ def emit_writes(arch, writes, con_ret=True):
                 code += b"\xc7\x00" + (val & 0xFFFFFFFF).to_bytes(4, "little")
         return code + (b"\xc3" if con_ret else b"")            # ret
 
-    # aarch64: armar la direccion en x0 y el valor en w1, y guardar.
-    def mov_x0(v):
+    # aarch64: armar la direccion en x0 y el valor en x1 o w1, y guardar.
+    def mov_imm(reg, v, wide):
+        """movz/movk hasta armar el valor. `wide` elige el registro de 64 bits."""
         out = b""
         first = True
-        for hw in range(4):
-            chunk = (v >> (16 * hw)) & 0xFFFF
-            if chunk == 0 and not first:
-                continue
-            base = 0xD2800000 if first else 0xF2800000
-            out += (base | (hw << 21) | (chunk << 5) | 0).to_bytes(4, "little")
-            first = False
-        return out or (0xD2800000).to_bytes(4, "little")
-
-    def mov_w1(v):
-        out = b""
-        first = True
-        for hw in range(2):
+        # El bit 31 del opcode es el que distingue x de w. Un movz de 32 bits
+        # pone en cero la mitad de arriba del registro, asi que no alcanza con
+        # el mismo codigo: hay que pedir el ancho.
+        sf = (1 << 31) if wide else 0
+        for hw in range(4 if wide else 2):
             chunk = (v >> (16 * hw)) & 0xFFFF
             if chunk == 0 and not first:
                 continue
             base = 0x52800000 if first else 0x72800000
-            out += (base | (hw << 21) | (chunk << 5) | 1).to_bytes(4, "little")
+            out += (sf | base | (hw << 21) | (chunk << 5) | reg).to_bytes(4, "little")
             first = False
-        return out or (0x52800000 | 1).to_bytes(4, "little")
+        return out or (sf | 0x52800000 | reg).to_bytes(4, "little")
 
     code = b""
-    for addr, val, _width in writes:
-        code += mov_x0(addr) + mov_w1(val & 0xFFFFFFFF)
-        code += (0xB9000001).to_bytes(4, "little")   # str w1, [x0]
+    for addr, val, width in writes:
+        code += mov_imm(0, addr, True)
+        if width == 8:
+            # Los registros de un motor de DMA son de 64 bits y hay que
+            # escribirlos enteros: partirlos en dos mitades es escribirle dos
+            # veces media direccion. En x86_64 esto ya estaba; aca aparecio
+            # recien cuando el aparato de DMA se pudo probar de este lado, y el
+            # sintoma era el peor posible — el aparato pedia la direccion 0.
+            code += mov_imm(1, val & 0xFFFFFFFFFFFFFFFF, True)
+            code += (0xF9000001).to_bytes(4, "little")   # str x1, [x0]
+        else:
+            code += mov_imm(1, val & 0xFFFFFFFF, False)
+            code += (0xB9000001).to_bytes(4, "little")   # str w1, [x0]
     return code + ((0xD65F03C0).to_bytes(4, "little") if con_ret else b"")  # ret
 
 

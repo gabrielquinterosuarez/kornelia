@@ -10,7 +10,7 @@
 | `kernel-core/` | Todo lo portable: protocolo, reclamos, faults, mapa de memoria, ACPI. | **Cero `asm!`, cero `target_arch`, y no puede nombrar a `boot-uefi`** (D23/D24). |
 | `boot-uefi/` | Cómo se le pide la máquina al firmware. Compartido por las dos arquitecturas. | Sin `asm!`: UEFI no varía por arquitectura. |
 | `kernel-x86_64/` | Lo que solo existe en x86: GDT, IDT, APIC, VT-d, trampolín de arranque. | |
-| `kernel-aarch64/` | Lo mismo del otro lado: tabla de vectores, GIC, PSCI, SMMUv3 (pendiente). | |
+| `kernel-aarch64/` | Lo mismo del otro lado: tabla de vectores, GIC, PSCI, SMMUv3. | |
 
 Lo verifica `./scripts/check-boundary.sh`, dentro del portón.
 
@@ -25,7 +25,7 @@ Lo verifica `./scripts/check-boundary.sh`, dentro del portón.
 | Faults | `kernel-core/src/fault.rs` (formato) + `idt.rs` / `vectors.rs` (captura). |
 | Otros núcleos | `kernel-core/src/work.rs` (buzón) + `smp.rs` de cada arquitectura. |
 | Interrupciones | `irq.rs` de cada arquitectura + `kernel-core/src/handlers.rs`. |
-| IOMMU | `kernel-x86_64/src/iommu.rs`. En aarch64 **no existe todavía** (deuda 14). |
+| IOMMU | `kernel-x86_64/src/iommu.rs` (VT-d) y `kernel-aarch64/src/smmu.rs` (SMMUv3). Hacen lo mismo y no se parecen en nada: empezar por el de x86, que es el más simple. |
 | El segundo canal | `kernel-core/src/channel.rs`. |
 | Lo que el agente ve de la máquina | `kernel-core/src/acpi.rs` (leer) + `protocol.rs::describe` (publicar). |
 

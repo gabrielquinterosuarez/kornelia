@@ -94,9 +94,9 @@ captura los faults en vez de reiniciarse. **El núcleo que atiende duerme entre
 pedidos**: el cable serie tiene timbre (interrupción), así que ya no gira
 preguntando.
 
-**Los once verbos andan.** Dos solo en x86_64, y la máquina lo dice en vez de
-callarlo: `irq.install_raw` (en aarch64 no hay un camino más crudo que el que ya
-se usa) y `dma.allow` (falta programar el SMMUv3 — deuda 14).
+**Los once verbos andan, y enteros en las dos arquitecturas.** El único que sigue
+siendo solo de x86_64 es `irq.install_raw`, porque en aarch64 no hay un camino
+más crudo que el que ya se usa — y la máquina lo dice en vez de callarlo.
 
 El agente sube código máquina, lo corre, y
 si falla **el fault vuelve como respuesta en vez de matar la máquina** (P5) —
@@ -119,11 +119,18 @@ deja el pedido en un buzón por núcleo, el núcleo **duerme** hasta que lo
 despierta un IPI/SGI, corre y contesta. Lo comprueba el código del agente
 diciendo en qué núcleo está.
 
-**`dma.allow` cierra D8:** el IOMMU arranca **encendido y vacío**, así que sin
-declarar nada ningún aparato llega a la memoria. Comprobado con un aparato de
-verdad que hace DMA: bloqueado sin declarar —y el silicio lo anota—, permitido
-al declararlo, y bloqueado otra vez al soltar el reclamo. En aarch64 la máquina
-informa su SMMUv3 y el kernel todavía no lo programa; lo dice en vez de callarlo.
+**`dma.allow` cierra D8 en las dos:** VT-d en x86_64, SMMUv3 en aarch64. El IOMMU
+arranca **encendido y vacío**, así que sin declarar nada ningún aparato llega a
+la memoria. Comprobado en las dos con un aparato de verdad que hace DMA:
+bloqueado sin declarar —y el silicio lo anota—, permitido al declararlo, y
+bloqueado otra vez al soltar el reclamo. Los dos IOMMU hacen lo mismo y no se
+parecen: al de Intel se le habla por registros, al de ARM por **colas en
+memoria**, y en vez de una tabla por bus tiene una tabla de streams indexada por
+el número que el bus le pone al aparato.
+
+**Y el agente ya alcanza PCIe en las dos.** El mapa de UEFI no informa la ventana
+de configuración en aarch64; la MCFG de ACPI sí, y se suma al mapa donde el mapa
+se arma. Antes el kernel publicaba una dirección que él mismo hacía inalcanzable.
 
 El portón es `./scripts/check.sh`: frontera + idioma + 89 tests + compila las
 dos + las bootea en QEMU y les habla el protocolo con `scripts/client.py`.
@@ -131,18 +138,16 @@ Corrélo antes de commitear; CI corre exactamente ese script.
 
 ## Lo que sigue
 
-**No queda ningún verbo sin hacer.** Lo que queda es emparejar las dos
-arquitecturas y pagar deudas. Las preguntas abiertas están en `docs/DISENO.md` §8;
-las deudas, en §7 — abiertas la 2, 3, 6, 10, 11, 13, 14 y 15.
+**No queda ningún verbo sin hacer, ni nada que ande en una arquitectura y no en la
+otra.** Lo que queda es pagar deudas. Las preguntas abiertas están en
+`docs/DISENO.md` §8; las deudas, en §7 — abiertas la 2, 3, 6, 10, 11, 13 y 15.
 
-1. **El SMMUv3 de aarch64** (deuda 14): es lo único que un agente puede pedir y recibir en una
-   arquitectura y no en la otra. Tabla de streams, descriptores de contexto y cola de comandos.
-2. **Hacer cumplir la regla de D29**, que recién ahora se puede: en el núcleo del protocolo el
+1. **Hacer cumplir la regla de D29**, que recién ahora se puede: en el núcleo del protocolo el
    agente debería correr siempre `supervised`, y si quiere `raw` que reclame un núcleo. Antes
    exigirlo dejaba `raw` sin ningún lugar donde correr; ahora `exec` elige núcleo, así que no.
    Es un cambio chico en el verbo y grande en las pruebas — casi todas corren `raw` en el núcleo
    que atiende.
-3. **`exec` en otro núcleo es sincrónico** (deuda 13): el del protocolo espera con un tope, así
+2. **`exec` en otro núcleo es sincrónico** (deuda 13): el del protocolo espera con un tope, así
    que un trabajo largo se informa igual que un núcleo perdido. Falta la forma asincrónica.
 
 ## Cosas que ya costaron caras
@@ -164,6 +169,23 @@ Están acá para no volver a pagarlos:
 - **Una prueba que pasa porque no pasa nada.** El IOMMU "bloqueando" y el DMA no
   ocurriendo se ven idénticos desde afuera. Antes de creerle a un bloqueo hay
   que comprobar que la cosa bloqueada ocurre: se bootea sin IOMMU y se mira.
+  **Pasó de verdad:** el aparato `edu` recorta la dirección de DMA a 28 bits si
+  no se le dice otra cosa, y en aarch64 la RAM arranca en 1 GiB — así que ningún
+  destino podía llegar nunca. En x86_64 no se veía porque la RAM arranca en cero.
+  Se encontró booteando sin IOMMU, que es exactamente lo que dice este párrafo.
+- **Pedir una alineación mayor que la página es una promesa que el cargador no
+  cumple — y el compilador le cree.** Un `#[repr(align(8192))]` queda alineado
+  adentro de la imagen, pero UEFI la carga en una dirección alineada a 4 KiB y
+  ahí se pierde. Lo caro no es la tabla desalineada: es que el compilador, dando
+  por cierto que los bits de abajo son cero, **simplifica las máscaras** con las
+  que se arma esa dirección. El síntoma fue un SMMU leyendo ceros una página más
+  abajo de donde habíamos escrito. Con más de 4 KiB, se pide de más y se alinea
+  a mano en runtime.
+- **Al silicio hay que pedirle configuraciones que pueda hacer, no las que le
+  sobren.** El tamaño de entrada de la etapa 2 del SMMU no puede ser menor que
+  el de salida. Pedir 39 bits donde la máquina tiene 44 no se rechaza: se
+  reinterpreta, y las direcciones que pide el aparato se recortan en silencio.
+  Un límite que sobra puede ser tan inválido como uno que falta.
 
 **Cómo se depura un núcleo que se quedó mudo.** No hay debugger: se marca el
 camino con letras por el cable (`p.uart_write_byte(b'A')`) y se lee la traza.

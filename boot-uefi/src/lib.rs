@@ -346,13 +346,58 @@ pub unsafe fn take_machine(image: *mut c_void, systab: *mut SystemTable) -> Mach
 
     // Desde aca no se puede llamar a ningun Boot Service. El buffer es memoria
     // nuestra, asi que interpretarlo ahora es seguro.
-    let count = normalize(buffer, used_size, descriptor_size);
+    let mut count = normalize(buffer, used_size, descriptor_size);
+    count += add_pcie_window(tables.acpi, count);
 
     Machine {
         regions: core::slice::from_raw_parts(&raw const REGIONS as *const Region, count),
         tables,
         failure: None,
     }
+}
+
+/// Suma al mapa la ventana de configuracion de PCIe, si el firmware no la puso.
+///
+/// El mapa de memoria de UEFI **no es la unica cosa que la maquina dice de si
+/// misma**: la tabla MCFG de ACPI dice donde se configura PCIe, y en aarch64 el
+/// firmware no la repite en el mapa. Con lo cual el kernel publicaba una
+/// direccion —`describe pcie` la sirve— que el mismo hacia inalcanzable: fuera
+/// del mapa, `mem.claim` la rechaza, y fuera del span, el identity map ni la
+/// cubre. El kernel siendo la razon por la que no se puede usar un aparato es
+/// exactamente lo que P1 prohibe.
+///
+/// Va aca y no mas adelante porque el mapa se arma **una sola vez**: metida
+/// antes de que nadie lo lea, la ventana entra sola en todo lo que se calcula a
+/// partir del mapa, empezando por hasta donde llega el identity map.
+///
+/// # Safety
+///
+/// `rsdp` tiene que apuntar a un RSDP de verdad, y la memoria que describe estar
+/// mapeada. Lo esta: el identity map del firmware sigue vigente.
+unsafe fn add_pcie_window(rsdp: Option<u64>, count: usize) -> usize {
+    if count >= MAX_REGIONS {
+        return 0;
+    }
+    let Some(addr) = rsdp else { return 0 };
+    let Some(rsdp) = kernel_core::tables::read_acpi(addr) else { return 0 };
+    let Some(pcie) = kernel_core::acpi::read(&rsdp).pcie else { return 0 };
+
+    // Cada bus ocupa 1 MiB de espacio de configuracion: 32 dispositivos por 8
+    // funciones por 4 KiB.
+    let buses = (pcie.bus_end as u64).saturating_sub(pcie.bus_start as u64) + 1;
+    let bytes = buses << 20;
+
+    // Si el firmware ya la informo —en x86_64 la informa, como reservada— no se
+    // agrega: dos regiones encimadas serian dos respuestas distintas a la misma
+    // pregunta.
+    let map = core::slice::from_raw_parts(&raw const REGIONS as *const Region, count);
+    if map.iter().any(|r| r.start < pcie.base + bytes && r.end() > pcie.base) {
+        return 0;
+    }
+
+    let dest = &raw mut REGIONS as *mut Region;
+    dest.add(count).write(Region { start: pcie.base, bytes, kind: Kind::Mmio });
+    1
 }
 
 /// Recorre la Configuration Table anotando donde esta cada cosa conocida.

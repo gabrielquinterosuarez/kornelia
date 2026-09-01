@@ -8,6 +8,7 @@ mod irq;
 mod vectors;
 mod paging;
 mod percpu;
+mod smmu;
 mod smp;
 mod uart;
 
@@ -130,33 +131,35 @@ impl Platform for AArch64 {
 
     unsafe fn enable_iommu(
         &mut self,
-        _hw: &kernel_core::acpi::Hardware,
+        hw: &kernel_core::acpi::Hardware,
     ) -> Result<&'static str, &'static str> {
-        Err("todavia no se programa el SMMUv3 de esta maquina")
+        let Some(unit) = hw.iommu else {
+            return Err("esta maquina no informa un IOMMU");
+        };
+        smmu::install(&unit)?;
+        Ok(unit.kind)
     }
 
     fn iommu_enabled(&self) -> bool {
-        // Todavia no se programa el SMMUv3, asi que no traduce nada.
-        false
+        smmu::is_on()
     }
 
     fn dma_faults(&self) -> Option<u64> {
-        None
+        smmu::faults()
     }
 
     unsafe fn set_dma_access(
         &mut self,
-        _hw: &kernel_core::acpi::Hardware,
-        _device: u32,
-        _start: u64,
-        _bytes: u64,
-        _allow: bool,
+        hw: &kernel_core::acpi::Hardware,
+        device: u32,
+        start: u64,
+        bytes: u64,
+        allow: bool,
     ) -> Result<(), &'static str> {
-        // La maquina informa un SMMUv3 y todavia no se lo programa. Decirlo es
-        // mejor que aceptar el pedido y no hacer nada: un agente que cree que
-        // declaro un permiso y no lo declaro escribe un driver contra una
-        // suposicion falsa, y el sintoma aparece lejos de la causa (P4).
-        Err("todavia no se programa el SMMUv3 de esta maquina")
+        let Some(unit) = hw.iommu else {
+            return Err("esta maquina no informa un IOMMU");
+        };
+        smmu::set_access(&unit, device, start, bytes, allow)
     }
 
     fn wake_core(&mut self, id: u64) {
