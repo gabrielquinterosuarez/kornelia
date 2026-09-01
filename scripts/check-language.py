@@ -34,7 +34,7 @@ contador contar copiar corto crear crudo cual cuales cuando cuantas cuantos
 cuerpo datos deber decir dejar demorar dentro desde despertar despues destino
 destruir devolver direccion dispositivo donde dormir encabezado encender
 encontrar entero enteros entonces entrada entradas entrega enviar escribe
-escribir espera esperar espuria estado fallar falla fallas fallo firma firmas
+escribir espera esperado esperar espuria estado fallar falla fallas fallo firma firmas
 fija fijas fin flujo formato frontera fuga fugas fuera
 funcion grande guardado guardar
 hacer hasta hueco huecos imprimir indice indices inicio instalar interrupcion

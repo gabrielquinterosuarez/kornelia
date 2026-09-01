@@ -15,6 +15,7 @@ pub mod cbor;
 pub mod channel;
 pub mod claims;
 pub mod cores;
+pub mod dma;
 pub mod fault;
 pub mod handlers;
 pub mod machine;
@@ -57,6 +58,13 @@ pub fn main<P: Platform>(p: &mut P) -> ! {
     // memoria física por todos lados.
     let hw = read_hardware(p, &machine);
 
+    // El IOMMU, antes que nada del agente: encendido y sin nada declarado,
+    // ningún aparato llega a ninguna parte (D8). Es el punto de partida contra
+    // el que `dma.allow` significa algo.
+    // SAFETY: el firmware ya soltó la máquina, así que su DMA no nos importa.
+    let iommu = unsafe { p.enable_iommu(&hw) };
+    report_iommu(p, iommu);
+
     // El timbre del cable, para que el núcleo pueda dormir en vez de girar.
     // SAFETY: las tablas de páginas y la captura de excepciones ya están.
     let doorbell = unsafe { p.install_serial_interrupt(&hw) };
@@ -83,6 +91,26 @@ pub fn main<P: Platform>(p: &mut P) -> ! {
     p.set_interrupts(false);
 
     protocol::serve(p, &machine, &hw, with_doorbell)
+}
+
+/// Cuenta si la máquina quedó con el IOMMU encendido (D8).
+///
+/// Que no haya no es fatal: la máquina anda igual. Pero cambia lo que el kernel
+/// puede prometer, así que se dice en vez de callarlo — sin IOMMU, un DMA mal
+/// apuntado sigue siendo corrupción silenciosa y `dma.allow` no tiene con qué
+/// hacerse cumplir (P4).
+fn report_iommu<P: Platform>(p: &mut P, r: Result<&'static str, &'static str>) {
+    let mut u = Umbilical::new(p);
+    match r {
+        Ok(kind) => {
+            u.kv("iommu", kind);
+            u.line("  encendido. sin declarar nada, ningun aparato llega a la memoria");
+        }
+        Err(reason) => {
+            u.kv("iommu", "no");
+            u.kv("  motivo", reason);
+        }
+    }
 }
 
 /// Cuenta si el cable serie quedó con timbre (D5, D17).

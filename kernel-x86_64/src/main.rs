@@ -6,6 +6,7 @@
 mod exec;
 mod gdt;
 mod idt;
+mod iommu;
 mod irq;
 mod paging;
 mod percpu;
@@ -124,6 +125,39 @@ impl Platform for X86_64 {
         slot: usize,
     ) -> Result<(), kernel_core::cores::Error> {
         smp::start(hw, id, slot)
+    }
+
+    unsafe fn enable_iommu(
+        &mut self,
+        hw: &kernel_core::acpi::Hardware,
+    ) -> Result<&'static str, &'static str> {
+        let Some(unit) = hw.iommu else {
+            return Err("esta maquina no informa un IOMMU");
+        };
+        iommu::install(&unit)?;
+        Ok(unit.kind)
+    }
+
+    fn iommu_enabled(&self) -> bool {
+        iommu::is_on()
+    }
+
+    fn dma_faults(&self) -> Option<u64> {
+        iommu::faults()
+    }
+
+    unsafe fn set_dma_access(
+        &mut self,
+        hw: &kernel_core::acpi::Hardware,
+        device: u32,
+        start: u64,
+        bytes: u64,
+        allow: bool,
+    ) -> Result<(), &'static str> {
+        let Some(unit) = hw.iommu else {
+            return Err("esta maquina no informa un IOMMU");
+        };
+        iommu::set_access(&unit, device, start, bytes, allow)
     }
 
     fn wake_core(&mut self, id: u64) {

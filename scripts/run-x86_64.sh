@@ -41,6 +41,11 @@ exec qemu-system-x86_64 \
     `# D12 necesita. Cualquier x86_64 de silicio las tiene desde ~2008, asi que` \
     `# el default de QEMU es mas austero que el hardware real, no al reves.` \
     -cpu max \
+    `# D8: el IOMMU va encendido por defecto. Y el aparato 'edu' es un motor de` \
+    `# DMA que se maneja con cuatro escrituras: es lo que permite comprobar que` \
+    `# el IOMMU bloquea de verdad, en vez de creerle al kernel.` \
+    -device intel-iommu \
+    -device edu \
     -drive if=pflash,format=raw,unit=0,readonly=on,file="$OVMF_CODE" \
     -drive if=pflash,format=raw,unit=1,file=target/OVMF_VARS-x86_64.fd \
     -drive format=raw,file=fat:rw:target/esp-x86_64 \

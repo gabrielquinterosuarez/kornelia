@@ -442,9 +442,16 @@ def emit_writes(arch, writes, con_ret=True):
     """
     if arch == "x86_64":
         code = b""
-        for addr, val, _width in writes:
+        for addr, val, width in writes:
             code += b"\x48\xb8" + addr.to_bytes(8, "little")   # mov rax, addr
-            code += b"\xc7\x00" + (val & 0xFFFFFFFF).to_bytes(4, "little")  # mov [rax], val
+            if width == 8:
+                # Los registros de un motor de DMA son de 64 bits y hay que
+                # escribirlos enteros: partirlos en dos mitades es escribirle
+                # dos veces media direccion.
+                code += b"\x48\xb9" + (val & 0xFFFFFFFFFFFFFFFF).to_bytes(8, "little")
+                code += b"\x48\x89\x08"                        # mov [rax], rcx
+            else:
+                code += b"\xc7\x00" + (val & 0xFFFFFFFF).to_bytes(4, "little")
         return code + (b"\xc3" if con_ret else b"")            # ret
 
     # aarch64: armar la direccion en x0 y el valor en w1, y guardar.
@@ -835,6 +842,160 @@ def test_on_core(proc, timeout, arch):
     return 0
 
 
+# El aparato `edu` de QEMU: un motor de DMA que se maneja con cuatro escrituras.
+# Existe para ensenar, y por eso sirve justo para esto — cualquier otra placa
+# con DMA necesitaria un driver entero antes de poder probar nada.
+EDU_ID = 0x11E81234           # dispositivo y fabricante, como vienen juntos
+EDU_INTERNAL = 0x40000        # su memoria interna, del lado del aparato
+EDU_DMA_SRC = 0x80
+EDU_DMA_DST = 0x88
+EDU_DMA_COUNT = 0x90
+EDU_DMA_CMD = 0x98
+EDU_DMA_START = 0x1           # bit 0: arrancar
+EDU_DMA_TO_RAM = 0x2          # bit 1: del aparato hacia la RAM
+
+
+def test_dma(proc, timeout, arch):
+    """El IOMMU hace cumplir lo que el agente declaro (D8).
+
+    Un aparato que hace DMA escribe en la RAM por su cuenta: no pasa por el CPU
+    ni mira las tablas de paginas. Sin IOMMU, un puntero mal puesto no da fault
+    — da memoria distinta, en silencio.
+
+    La prueba es la unica que vale: se le pide al aparato que escriba en una
+    direccion, **sin haberlo declarado**, y la memoria tiene que quedar intacta.
+    Despues se declara con `dma.allow` y la misma escritura tiene que llegar.
+    """
+    failures = []
+
+    def ask_verb(n, verb, args):
+        resp, _ = ask(proc, [n, verb, args], timeout)
+        _, ok, load = resp
+        return ok, load
+
+    ok, d = ask_verb(100, "describe", {"what": ["iommu", "pcie"]})
+    if not ok or d["iommu"] is None:
+        print("  dma: sin iommu en esta maquina, no hay nada que hacer cumplir")
+        return 0
+    print(f"  iommu: {d['iommu']['kind']} en {d['iommu']['address']:#x}")
+    if not d["iommu"]["enabled"]:
+        # La maquina tiene IOMMU y el kernel todavia no se lo programa. Decirlo
+        # es la mitad del punto: un agente que crea que hay una garantia que no
+        # hay escribe drivers contra una suposicion falsa (P4).
+        print("  dma: el kernel todavia no programa este iommu, asi que no traduce")
+        return 0
+    if d["pcie"] is None:
+        print("  la maquina no informa PCIe")
+        return 1
+    ecam = d["pcie"]["base"]
+
+    # Buscar el aparato recorriendo el bus, que es lo que haria el agente: el
+    # kernel publica donde se configura PCIe, no que hay conectado (D4).
+    ok, cfg = ask_verb(101, "mem.claim", {"at": ecam, "bytes": 1 << 20})
+    if not ok:
+        print(f"  no se pudo mirar el bus: {cfg}")
+        return 1
+    bdf, slot = None, None
+    for dev in range(32):
+        off = dev << 15
+        ok, r = ask_verb(102, "mem.read", {"handle": cfg["handle"], "off": off, "len": 4})
+        if ok and int.from_bytes(r["bytes"], "little") == EDU_ID:
+            bdf, slot = dev << 3, off
+            break
+    if bdf is None:
+        print("  no hay un aparato con DMA en este bus")
+        return 0
+    print(f"  aparato encontrado: el bus lo llama {bdf:#x}")
+
+    # Su ventana de registros, y permiso para que sea maestro del bus — sin eso
+    # el aparato no puede iniciar un DMA y la prueba no probaria nada.
+    ok, r = ask_verb(103, "mem.read", {"handle": cfg["handle"], "off": slot + 0x10, "len": 4})
+    bar = int.from_bytes(r["bytes"], "little") & ~0xF
+    ask_verb(104, "mem.write", {"handle": cfg["handle"], "off": slot + 4,
+                                "bytes": bytes([0x06, 0x00])})
+    print(f"  sus registros estan en {bar:#x}")
+
+    # La memoria donde el aparato va a intentar escribir, con un patron puesto
+    # por el CPU: si el DMA llega, lo pisa con ceros.
+    ok, buf = ask_verb(105, "mem.claim", {"bytes": 4096, "align": 4096})
+    if not ok:
+        print(f"  no se pudo reclamar memoria: {buf}")
+        return 1
+    pattern = bytes([0xAA] * 8)
+    print(f"  la memoria del agente esta en {buf['start']:#x}")
+
+
+
+    # Los registros del aparato no hace falta reclamarlos: el codigo del agente
+    # les escribe directo, que es como se maneja cualquier placa (D4, D12).
+    code = emit_writes(arch, [
+        (bar + EDU_DMA_SRC, EDU_INTERNAL, 8),
+        (bar + EDU_DMA_DST, buf["start"], 8),
+        (bar + EDU_DMA_COUNT, 8, 8),
+        (bar + EDU_DMA_CMD, EDU_DMA_START | EDU_DMA_TO_RAM, 8),
+    ])
+    ok, prog = ask_verb(109, "mem.claim", {"bytes": 4096, "align": 4096})
+    ask_verb(110, "mem.write", {"handle": prog["handle"], "bytes": code})
+
+    def try_dma(label, handle=None):
+        handle = handle or buf["handle"]
+        ask_verb(111, "mem.write", {"handle": handle, "bytes": pattern})
+        ok, r = ask_verb(112, "exec", {"handle": prog["handle"], "mode": "raw"})
+        if not ok or r.get("faulted"):
+            failures.append(f"{label}: el codigo que toca el aparato fallo: {r}")
+            return None
+        # El DMA no es inmediato: el aparato lo hace por su cuenta. Se le da
+        # tiempo con pedidos que no lo tocan.
+        for _ in range(20):
+            ask_verb(113, "describe", {})
+        ok, r = ask_verb(114, "mem.read", {"handle": handle, "off": 0, "len": 8})
+        return r["bytes"] if ok else None
+
+    # 1. Sin declarar nada: el aparato no tiene que llegar.
+    got = try_dma("sin permiso")
+    print(f"  sin declarar nada, la memoria quedo: {got.hex() if got else '?'}")
+    if got != pattern:
+        failures.append("el aparato escribio en memoria que nadie le permitio")
+
+    # Y el intento negado no se pierde: el silicio lo anota, y por eso el agente
+    # puede enterarse de que su driver apunto a donde no debia (P5).
+    ok, d = ask_verb(118, "describe", {"what": ["iommu"]})
+    if ok and d["iommu"]["faults"]:
+        print(f"  y el iommu lo anoto: faults={d['iommu']['faults']:#x}")
+    else:
+        failures.append("el iommu nego el acceso pero no lo anoto")
+
+    # 2. Declarado: la misma escritura tiene que llegar.
+    ok, r = ask_verb(115, "dma.allow", {"device": bdf, "handle": buf["handle"]})
+    if not ok:
+        print(f"  FALLA: dma.allow: {r}")
+        return 1
+    print(f"  declarado: el aparato {bdf:#x} puede tocar {r['bytes']} bytes en {r['start']:#x}")
+
+    got = try_dma("con permiso")
+    print(f"  y ahora la memoria quedo:       {got.hex() if got else '?'}")
+    if got == pattern:
+        failures.append("el aparato no llego a la memoria que si se le permitio")
+
+    # 3. Y al soltar el reclamo, el permiso se saca: memoria devuelta que un
+    #    aparato sigue alcanzando es el agujero que todo esto viene a cerrar.
+    ask_verb(116, "release", {"handle": buf["handle"]})
+    ok, v = ask_verb(117, "mem.claim", {"at": buf["start"], "bytes": 4096})
+    if ok:
+        got = try_dma("despues de soltar", v["handle"])
+        print(f"  y despues de soltarla:          {got.hex() if got else '?'}")
+        if got != pattern:
+            failures.append("al soltar el reclamo no se le saco el permiso al aparato")
+
+    print()
+    if failures:
+        for f in failures:
+            print(f"  FALLA: {f}")
+        return 1
+    print("  dma: ok")
+    return 0
+
+
 def test_handler_during_exec(proc, timeout, arch):
     """El handler del agente corre DURANTE un exec largo (D9, D29).
 
@@ -1124,6 +1285,8 @@ def main():
                     help="sube codigo maquina de verdad y lo corre")
     ap.add_argument("--permission", action="store_true",
                     help="pide memoria alcanzable sin privilegio y comprueba que el bit este")
+    ap.add_argument("--dma", action="store_true",
+                    help="el IOMMU hace cumplir lo que el agente declaro (D8)")
     ap.add_argument("--on-core", action="store_true", dest="on_core",
                     help="manda el codigo a correr a un nucleo reclamado")
     ap.add_argument("--supervised", action="store_true",
@@ -1200,6 +1363,9 @@ def main():
         if args.during:
             print()
             rc |= test_handler_during_exec(proc, args.timeout, args.arch)
+        if args.dma:
+            print("\n== el IOMMU hace cumplir lo declarado (D8) ==")
+            rc |= test_dma(proc, args.timeout, args.arch)
         if args.on_core:
             print("\n== el agente elige en que nucleo corre (D13) ==")
             rc |= test_on_core(proc, args.timeout, args.arch)

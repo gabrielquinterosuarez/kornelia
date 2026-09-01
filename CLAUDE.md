@@ -93,9 +93,9 @@ captura los faults en vez de reiniciarse. **El núcleo que atiende duerme entre
 pedidos**: el cable serie tiene timbre (interrupción), así que ya no gira
 preguntando.
 
-**Diez de los once verbos andan:** `describe`, `mem.claim`, `mem.read`,
+**Los once verbos andan:** `describe`, `mem.claim`, `mem.read`,
 `mem.write`, `release`, `exec`, `core.claim`, `listen` y **`irq.install` /
-`irq.install_raw`** (el `raw` solo en x86_64). El agente sube código máquina, lo corre, y
+`irq.install_raw`** y **`dma.allow`** (los dos últimos, solo en x86_64). El agente sube código máquina, lo corre, y
 si falla **el fault vuelve como respuesta en vez de matar la máquina** (P5) —
 ni siquiera destruyendo el puntero de pila, porque las excepciones entran en una
 pila aparte (IST en x86_64, `SP_EL1` en aarch64).
@@ -116,7 +116,11 @@ deja el pedido en un buzón por núcleo, el núcleo **duerme** hasta que lo
 despierta un IPI/SGI, corre y contesta. Lo comprueba el código del agente
 diciendo en qué núcleo está.
 
-Falta uno: `dma.allow`, el IOMMU.
+**`dma.allow` cierra D8:** el IOMMU arranca **encendido y vacío**, así que sin
+declarar nada ningún aparato llega a la memoria. Comprobado con un aparato de
+verdad que hace DMA: bloqueado sin declarar —y el silicio lo anota—, permitido
+al declararlo, y bloqueado otra vez al soltar el reclamo. En aarch64 la máquina
+informa su SMMUv3 y el kernel todavía no lo programa; lo dice en vez de callarlo.
 
 El portón es `./scripts/check.sh`: frontera + idioma + 89 tests + compila las
 dos + las bootea en QEMU y les habla el protocolo con `scripts/client.py`.
@@ -127,8 +131,8 @@ Corrélo antes de commitear; CI corre exactamente ese script.
 Queda **un solo verbo** sin hacer. Las preguntas abiertas están en
 `docs/DISENO.md` §8.
 
-1. **`dma.allow`** — el IOMMU, el único verbo que falta. El más grande del proyecto y el más
-   específico de cada fabricante; es lo que más gana con silicio real.
+1. **El SMMUv3 de aarch64** (deuda 14): es lo único que un agente puede pedir y recibir en una
+   arquitectura y no en la otra. Tabla de streams, descriptores de contexto y cola de comandos.
 2. **Hacer cumplir la regla de D29**, que recién ahora se puede: en el núcleo del protocolo el
    agente debería correr siempre `supervised`, y si quiere `raw` que reclame un núcleo. Antes
    exigirlo dejaba `raw` sin ningún lugar donde correr; ahora `exec` elige núcleo, así que no.

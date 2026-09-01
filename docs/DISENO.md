@@ -2,9 +2,10 @@
 
 **Estado:** las dos arquitecturas arrancan por UEFI, le toman la máquina al firmware y
 **hablan el protocolo CBOR** por el cordón umbilical. Corren sobre pila y tablas de páginas
-propias, capturan los faults como datos, y **diez de los once verbos andan**: el agente
-reclama memoria, sube código máquina, lo corre, y arranca los otros núcleos.
-Falta uno: `dma.allow`, el IOMMU.
+propias, capturan los faults como datos, y **los once verbos andan**: el agente reclama
+memoria, sube código máquina, lo corre, arranca los otros núcleos y les manda trabajo, y
+declara qué puede tocar cada aparato por DMA. El IOMMU está en x86_64; en aarch64 el
+kernel todavía no programa el SMMUv3 y lo dice.
 **Última actualización:** 2026-08-31
 
 ---
@@ -130,7 +131,8 @@ mapeados en memoria. `describe` tiene que cubrir los dos modelos de descubrimien
 ## 7. Estado del código
 
 **Cuidado al leer este documento:** las secciones 4 y 6 son *especificación*, no descripción.
-De los **once** verbos de la sección 4 hay **diez** implementados; falta uno: `dma.allow`.
+Los **once** verbos de la sección 4 están implementados. El último, `dma.allow`, anda entero
+en x86_64 y en aarch64 informa que todavía no se programa (deuda 14).
 
 Lo que sí existe:
 
@@ -158,7 +160,7 @@ Lo que sí existe:
 | **Tablas de páginas propias** (D12) | Andando en las dos. Identity map con páginas de 1 GiB; MMIO no cacheable. La raíz se relee del registro y se verifica contra el mapa. |
 | **Timbre del cable serie** | Andando en las dos. El núcleo duerme entre pedidos en vez de preguntarle al UART byte por byte. APIC + IO-APIC en x86_64, GIC en aarch64. Es la misma maquinaria que va a necesitar `irq.install`. |
 | **Captura de faults** (P5, D7) | Andando en las dos. Causa + crudo + dirección + registros. Autotest de breakpoint en cada arranque. Todavía no viaja por CBOR ni vuelve al agente. |
-| El verbo que falta | `dma.allow` — el IOMMU. |
+| **`dma.allow`** (D8) | Andando en x86_64 con VT-d: tablas de traducción por dispositivo, grano de 4 KiB, y el IOMMU **encendido desde el arranque** — sin declarar nada, ningún aparato llega a ninguna parte. En aarch64 la máquina informa su SMMUv3 y el kernel todavía no lo programa; lo dice en vez de callarlo (deuda 14). |
 
 Verificado el 2026-08-30 contra dos fuentes independientes: el mapa que imprime el kernel en
 aarch64 coincide con el device tree que genera QEMU (`memory@40000000` → primera región en esa
@@ -267,6 +269,22 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
    algo durante horas mientras el agente no está—, y encaja con D14: el resultado sería otro
    estado de la máquina que sobrevive a la desconexión.
 
+14. **En aarch64 el SMMUv3 se informa pero no se programa.** La IORT dice dónde está y
+   `describe` lo publica, pero `enable_iommu` devuelve error y `dma.allow` también. Es a
+   propósito: aceptar el pedido y no hacer nada dejaría al agente escribiendo drivers contra
+   una garantía que no existe, y el síntoma aparecería lejos de la causa (P4). Mientras tanto,
+   en esa arquitectura un DMA mal apuntado sigue siendo corrupción silenciosa.
+
+   Lo que falta es la máquina de estados del SMMUv3: tabla de streams, descriptores de
+   contexto y cola de comandos. Es más trabajo que VT-d, no más difícil.
+
+15. **Un BAR que asignó el firmware puede no estar en el mapa de memoria.** `mem.claim` por
+   dirección exacta lo rechaza con `unmapped`, así que el agente no puede leer ni escribir los
+   registros de ese aparato con `mem.read`/`mem.write` — solo desde su propio código en `exec`,
+   porque el identity map cubre el bloque de 1 GiB entero aunque el mapa no liste el rango.
+   Apareció escribiendo la prueba del IOMMU. No bloquea nada, pero es una asimetría que un
+   agente va a encontrar y hoy no está explicada por ningún lado.
+
 11. **Los atributos de cacheabilidad que informa UEFI se descartan.** D12 anda igual porque la
    cacheabilidad se deduce de la *clase* de cada región, pero UEFI informa además atributos por
    región (`UC`, `WC`, `WT`, `WB`) que son más precisos que esa deducción. Mientras el grano del
@@ -359,8 +377,9 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
 
 1. **Dónde se publica el código.** Hay repositorio git local desde el Hito 1 (rama `main`).
    El alojamiento remoto sigue sin definir: repo aparte, no en empujoneducativo.
-2. **Por dónde seguir.** Queda **un solo verbo**: `dma.allow`, el IOMMU — el más grande del
-   proyecto y el que más gana con silicio real.
+2. **Por dónde seguir.** **Los once verbos andan.** Lo que queda es emparejar las dos
+   arquitecturas: el SMMUv3 de aarch64 (deuda 14) es lo único que un agente puede pedir y
+   recibir en una y no en la otra.
 
    Y quedó destrabada la restricción de D29 que la deuda 12 dejó pendiente: ahora que `exec`
    puede elegir núcleo, exigir `supervised` en el del protocolo ya **no** deja `raw` sin lugar

@@ -35,7 +35,11 @@ cp -f "$AAVMF_VARS" target/AAVMF_VARS-aarch64.fd
 #
 # El costo es que Ctrl-A X no sale. Se sale con Ctrl-C.
 exec qemu-system-aarch64 \
-    -machine virt -cpu cortex-a57 -m 512 \
+    `# D8: el IOMMU va encendido por defecto. Y el aparato 'edu' es un motor de` \
+    `# DMA que se maneja con cuatro escrituras: es lo que permite comprobar que` \
+    `# el IOMMU bloquea de verdad, en vez de creerle al kernel.` \
+    -machine virt,iommu=smmuv3 -cpu cortex-a57 -m 512 \
+    -device edu \
     -drive if=pflash,format=raw,unit=0,readonly=on,file="$AAVMF_CODE" \
     -drive if=pflash,format=raw,unit=1,file=target/AAVMF_VARS-aarch64.fd \
     -drive format=raw,file=fat:rw:target/esp-aarch64 \

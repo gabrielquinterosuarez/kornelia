@@ -60,6 +60,32 @@ impl Platform for Fake {
 
     fn wake_core(&mut self, _id: u64) {}
 
+    unsafe fn enable_iommu(
+        &mut self,
+        _hw: &crate::acpi::Hardware,
+    ) -> Result<&'static str, &'static str> {
+        Err("la plataforma de prueba no tiene IOMMU")
+    }
+
+    fn iommu_enabled(&self) -> bool {
+        false
+    }
+
+    fn dma_faults(&self) -> Option<u64> {
+        None
+    }
+
+    unsafe fn set_dma_access(
+        &mut self,
+        _hw: &crate::acpi::Hardware,
+        _device: u32,
+        _start: u64,
+        _bytes: u64,
+        _allow: bool,
+    ) -> Result<(), &'static str> {
+        Ok(())
+    }
+
     unsafe fn exec(
         &mut self,
         _entry: u64,

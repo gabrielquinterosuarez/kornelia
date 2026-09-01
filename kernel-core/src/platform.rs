@@ -229,6 +229,69 @@ pub trait Platform {
     /// reclamar: sería quitarle el piso a quien está contestando el pedido.
     fn this_core(&self) -> u64;
 
+    /// Enciende el IOMMU **antes de que el agente pida nada** (D8).
+    ///
+    /// Encendido y sin nada declarado, un aparato no llega a ninguna parte. Ese
+    /// es el estado que hace que `dma.allow` signifique algo: si el kernel lo
+    /// dejara apagado hasta el primer pedido, todo lo que el agente no declaró
+    /// estaría permitido, y la declaración no declararía nada.
+    ///
+    /// No es un guardarraíl del kernel: es el punto de partida contra el que el
+    /// agente declara (P6). Encendido, lo que el agente permite lo hace cumplir
+    /// el silicio; apagado, permitir sería decorativo.
+    ///
+    /// # Safety
+    ///
+    /// Solo después de `ExitBootServices`: el firmware usa DMA para leer el
+    /// disco, y apagarle el paso mientras corre le saca el piso.
+    unsafe fn enable_iommu(&mut self, hw: &Hardware) -> Result<&'static str, &'static str>;
+
+    /// Si el IOMMU está traduciendo de verdad **en este momento**.
+    ///
+    /// Se pregunta al silicio, no a una bandera nuestra: la diferencia entre
+    /// "lo encendimos" y "está encendido" es justo la que hace que una promesa
+    /// sea comprobable (P4). Y el agente la necesita para saber si `dma.allow`
+    /// significa algo en esta máquina.
+    fn iommu_enabled(&self) -> bool;
+
+    /// Lo que el IOMMU anotó: si hubo algún DMA que no estaba permitido.
+    ///
+    /// Es la parte de P5 que le toca al silicio. Un acceso negado no se pierde:
+    /// queda registrado, y el agente lo puede mirar para saber que su driver
+    /// apuntó a donde no debía — en vez de encontrarse memoria distinta sin
+    /// explicación, que es lo que pasaba antes de que el IOMMU existiera.
+    ///
+    /// `None` si esta máquina no tiene con qué contarlo.
+    fn dma_faults(&self) -> Option<u64>;
+
+    /// Declara qué memoria puede tocar un dispositivo por su cuenta (D8).
+    ///
+    /// El IOMMU es una MMU entre el aparato y la RAM. Sin él, un puntero mal
+    /// puesto en el registro de una placa no da fault: da memoria distinta, en
+    /// silencio y en cualquier parte — el peor error posible para un agente que
+    /// está depurando el driver que acaba de escribir.
+    ///
+    /// No es un guardarraíl: el kernel no decide nada, hace cumplir lo que el
+    /// agente **declaró** (P6). Lo que sí hace es no dejarlo abierto por las
+    /// dudas — sin nada declarado, un aparato no llega a ninguna parte.
+    ///
+    /// `device` es el número con el que **el bus** nombra al aparato, que es lo
+    /// que el silicio ve llegar en cada pedido de DMA: en PCIe, bus, dispositivo
+    /// y función juntos.
+    ///
+    /// # Safety
+    ///
+    /// El rango tiene que estar mapeado. Lo que el aparato haga adentro es
+    /// asunto del agente (P2).
+    unsafe fn set_dma_access(
+        &mut self,
+        hw: &Hardware,
+        device: u32,
+        start: u64,
+        bytes: u64,
+        allow: bool,
+    ) -> Result<(), &'static str>;
+
     /// Despierta a un núcleo que está durmiendo esperando trabajo.
     ///
     /// Es un timbre de núcleo a núcleo: un IPI por el APIC en x86_64, un SGI

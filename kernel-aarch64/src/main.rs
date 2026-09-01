@@ -128,6 +128,37 @@ impl Platform for AArch64 {
         smp::start(hw.psci, id, slot)
     }
 
+    unsafe fn enable_iommu(
+        &mut self,
+        _hw: &kernel_core::acpi::Hardware,
+    ) -> Result<&'static str, &'static str> {
+        Err("todavia no se programa el SMMUv3 de esta maquina")
+    }
+
+    fn iommu_enabled(&self) -> bool {
+        // Todavia no se programa el SMMUv3, asi que no traduce nada.
+        false
+    }
+
+    fn dma_faults(&self) -> Option<u64> {
+        None
+    }
+
+    unsafe fn set_dma_access(
+        &mut self,
+        _hw: &kernel_core::acpi::Hardware,
+        _device: u32,
+        _start: u64,
+        _bytes: u64,
+        _allow: bool,
+    ) -> Result<(), &'static str> {
+        // La maquina informa un SMMUv3 y todavia no se lo programa. Decirlo es
+        // mejor que aceptar el pedido y no hacer nada: un agente que cree que
+        // declaro un permiso y no lo declaro escribe un driver contra una
+        // suposicion falsa, y el sintoma aparece lejos de la causa (P4).
+        Err("todavia no se programa el SMMUv3 de esta maquina")
+    }
+
     fn wake_core(&mut self, id: u64) {
         irq::wake(id);
     }

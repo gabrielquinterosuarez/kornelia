@@ -59,7 +59,7 @@ elif ! command -v python3 >/dev/null; then
 else
     for arch in x86_64 aarch64; do
         step "arranca $arch y contesta el protocolo"
-        output=$(timeout 240 ./scripts/client.py --arch "$arch" --smp 4 --what memory,tables --memory --exec --cores --mailbox --doorbell --handler --during --permission --supervised --on-core 2>&1 || true)
+        output=$(timeout 240 ./scripts/client.py --arch "$arch" --smp 4 --what memory,tables --memory --exec --cores --mailbox --doorbell --handler --during --permission --supervised --on-core --dma 2>&1 || true)
 
         # Lo que tiene que haber dicho en el banner de texto.
         for expected in "arquitectura: $arch" "memoria:" "tablas:" \
@@ -140,6 +140,23 @@ else
         if ! grep -qFe "trabajo en otro nucleo: ok" <<<"$output"; then
             bad "$arch no le puede dar trabajo a un nucleo reclamado"
             printf '%s\n' "$output" | grep -E "FALLA:|corriendo|nucleo reclamado" | head -10
+        fi
+
+        # Y el IOMMU (D8). La prueba no es lo que el kernel dice: se le pide a
+        # un aparato de verdad que escriba en la memoria del agente **sin haberlo
+        # declarado** y la memoria tiene que quedar intacta; declarado, la misma
+        # escritura tiene que llegar; y al soltar el reclamo, dejar de llegar.
+        #
+        # En x86_64 se exige que ande. En aarch64 todavia no se programa el
+        # SMMUv3, y lo que se exige es que **lo diga** en vez de callarlo.
+        if [ "$arch" = "x86_64" ]; then
+            expected_dma="dma: ok"
+        else
+            expected_dma="dma: el kernel todavia no programa este iommu"
+        fi
+        if ! grep -qFe "$expected_dma" <<<"$output"; then
+            bad "$arch no cerro la prueba del IOMMU"
+            printf '%s\n' "$output" | grep -E "FALLA:|iommu|dma|memoria quedo" | head -10
         fi
 
         # Y la mitad de arriba de D27: el agente declara con que privilegio

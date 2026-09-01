@@ -118,6 +118,28 @@ pub struct Pcie {
     pub bus_end: u8,
 }
 
+/// Donde esta el IOMMU, y de que clase es.
+///
+/// El IOMMU es lo que decide **que memoria puede tocar un aparato** cuando el
+/// aparato escribe por su cuenta (DMA). Sin el, un puntero mal puesto en un
+/// registro de un dispositivo pisa cualquier parte de la RAM sin que nadie se
+/// entere: no hay fault, no hay aviso, solo memoria distinta (D8).
+///
+/// Las dos arquitecturas lo llaman distinto y lo publican en tablas distintas —
+/// DMAR en x86_64, IORT en aarch64— pero lo que hace es lo mismo, asi que el
+/// vocabulario normalizado es este (D24).
+#[derive(Clone, Copy)]
+pub struct Iommu {
+    /// Como lo llama la maquina: `vt-d` o `smmuv3`. Viaja tal cual por el
+    /// protocolo, sin traducir (P4).
+    pub kind: &'static str,
+    /// Donde estan sus registros, en memoria.
+    pub base: u64,
+    /// Cuantos bits de direccion maneja. En VT-d lo dice la DMAR; en SMMUv3
+    /// hay que leerlo de los registros, asi que aca es cero.
+    pub address_width: u8,
+}
+
 /// Lo que se pudo leer de ACPI.
 #[derive(Clone, Copy)]
 pub struct Hardware {
@@ -132,6 +154,8 @@ pub struct Hardware {
     pub overrides: &'static [Override],
     /// Donde esta el puerto serie, si la maquina lo dice.
     pub serial: Option<Serial>,
+    /// El IOMMU, si la maquina tiene uno (D8).
+    pub iommu: Option<Iommu>,
     /// Las firmas de todas las tablas que hay, se interpreten o no. Informar
     /// que existe algo que este kernel todavia no lee es mas util que callarlo
     /// (P4).
@@ -148,6 +172,7 @@ impl Hardware {
             ioapic: None,
             overrides: &[],
             serial: None,
+            iommu: None,
             signatures: &[],
         }
     }
@@ -280,6 +305,8 @@ pub unsafe fn read(rsdp: &Rsdp) -> Hardware {
             b"APIC" => read_madt(table, length, &mut hw, &mut n_cpus, &mut n_over),
             b"SPCR" => hw.serial = read_spcr(table, length),
             b"MCFG" => hw.pcie = read_mcfg(table, length),
+            b"DMAR" => hw.iommu = read_dmar(table, length),
+            b"IORT" => hw.iommu = read_iort(table, length),
             b"FACP" => hw.psci = read_fadt(table, length),
             _ => {}
         }
@@ -465,6 +492,72 @@ unsafe fn read_spcr(table: u64, length: usize) -> Option<Serial> {
 /// # Safety
 ///
 /// `tabla` tiene que apuntar a una MCFG ya verificada.
+/// La DMAR: donde esta el IOMMU de Intel (VT-d).
+///
+/// Despues del encabezado vienen un byte con el ancho de direccion, uno de
+/// banderas, diez reservados, y ahi arranca una lista de estructuras. La
+/// primera de tipo 0 (DRHD) es una unidad de traduccion, y lo que importa de
+/// ella es la direccion de sus registros.
+///
+/// # Safety
+///
+/// `table` tiene que apuntar a una DMAR ya verificada.
+unsafe fn read_dmar(table: u64, length: usize) -> Option<Iommu> {
+    // El ancho lo informa como "bits menos uno", asi que se le suma.
+    let address_width = u8_at(table, HEADER).wrapping_add(1);
+
+    let mut off = HEADER + 12;
+    while off + 4 <= length {
+        let kind = u16_at(table, off);
+        let size = u16_at(table, off + 2) as usize;
+        // Un largo de cero no avanza: seria un bucle infinito leyendo una
+        // tabla que la maquina armo mal.
+        if size < 4 || off + size > length {
+            break;
+        }
+        // Tipo 0: DRHD. Los registros arrancan 8 bytes adentro.
+        if kind == 0 && size >= 16 {
+            return Some(Iommu { kind: "vt-d", base: u64_at(table, off + 8), address_width });
+        }
+        off += size;
+    }
+    None
+}
+
+/// La IORT: donde esta el IOMMU de ARM (SMMU).
+///
+/// Es una lista de nodos con un puntero al arranque, y cada nodo dice de que
+/// tipo es. El tipo 4 es un SMMUv3, y lo que importa es su direccion base.
+///
+/// # Safety
+///
+/// `table` tiene que apuntar a una IORT ya verificada.
+unsafe fn read_iort(table: u64, length: usize) -> Option<Iommu> {
+    if HEADER + 12 > length {
+        return None;
+    }
+    let count = u32_at(table, HEADER) as usize;
+    let mut off = u32_at(table, HEADER + 4) as usize;
+
+    for _ in 0..count.min(64) {
+        if off + 16 > length {
+            break;
+        }
+        let kind = u8_at(table, off);
+        let size = u16_at(table, off + 1) as usize;
+        if size < 16 || off + size > length {
+            break;
+        }
+        // Tipo 4: SMMUv3. La direccion base esta a 16 bytes del arranque del
+        // nodo, despues de la parte comun.
+        if kind == 4 && size >= 24 {
+            return Some(Iommu { kind: "smmuv3", base: u64_at(table, off + 16), address_width: 0 });
+        }
+        off += size;
+    }
+    None
+}
+
 unsafe fn read_mcfg(table: u64, length: usize) -> Option<Pcie> {
     // Despues del encabezado hay 8 bytes reservados y ahi arrancan las
     // entradas, de 16 bytes cada una.

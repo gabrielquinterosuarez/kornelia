@@ -36,6 +36,7 @@ use crate::acpi::Hardware;
 use crate::channel;
 use crate::claims;
 use crate::cores;
+use crate::dma;
 use crate::handlers;
 use crate::machine::Machine;
 use crate::memory::Kind;
@@ -182,12 +183,13 @@ fn dispatch<P: Platform>(p: &mut P, req: &[u8], m: &Machine, hw: &Hardware) {
         "mem.claim" => mem_claim(p, id, &mut r, m),
         "mem.read" => mem_read(p, id, &mut r),
         "mem.write" => mem_write(p, id, &mut r),
-        "release" => release(p, id, &mut r),
+        "release" => release(p, id, &mut r, hw),
         "exec" => exec(p, id, &mut r),
         "core.claim" => core_claim(p, id, &mut r, hw),
         "listen" => listen(p, id, &mut r),
         "irq.install" => irq_install(p, id, &mut r, hw, false),
         "irq.install_raw" => irq_install(p, id, &mut r, hw, true),
+        "dma.allow" => dma_allow(p, id, &mut r, hw),
         _ => reply_error(p, id, "unknown verb"),
     }
 }
@@ -215,6 +217,8 @@ struct Sections {
     handlers: bool,
     /// Con que privilegios se puede correr codigo, y como se vuelve (D27).
     exec: bool,
+    /// El IOMMU: quien decide que memoria puede tocar un aparato (D8).
+    iommu: bool,
     /// Si no vino la clave `what`, se devuelve el indice (D16).
     index: bool,
 }
@@ -253,6 +257,7 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
                     Some("channel") => q.channel = true,
                     Some("handlers") => q.handlers = true,
                     Some("exec") => q.exec = true,
+                    Some("iommu") => q.iommu = true,
                     // Contestar solo con lo que se reconocio, callado, seria
                     // mentir por omision.
                     Some(_) => return reply_error(p, id, "unknown section in what"),
@@ -283,7 +288,7 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
             sections += 1;
         }
         for extra in [q.cpus, q.interrupts, q.pcie, q.cores, q.channel, q.handlers,
-                      q.exec] {
+                      q.exec, q.iommu] {
             if extra {
                 sections += 1;
             }
@@ -402,6 +407,38 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
             w.text("exec");
             write_exec::<P>(&mut w);
         }
+        if q.iommu {
+            w.text("iommu");
+            match hw.iommu {
+                None => w.null(),
+                Some(i) => {
+                    w.map(6);
+                    // Como lo llama la maquina, sin traducir (P4).
+                    w.text("kind");
+                    w.text(i.kind);
+                    w.text("address");
+                    w.uint(i.base);
+                    w.text("address_width");
+                    w.uint(i.address_width as u64);
+                    // Si esta traduciendo **ahora**, preguntado al silicio. Que
+                    // la maquina tenga IOMMU no quiere decir que el kernel se lo
+                    // este programando: decir una cosa por la otra dejaria al
+                    // agente escribiendo drivers contra una garantia que no hay.
+                    w.text("enabled");
+                    w.bool(p.iommu_enabled());
+                    // Cuantos permisos hay declarados ahora mismo (D14).
+                    w.text("grants");
+                    w.uint(dma::count() as u64);
+                    // Y lo que el silicio anoto: un DMA negado no se pierde,
+                    // queda contado. Es P5 aplicado a lo que hacen los aparatos.
+                    w.text("faults");
+                    match p.dma_faults() {
+                        None => w.null(),
+                        Some(f) => w.uint(f),
+                    }
+                }
+            }
+        }
         if q.pcie {
             w.text("pcie");
             match hw.pcie {
@@ -431,13 +468,13 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
 
 /// El indice: que hay para pedir, y cuanto de cada cosa.
 fn write_index(w: &mut Writer<'_>, m: &Machine, hw: &Hardware, arch: &str) {
-    w.map(12);
+    w.map(13);
 
     w.text("arch");
     w.text(arch);
 
     w.text("sections");
-    w.array(10);
+    w.array(11);
     w.text("memory");
     w.text("tables");
     w.text("claims");
@@ -448,6 +485,7 @@ fn write_index(w: &mut Writer<'_>, m: &Machine, hw: &Hardware, arch: &str) {
     w.text("channel");
     w.text("handlers");
     w.text("exec");
+    w.text("iommu");
 
     w.text("memory");
     w.map(2);
@@ -498,6 +536,13 @@ fn write_index(w: &mut Writer<'_>, m: &Machine, hw: &Hardware, arch: &str) {
     w.array(2);
     w.text("supervised");
     w.text("raw");
+
+    // Si esta maquina tiene quien controle lo que tocan los aparatos (D8).
+    w.text("iommu");
+    match hw.iommu {
+        None => w.null(),
+        Some(i) => w.text(i.kind),
+    }
 }
 
 /// Con que privilegio puede correr el codigo del agente, y como vuelve (D27).
@@ -713,6 +758,10 @@ struct Args<'a> {
     /// En que nucleo reclamado correr, para `exec`. Es el handle que devolvio
     /// `core.claim`. Sin esto, corre en el nucleo que atiende el protocolo.
     core: Option<u64>,
+    /// Que aparato, para `dma.allow`. Es el numero con el que **el bus** lo
+    /// nombra —en PCIe, bus, dispositivo y funcion juntos—, que es lo que el
+    /// silicio ve llegar en cada pedido de DMA.
+    device: Option<u64>,
     /// Prestados del buffer de entrada, no copiados: subir codigo maquina no
     /// puede costar una copia mas. La vida util los ata al pedido, asi que se
     /// dejan de poder usar cuando llega el siguiente — que es exactamente
@@ -734,6 +783,7 @@ fn read_args<'a>(r: &mut Reader<'a>) -> Option<Args<'a>> {
         interrupt: None,
         mode: None,
         core: None,
+        device: None,
         data: None,
     };
 
@@ -761,6 +811,7 @@ fn read_args<'a>(r: &mut Reader<'a>) -> Option<Args<'a>> {
             "interrupt" => a.interrupt = Some(r.uint()?),
             "mode" => a.mode = Some(r.text()?),
             "core" => a.core = Some(r.uint()?),
+            "device" => a.device = Some(r.uint()?),
             _ => r.skip()?,
         }
     }
@@ -878,7 +929,7 @@ fn mem_write<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
     }
 }
 
-fn release<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
+fn release<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, hw: &Hardware) {
     let Some(a) = read_args(r) else {
         return reply_error(p, id, "malformed arguments");
     };
@@ -893,6 +944,22 @@ fn release<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
             // SAFETY: el rango sigue siendo el del reclamo, alineado al bloque.
             let _ = unsafe { p.set_user_access(c.start, c.bytes, false) };
         }
+    }
+
+    // Y lo mismo con los aparatos: lo que se les permitio tocar se les quita
+    // aca. Si quedara, el proximo reclamo caeria en memoria que un aparato
+    // todavia alcanza, y eso no da fault — da memoria distinta (D8).
+    let mut revoked: [Option<dma::Grant>; dma::MAX] = [None; dma::MAX];
+    let mut n = 0;
+    dma::forget(handle, |g| {
+        if n < revoked.len() {
+            revoked[n] = Some(g);
+            n += 1;
+        }
+    });
+    for g in revoked.iter().flatten() {
+        // SAFETY: el rango sigue siendo el del reclamo, que todavia no se solto.
+        let _ = unsafe { p.set_dma_access(hw, g.device, g.start, g.bytes, false) };
     }
 
     if !claims::release(handle) {
@@ -1084,6 +1151,63 @@ fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
         }
     }
 
+    finish_reply(p, id, w);
+}
+
+// ---------------------------------------------------------------------------
+// dma.allow
+// ---------------------------------------------------------------------------
+
+/// Declara que memoria puede tocar un aparato por su cuenta (D8).
+///
+/// Es el unico verbo cuyo efecto no se ve desde el CPU: lo que cambia es lo que
+/// el **aparato** alcanza cuando escribe solo. Y no es un guardarrail — el
+/// kernel no elige nada, hace cumplir lo que el agente declaro (P6). Lo que si
+/// hace es no dejarlo abierto por las dudas: sin nada declarado, un aparato no
+/// llega a ninguna parte.
+///
+/// El permiso queda anotado para poder **sacarlo** al soltar la memoria. Un
+/// reclamo devuelto que un aparato sigue alcanzando es justo el agujero
+/// silencioso que el IOMMU viene a cerrar: el proximo reclamo cae ahi mismo.
+fn dma_allow<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, hw: &Hardware) {
+    let Some(a) = read_args(r) else {
+        return reply_error(p, id, "malformed arguments");
+    };
+    let (Some(device), Some(handle)) = (a.device, a.handle) else {
+        return reply_error(p, id, "dma.allow needs device and handle");
+    };
+    let Some(c) = claims::get(handle) else {
+        return reply_failure(p, id, claims::Error::NoSuchHandle);
+    };
+
+    // SAFETY: el rango salio de un reclamo vigente, asi que esta mapeado.
+    if let Err(e) =
+        unsafe { p.set_dma_access(hw, device as u32, c.start, c.bytes, true) }
+    {
+        return reply_error(p, id, e);
+    }
+
+    match dma::record(dma::Grant { device: device as u32, handle, start: c.start, bytes: c.bytes })
+    {
+        // Que ya estuviera no es un fallo del pedido: el silicio quedo como el
+        // agente pidio, que es lo unico que importa.
+        Err(dma::Error::Already) => {}
+        Err(e) => return reply_error(p, id, e.code()),
+        Ok(()) => {}
+    }
+
+    let out = unsafe { &mut *core::ptr::addr_of_mut!(OUTBOX) };
+    let mut w = Writer::new(out);
+    w.array(3);
+    w.uint(id);
+    w.bool(true);
+    w.map(3);
+    w.text("device");
+    w.uint(device);
+    w.text("start");
+    w.uint(c.start);
+    w.text("bytes");
+    w.uint(c.bytes);
     finish_reply(p, id, w);
 }
 
