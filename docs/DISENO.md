@@ -82,7 +82,7 @@ algo que la lista de diez no podía pedir — ver D28.
 | `mem.read(handle, off, len)` | Bytes crudos hacia afuera. |
 | `mem.write(handle, off, bytes)` | Bytes crudos hacia adentro. |
 | `core.claim(id, modo)` | Un núcleo físico. En `dedicated` es solo del agente, con el timer enmascarado. En `shared` es el núcleo que atiende el protocolo: el kernel le pide prestados microsegundos cuando llega un pedido. El núcleo del protocolo **nunca** se entrega como `dedicated`, y el kernel lo dice con los datos para que el agente decida (P4). |
-| `exec(core, handle, off, regs, mode)` | Salta a código máquina. Devuelve estado de registros + fault si lo hubo. `mode` es `supervised` o `raw` y **lo declara el agente** (D27): no tiene valor por omisión, porque elegirlo sería el kernel eligiendo. |
+| `exec(core, handle, off, regs, mode, wait)` | Salta a código máquina. Devuelve estado de registros + fault si lo hubo. `mode` es `supervised` o `raw` y **lo declara el agente** (D27): no tiene valor por omisión, porque elegirlo sería el kernel eligiendo. En el núcleo del protocolo solo se admite `supervised` (D29). Con `core`, `wait:false` contesta enseguida y el resultado queda en `describe {what:["cores"]}`. |
 | `irq.install(interrupt, handle, off)` | Instala un handler. El kernel pone prólogo, epílogo y EOI. El argumento es el número con el que **la máquina** identifica la fuente, no una ranura de tabla: eso último es modelo de x86 y no existe igual en ARM (D3). |
 | `irq.install_raw(interrupt, handle, off)` | Igual, pero el agente hace todo. Sin red de contención. **En aarch64 devuelve error**: el GIC entrega el número y el reparto es en software, así que no hay un camino más crudo que el que ya se usa — decirlo es mejor que aceptar el pedido y dar otra cosa (P4). |
 | `dma.allow(device, handle)` | Declara qué memoria puede tocar un dispositivo. Programa el IOMMU. |
@@ -156,7 +156,7 @@ Lo que sí existe:
 | **Timbre del buzón** | Andando en las dos. El agente lo toca con código máquina propio: un IPI por el APIC en x86_64, un SGI por el GIC en aarch64. **Con prioridad más baja que el cable**, así que por más que el agente inunde de llamadas el cordón pasa primero (D17, P6). El kernel cuenta cuántas veces sonó, que es lo que permite comprobarlo. |
 | **`listen`** | Andando en las dos. El kernel escucha por el cable y por el buzón, y contesta por donde le llegó (D17). El acuerdo lo publica `describe`. |
 | **`core.claim`** | Andando en las dos. PSCI en aarch64; INIT/SIPI más un trampolín de 16→32→64 bits en x86_64. El núcleo nuevo copia las tablas de páginas y la captura de faults, y avisa por un atómico. |
-| **Trabajo en un núcleo reclamado** | Andando en las dos. `exec {core}` deja el pedido en un buzón por núcleo y el núcleo **duerme** hasta que lo despierta un IPI/SGI. Comprobado con código del agente que informa en qué núcleo corre. El del protocolo espera **con los timbres abiertos**, así un handler del agente corre y el cordón se sigue atendiendo mientras dura el trabajo. Sincrónico y con tope (deuda 13). |
+| **Trabajo en un núcleo reclamado** | Andando en las dos. `exec {core}` deja el pedido en un buzón por núcleo y el núcleo **duerme** hasta que lo despierta un IPI/SGI. Comprobado con código del agente que informa en qué núcleo corre. El del protocolo espera **con los timbres abiertos**, así un handler del agente corre y el cordón se sigue atendiendo mientras dura el trabajo. **Y se puede no esperar** (`wait:false`): el resultado queda en `describe {what:["cores"]}` hasta que se mande otro trabajo, así que sobrevive a la desconexión (D14). |
 | **`exec`** | Andando en las dos. **El fault vuelve como respuesta, no como muerte** (P5): el handler desvía el regreso al punto de recuperación en vez de detener el núcleo. El agente corre en pila propia y las excepciones en otra, así que ni destruyendo el puntero de pila se lleva la máquina. |
 | **Tablas de páginas propias** (D12) | Andando en las dos. Identity map con páginas de 1 GiB; MMIO no cacheable. La raíz se relee del registro y se verifica contra el mapa. |
 | **Timbre del cable serie** | Andando en las dos. El núcleo duerme entre pedidos en vez de preguntarle al UART byte por byte. APIC + IO-APIC en x86_64, GIC en aarch64. Es la misma maquinaria que va a necesitar `irq.install`. |
@@ -264,16 +264,29 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
    que tocan las tablas globales de reclamos y de núcleos— y todos toman el mismo candado. **No
    está diagnosticado**; queda anotado para no darlo por inexistente si vuelve a pasar.
 
-13. **Un `exec` en otro núcleo es sincrónico, y eso le pone techo a lo que el agente puede
-   correr ahí.** El núcleo del protocolo deja el trabajo y **espera**, con un tope de vueltas para
-   que un núcleo que no contesta no se lleve puesto el cordón umbilical (D5, D17). El precio es
-   que un trabajo legítimamente largo se informa igual que uno perdido, y el núcleo queda marcado
-   como fallado sin serlo.
+13. **~~Un `exec` en otro núcleo es sincrónico.~~ RESUELTO.** `exec {core, wait:false}` deja el
+   trabajo y **contesta enseguida**; el resultado se busca después en
+   `describe {what:["cores"]}`, donde cada núcleo trae un `work` que dice si está corriendo o
+   qué contestó. Un trabajo largo ya no se informa igual que un núcleo perdido, y el núcleo no
+   queda marcado como fallado sin serlo. La forma que espera sigue estando y sigue siendo la de
+   por omisión.
 
-   Lo que falta es la forma asincrónica: `exec` devuelve enseguida un handle de trabajo y el
-   agente pregunta después si terminó. Es lo que un núcleo `dedicated` pide de verdad —correr
-   algo durante horas mientras el agente no está—, y encaja con D14: el resultado sería otro
-   estado de la máquina que sobrevive a la desconexión.
+   **No hizo falta un verbo nuevo ni un handle de trabajo**, aunque esta deuda pedía uno. Un
+   núcleo corre un trabajo por vez, así que el handle del núcleo ya lo identifica; inventarle
+   otro habría sido un nombre nuevo para algo que ya tenía nombre. Y el resultado va en
+   `describe` porque **es estado de la máquina**, que es lo que `describe` sirve (P4) — con lo
+   cual sobrevive a la desconexión sin código extra, que era justo lo que la deuda pedía de D14:
+   el agente puede mandar algo largo, irse, y volver a buscarlo.
+
+   `wait` **sí** tiene valor por omisión, a diferencia de `mode`, y la diferencia no es de
+   comodidad: `mode` declara con qué privilegio corre el código del agente —una propiedad del
+   código, que solo él puede decidir (D27)—, mientras que `wait` dice cómo quiere la respuesta
+   el que pregunta. Ahí el kernel no está eligiendo nada sobre el agente.
+
+   **Lo que queda:** un núcleo cuyo código se colgó queda ocupado. El agente lo ve —`work` dice
+   `running` para siempre— pero no lo puede recuperar. Un bucle infinito no es un fault y el
+   kernel no tiene cómo distinguirlo de un trabajo largo, que es exactamente la razón por la que
+   este verbo dejó de esperar.
 
 14. **~~En aarch64 el SMMUv3 se informa pero no se programa.~~ RESUELTO.** `dma.allow` hace lo
    mismo en las dos arquitecturas, y lo comprueba el mismo aparato de verdad: bloqueado sin

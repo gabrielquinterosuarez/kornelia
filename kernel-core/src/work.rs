@@ -103,28 +103,25 @@ impl Error {
 /// algo que hizo el agente (D5, D17).
 const WAIT_ROUNDS: u64 = 200_000_000;
 
-/// Le manda trabajo a un nucleo reclamado y espera la respuesta.
+/// Le deja el trabajo a un nucleo y **vuelve enseguida** (deuda 13).
+///
+/// Es la mitad de abajo de `run_on`, y tambien la forma asincronica completa:
+/// el agente manda y despues pregunta con `progress`. Un nucleo corre un trabajo
+/// por vez, asi que **el handle del nucleo ya identifica el trabajo** — no hace
+/// falta inventarle un handle propio.
 ///
 /// # Safety
 ///
 /// Lo mismo que `Platform::exec`: `job.entry` tiene que apuntar a memoria
 /// mapeada y ejecutable. Lo que haya ahi puede ser cualquier cosa (P2).
-pub unsafe fn run_on<P: Platform>(p: &mut P, handle: u64, job: Job) -> Result<Outcome, Error> {
+pub unsafe fn submit<P: Platform>(p: &mut P, handle: u64, job: Job) -> Result<usize, Error> {
     let Some(slot) = cores::slot_of(handle) else {
         return Err(Error::NoSuchCore);
     };
     if !cores::has_arrived(slot) {
         return Err(Error::NotReady);
     }
-
-    // Del vacio al pedido. Si no estaba vacio, ese nucleo esta ocupado con otra
-    // cosa y no se encola: el agente ya sabe que le mando.
-    if STATE[slot]
-        .compare_exchange(EMPTY, RUNNING, Ordering::Acquire, Ordering::Relaxed)
-        .is_err()
-    {
-        return Err(Error::Busy);
-    }
+    reserve(slot)?;
 
     (*core::ptr::addr_of_mut!(JOBS))[slot] = job;
     // `Release`: el pedido tiene que estar escrito **antes** de que el otro
@@ -133,6 +130,66 @@ pub unsafe fn run_on<P: Platform>(p: &mut P, handle: u64, job: Job) -> Result<Ou
     STATE[slot].store(PENDING, Ordering::Release);
 
     p.wake_core(cores::id_of(slot).unwrap_or(0));
+    Ok(slot)
+}
+
+/// Toma la ranura para un pedido nuevo.
+///
+/// Vale tanto la vacia como la que tiene una respuesta que nadie recogio: un
+/// resultado viejo no reserva el nucleo para siempre. Lo que no vale es pisar
+/// un trabajo en curso — no se encola, porque el agente ya sabe lo que mando.
+fn reserve(slot: usize) -> Result<(), Error> {
+    for from in [EMPTY, ANSWERED] {
+        if STATE[slot]
+            .compare_exchange(from, RUNNING, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
+            return Ok(());
+        }
+    }
+    Err(Error::Busy)
+}
+
+/// En que anda el trabajo de ese nucleo, sin consumirlo.
+///
+/// `None` si nunca corrio nada. Si termino, el resultado **queda ahi** hasta
+/// que se le mande otro trabajo: asi el agente puede desconectarse y volver a
+/// buscarlo, que es lo mismo que D14 hace con los reclamos.
+pub fn progress(handle: u64) -> Option<Progress> {
+    let slot = cores::slot_of(handle)?;
+    match STATE[slot].load(Ordering::Acquire) {
+        EMPTY => None,
+        ANSWERED => Some(Progress::Done(answer_of(slot))),
+        _ => Some(Progress::Running),
+    }
+}
+
+/// Lo que se sabe del trabajo de un nucleo.
+pub enum Progress {
+    /// Se le mando y todavia no contesto.
+    Running,
+    /// Contesto esto. Sigue disponible hasta el proximo trabajo.
+    Done(Outcome),
+}
+
+/// La respuesta que dejo el nucleo de esa ranura.
+///
+/// # Panics
+///
+/// No: solo se llama con la ranura en `ANSWERED`, y ahi la respuesta ya esta
+/// escrita entera — lo garantiza el `Release` del que la escribio.
+fn answer_of(slot: usize) -> Outcome {
+    let a = unsafe { (*core::ptr::addr_of!(ANSWERS))[slot] };
+    Outcome { faulted: a.faulted, regs: a.regs, fault: a.fault }
+}
+
+/// Le manda trabajo a un nucleo reclamado y **espera** la respuesta.
+///
+/// # Safety
+///
+/// Lo mismo que `submit`.
+pub unsafe fn run_on<P: Platform>(p: &mut P, handle: u64, job: Job) -> Result<Outcome, Error> {
+    let slot = submit(p, handle, job)?;
 
     let mut rounds = 0u64;
     while STATE[slot].load(Ordering::Acquire) != ANSWERED {
@@ -147,9 +204,10 @@ pub unsafe fn run_on<P: Platform>(p: &mut P, handle: u64, job: Job) -> Result<Ou
         core::hint::spin_loop();
     }
 
-    let a = (*core::ptr::addr_of!(ANSWERS))[slot];
-    STATE[slot].store(EMPTY, Ordering::Release);
-    Ok(Outcome { faulted: a.faulted, regs: a.regs, fault: a.fault })
+    // La ranura queda en `ANSWERED` y no se vacia: el resultado tiene que
+    // seguir estando para el que pregunte despues por `describe`. La libera el
+    // proximo trabajo, no el que la lee.
+    Ok(answer_of(slot))
 }
 
 /// El bucle de un nucleo reclamado: dormir, despertarse, correr, contestar.
@@ -199,7 +257,13 @@ pub fn reset() {
     }
 }
 
-/// Si esa ranura tiene un pedido en curso. Lo informa `describe`.
+/// Si esa ranura tiene un pedido **en curso**. Lo informa `describe`.
+///
+/// Una respuesta que nadie recogio no cuenta: el nucleo ya termino y esta libre
+/// para recibir otra cosa.
 pub fn is_busy(slot: usize) -> bool {
-    slot < cores::MAX && STATE[slot].load(Ordering::Relaxed) != EMPTY
+    if slot >= cores::MAX {
+        return false;
+    }
+    matches!(STATE[slot].load(Ordering::Relaxed), PENDING | RUNNING)
 }

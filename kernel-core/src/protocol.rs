@@ -37,6 +37,7 @@ use crate::channel;
 use crate::claims;
 use crate::cores;
 use crate::dma;
+use crate::fault::Outcome;
 use crate::handlers;
 use crate::machine::Machine;
 use crate::memory::Kind;
@@ -369,7 +370,7 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
             w.text("cores");
             w.array(cores::count());
             for c in cores::all() {
-                write_core(&mut w, &c);
+                write_core::<P>(&mut w, &c);
             }
         }
         if q.handlers {
@@ -765,6 +766,14 @@ struct Args<'a> {
     /// En que nucleo reclamado correr, para `exec`. Es el handle que devolvio
     /// `core.claim`. Sin esto, corre en el nucleo que atiende el protocolo.
     core: Option<u64>,
+    /// Si `exec {core}` espera la respuesta o vuelve enseguida (deuda 13).
+    ///
+    /// Este **si** tiene valor por omision, a diferencia de `mode`, y la
+    /// diferencia no es de comodidad: `mode` declara con que privilegio corre
+    /// el codigo del agente —una propiedad del codigo, que solo el puede
+    /// decidir (D27)— mientras que `wait` dice como quiere la respuesta el que
+    /// pregunta. El kernel no esta eligiendo nada sobre el agente.
+    wait: Option<bool>,
     /// Que aparato, para `dma.allow`. Es el numero con el que **el bus** lo
     /// nombra —en PCIe, bus, dispositivo y funcion juntos—, que es lo que el
     /// silicio ve llegar en cada pedido de DMA.
@@ -790,6 +799,7 @@ fn read_args<'a>(r: &mut Reader<'a>) -> Option<Args<'a>> {
         interrupt: None,
         mode: None,
         core: None,
+        wait: None,
         device: None,
         data: None,
     };
@@ -818,6 +828,7 @@ fn read_args<'a>(r: &mut Reader<'a>) -> Option<Args<'a>> {
             "interrupt" => a.interrupt = Some(r.uint()?),
             "mode" => a.mode = Some(r.text()?),
             "core" => a.core = Some(r.uint()?),
+            "wait" => a.wait = Some(r.bool()?),
             "device" => a.device = Some(r.uint()?),
             _ => r.skip()?,
         }
@@ -1095,6 +1106,19 @@ fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
         // nucleo del protocolo no corre nada del agente aca, solo espera — y
         // con tope, asi que el cordon no se pierde si el otro no contesta.
         Some(handle) => {
+            let job = work::Job { entry, region: (c.start, c.bytes), supervised };
+
+            // Sin esperar: se deja el trabajo y se contesta enseguida (deuda
+            // 13). El resultado se busca despues con `describe {what:["cores"]}`
+            // — el nucleo corre un trabajo por vez, asi que su handle **ya
+            // identifica el trabajo** y no hace falta inventarle otro.
+            if !a.wait.unwrap_or(true) {
+                return match unsafe { work::submit(p, handle, job) } {
+                    Err(e) => reply_error(p, id, e.code()),
+                    Ok(_) => reply_exec(p, id, supervised, a.core, None),
+                };
+            }
+
             // Esperando **con los timbres abiertos**. En el nucleo del
             // protocolo la interrupcion tiene prioridad (D29), y esperar a otro
             // nucleo no es una excepcion: si se esperara sordo, un handler que
@@ -1103,13 +1127,7 @@ fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
             // el codigo que dispara una interrupcion pasa a correr en el nucleo
             // reclamado, y del otro lado no habia quien la atendiera.
             p.set_interrupts(true);
-            let r = unsafe {
-                work::run_on(p, handle, work::Job {
-                    entry,
-                    region: (c.start, c.bytes),
-                    supervised,
-                })
-            };
+            let r = unsafe { work::run_on(p, handle, job) };
             p.set_interrupts(false);
             match r {
                 Err(e) => return reply_error(p, id, e.code()),
@@ -1128,6 +1146,22 @@ fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
         }
     };
 
+    reply_exec(p, id, supervised, a.core, Some(outcome));
+}
+
+/// La respuesta de `exec`, igual haya terminado o recien empezado.
+///
+/// Una sola forma a proposito: el agente no tiene que leer dos respuestas
+/// distintas segun como pidio. `state` dice cual de las dos es, y lo que
+/// todavia no existe viene en nulo en vez de faltar — un campo ausente y uno
+/// vacio se parecen demasiado del lado del que parsea.
+fn reply_exec<P: Platform>(
+    p: &mut P,
+    id: u64,
+    supervised: bool,
+    core: Option<u64>,
+    outcome: Option<Outcome>,
+) {
     let out = unsafe { &mut *core::ptr::addr_of_mut!(OUTBOX) };
     let mut w = Writer::new(out);
     w.array(3);
@@ -1136,7 +1170,7 @@ fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
     // del pedido — es su resultado, y va adentro.
     w.bool(true);
 
-    w.map(5);
+    w.map(6);
 
     // Con que privilegio corrio de verdad, y donde. Se devuelven aunque el
     // agente los acabe de mandar: la respuesta tiene que poder leerse sola.
@@ -1144,11 +1178,33 @@ fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
     w.text(if supervised { "supervised" } else { "raw" });
 
     w.text("core");
-    match a.core {
+    match core {
         Some(h) => w.uint(h),
         None => w.null(),
     }
 
+    w.text("state");
+    w.text(if outcome.is_some() { "done" } else { "running" });
+
+    match outcome {
+        None => {
+            w.text("faulted");
+            w.null();
+            w.text("registers");
+            w.null();
+            w.text("fault");
+            w.null();
+        }
+        Some(o) => write_outcome::<P>(&mut w, &o),
+    }
+
+    finish_reply(p, id, w);
+}
+
+/// Lo que dejo un `exec`: si fallo, los registros y el fault.
+///
+/// Escribe **tres pares** en el mapa que ya empezo quien llama.
+fn write_outcome<P: Platform>(w: &mut Writer<'_>, outcome: &Outcome) {
     w.text("faulted");
     w.bool(outcome.faulted);
 
@@ -1183,8 +1239,6 @@ fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
             }
         }
     }
-
-    finish_reply(p, id, w);
 }
 
 // ---------------------------------------------------------------------------
@@ -1314,18 +1368,42 @@ fn core_claim<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, hw: &Hardware
     w.array(3);
     w.uint(id);
     w.bool(true);
-    write_core(&mut w, &cores::Core { handle, id: request, state: cores::State::Idle });
+    write_core::<P>(&mut w, &cores::Core { handle, id: request, state: cores::State::Idle });
     finish_reply(p, id, w);
 }
 
-fn write_core(w: &mut Writer<'_>, c: &cores::Core) {
-    w.map(3);
+/// Un nucleo reclamado, y en que anda el trabajo que se le mando.
+///
+/// `work` es donde el agente busca el resultado de un `exec {wait:false}`
+/// (deuda 13). Va aca y no en un verbo nuevo porque **es estado de la maquina**,
+/// y `describe` es donde la maquina cuenta lo que es (P4). Ademas sobrevive a
+/// la desconexion, igual que los reclamos (D14): el agente puede mandar algo
+/// largo, irse, y volver a buscarlo.
+fn write_core<P: Platform>(w: &mut Writer<'_>, c: &cores::Core) {
+    w.map(4);
     w.text("handle");
     w.uint(c.handle);
     w.text("id");
     w.uint(c.id);
     w.text("state");
     w.text(c.state.code());
+
+    w.text("work");
+    match work::progress(c.handle) {
+        // Nunca corrio nada. No es lo mismo que "termino sin resultado".
+        None => w.null(),
+        Some(work::Progress::Running) => {
+            w.map(1);
+            w.text("state");
+            w.text("running");
+        }
+        Some(work::Progress::Done(o)) => {
+            w.map(4);
+            w.text("state");
+            w.text("done");
+            write_outcome::<P>(w, &o);
+        }
+    }
 }
 
 fn reply_core_failure<P: Platform>(p: &mut P, id: u64, e: cores::Error) {

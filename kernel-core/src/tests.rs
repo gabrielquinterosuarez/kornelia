@@ -1151,6 +1151,53 @@ fn a_core_that_has_not_arrived_gets_no_work() {
 }
 
 #[test]
+fn a_core_with_nothing_sent_reports_no_work() {
+    with_clean_cores(|| {
+        crate::work::reset();
+        let (slot, handle) = cores::reserve(7).unwrap();
+        cores::arrived(slot, 7);
+        // Ni corriendo ni terminado: nunca corrio nada. Son tres estados y no
+        // dos — "no le mande nada" no es lo mismo que "termino sin resultado".
+        assert!(crate::work::progress(handle).is_none());
+    })
+}
+
+#[test]
+fn work_sent_without_waiting_is_reported_as_running() {
+    with_clean_cores(|| {
+        crate::work::reset();
+        let (slot, handle) = cores::reserve(7).unwrap();
+        cores::arrived(slot, 7);
+        let job = crate::work::Job { entry: 0x1000, region: (0x1000, 0x1000), supervised: false };
+        // SAFETY: nadie corre nada — no hay un nucleo de verdad del otro lado,
+        // asi que el pedido se queda en el buzon.
+        assert!(unsafe { crate::work::submit(&mut Fake::new(), handle, job) }.is_ok());
+        assert!(matches!(
+            crate::work::progress(handle),
+            Some(crate::work::Progress::Running)
+        ));
+        // Y el nucleo cuenta como ocupado: se le mando algo que no contesto.
+        assert!(crate::work::is_busy(slot));
+    })
+}
+
+#[test]
+fn a_core_already_running_takes_no_more_work() {
+    with_clean_cores(|| {
+        crate::work::reset();
+        let (slot, handle) = cores::reserve(7).unwrap();
+        cores::arrived(slot, 7);
+        let job = crate::work::Job { entry: 0x1000, region: (0x1000, 0x1000), supervised: false };
+        // SAFETY: igual que arriba, no llega a correr nada.
+        unsafe { crate::work::submit(&mut Fake::new(), handle, job) }.unwrap();
+        // No se encola: el agente ya sabe lo que mando, y guardarle un segundo
+        // pedido seria el kernel decidiendo un orden por el (P2).
+        let e = unsafe { crate::work::submit(&mut Fake::new(), handle, job) };
+        assert_eq!(e.err(), Some(crate::work::Error::Busy));
+    })
+}
+
+#[test]
 fn a_core_is_not_alive_until_it_says_so() {
     with_clean_cores(|| {
         let (slot, _) = cores::reserve(7).unwrap();

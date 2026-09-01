@@ -125,6 +125,12 @@ deja el pedido en un buzón por núcleo, el núcleo **duerme** hasta que lo
 despierta un IPI/SGI, corre y contesta. Lo comprueba el código del agente
 diciendo en qué núcleo está.
 
+**Y se puede no esperar:** con `wait: false` el kernel contesta enseguida y el
+resultado queda en `describe {what:["cores"]}` hasta que se mande otro trabajo
+—así el agente manda algo largo, se desconecta y vuelve a buscarlo (D14). No
+hizo falta un verbo nuevo: un núcleo corre un trabajo por vez, así que su handle
+ya identifica el trabajo, y el resultado es estado de la máquina.
+
 **`dma.allow` cierra D8 en las dos:** VT-d en x86_64, SMMUv3 en aarch64. El IOMMU
 arranca **encendido y vacío**, así que sin declarar nada ningún aparato llega a
 la memoria. Comprobado en las dos con un aparato de verdad que hace DMA:
@@ -146,15 +152,15 @@ Corrélo antes de commitear; CI corre exactamente ese script.
 
 **No queda ningún verbo sin hacer, ni nada que ande en una arquitectura y no en la
 otra.** Lo que queda es pagar deudas. Las preguntas abiertas están en
-`docs/DISENO.md` §8; las deudas, en §7 — abiertas la 2, 3, 6, 10, 11, 13 y 15.
+`docs/DISENO.md` §8; las deudas, en §7 — abiertas la 2, 3, 6, 10, 11 y 15.
 
-1. **`exec` en otro núcleo es sincrónico** (deuda 13): el del protocolo espera con un tope, así
-   que un trabajo largo se informa igual que un núcleo perdido. Falta la forma asincrónica.
-2. **Un BAR que asignó el firmware puede no estar en el mapa** (deuda 15): el agente puede
+1. **Un BAR que asignó el firmware puede no estar en el mapa** (deuda 15): el agente puede
    escribirle desde su código en `exec`, pero no con `mem.read`/`mem.write`. Es la hermana de lo
    que se cerró con la ventana de configuración de PCIe, y tiene una decisión adentro: si el
    kernel debe entregar un rango que la máquina no listó pero el identity map cubre.
-3. **`exec` no recibe estado inicial de registros** (deuda 6), aunque la sección 4 lo especifica.
+2. **`exec` no recibe estado inicial de registros** (deuda 6), aunque la sección 4 lo especifica.
+3. **Un núcleo cuyo código se colgó queda ocupado para siempre** (lo que dejó abierto la deuda
+   13): el agente lo ve —`work` dice `running` y no cambia más— pero no lo puede recuperar.
 
 ## Cosas que ya costaron caras
 

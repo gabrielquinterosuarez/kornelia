@@ -913,6 +913,40 @@ def test_on_core(proc, timeout, arch):
     else:
         print(f"    y un nucleo que no existe no cae de vuelta aca: {r}")
 
+    # 4. Sin esperar (deuda 13): el kernel contesta enseguida y el resultado se
+    #    busca despues en describe. La prueba de que el resultado es de verdad
+    #    y no un eco: tiene que traer el numero de nucleo que informo el codigo
+    #    del agente, el mismo que dio la corrida sincronica de arriba.
+    ok, r = ask_verb(69, "exec",
+                     {"handle": h, "mode": "raw", "core": second["handle"], "wait": False})
+    if not ok:
+        failures.append(f"no acepto un exec sin esperar: {r}")
+    else:
+        print(f"  sin esperar:        state={r['state']}, registers={r['registers']}")
+        if r["state"] != "running" or r["registers"] is not None:
+            failures.append(f"un exec sin esperar contesto como si hubiera terminado: {r}")
+
+        # Se pregunta hasta que termine. Es lo que haria el agente: mandar algo
+        # largo, irse a hacer otra cosa, y volver a buscar el resultado.
+        done = None
+        for _ in range(40):
+            ok, d = ask_verb(70, "describe", {"what": ["cores"]})
+            if not ok:
+                break
+            w = next((c["work"] for c in d["cores"] if c["handle"] == second["handle"]), None)
+            if w and w["state"] == "done":
+                done = w
+                break
+        if done is None:
+            failures.append("el trabajo mandado sin esperar nunca aparecio terminado")
+        else:
+            got = done["registers"][register] & mask
+            print(f"  y el resultado estaba en describe: {register}={got}")
+            if got != second["id"]:
+                failures.append(f"el resultado dice nucleo {got} y era el {second['id']}")
+            if done["faulted"]:
+                failures.append(f"el trabajo sin esperar fallo: {done['fault']}")
+
     ask_verb(68, "release", {"handle": h})
 
     print()
