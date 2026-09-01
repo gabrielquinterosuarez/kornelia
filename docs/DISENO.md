@@ -150,12 +150,13 @@ Lo que sí existe:
 | **Lectura de ACPI** | Andando en las dos. MADT (núcleos y controlador de interrupciones) y MCFG (PCIe), con el checksum verificado tabla por tabla. |
 | **Permiso de memoria** (D27) | Andando en las dos. `mem.claim {user: true}` entrega memoria alcanzable sin privilegio, y **lo hace cumplir el hardware**: SMEP en x86_64, el modelo de permisos en aarch64. |
 | **Transición de privilegio** (D27) | Andando en las dos. `exec {mode}` entra a anillo 3 / EL0 y vuelve por una ventanilla —`int 0x80` con `DPL=3`, `svc #0`— cuyos bytes publica `describe`. La pila sale del final del reclamo del agente. **Comprobado por lo que el hardware niega:** apagar las interrupciones desde `supervised` vuelve como fault en vez de dejar la máquina muda. |
+| **Dónde vale cada privilegio** (D29) | Andando en las dos. En el núcleo del protocolo `exec` **solo** admite `supervised`: ahí manda el kernel, y para que eso sea verdad el agente no puede *poder* enmascarar. `raw` exige un núcleo reclamado, donde la prioridad la decide él. El acuerdo se publica (`describe {what:["exec"]}` trae `this_core`) en vez de dejar que se descubra chocándose (P4). |
 | **`mem.claim` · `mem.read` · `mem.write` · `release`** | Andando. Reclamos por tamaño o por dirección exacta (así se pide MMIO), con alineación y tope. Los handles son de la máquina y no se reusan (D14). |
 | **`irq.install`** | Andando en las dos. El agente pone su código a atender un aparato, y el kernel publica además **cómo hacer sonar esa interrupción a propósito** para que pueda probar su handler sin esperar al aparato. `irq.install_raw` solo en x86_64. |
 | **Timbre del buzón** | Andando en las dos. El agente lo toca con código máquina propio: un IPI por el APIC en x86_64, un SGI por el GIC en aarch64. **Con prioridad más baja que el cable**, así que por más que el agente inunde de llamadas el cordón pasa primero (D17, P6). El kernel cuenta cuántas veces sonó, que es lo que permite comprobarlo. |
 | **`listen`** | Andando en las dos. El kernel escucha por el cable y por el buzón, y contesta por donde le llegó (D17). El acuerdo lo publica `describe`. |
 | **`core.claim`** | Andando en las dos. PSCI en aarch64; INIT/SIPI más un trampolín de 16→32→64 bits en x86_64. El núcleo nuevo copia las tablas de páginas y la captura de faults, y avisa por un atómico. |
-| **Trabajo en un núcleo reclamado** | Andando en las dos. `exec {core}` deja el pedido en un buzón por núcleo y el núcleo **duerme** hasta que lo despierta un IPI/SGI. Comprobado con código del agente que informa en qué núcleo corre. Sincrónico y con tope (deuda 13). |
+| **Trabajo en un núcleo reclamado** | Andando en las dos. `exec {core}` deja el pedido en un buzón por núcleo y el núcleo **duerme** hasta que lo despierta un IPI/SGI. Comprobado con código del agente que informa en qué núcleo corre. El del protocolo espera **con los timbres abiertos**, así un handler del agente corre y el cordón se sigue atendiendo mientras dura el trabajo. Sincrónico y con tope (deuda 13). |
 | **`exec`** | Andando en las dos. **El fault vuelve como respuesta, no como muerte** (P5): el handler desvía el regreso al punto de recuperación en vez de detener el núcleo. El agente corre en pila propia y las excepciones en otra, así que ni destruyendo el puntero de pila se lleva la máquina. |
 | **Tablas de páginas propias** (D12) | Andando en las dos. Identity map con páginas de 1 GiB; MMIO no cacheable. La raíz se relee del registro y se verifica contra el mapa. |
 | **Timbre del cable serie** | Andando en las dos. El núcleo duerme entre pedidos en vez de preguntarle al UART byte por byte. APIC + IO-APIC en x86_64, GIC en aarch64. Es la misma maquinaria que va a necesitar `irq.install`. |
@@ -208,8 +209,9 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
    la IST a x86_64, el mismo programa reinicia la máquina.
 
 6. **`exec` no recibe un estado inicial de registros**, aunque la sección 4 lo especifica. El
-   código recibe en el primer registro de argumento su propia dirección, y nada más. Y no se
-   puede elegir núcleo, porque `core.claim` no existe.
+   código recibe en el primer registro de argumento su propia dirección, y nada más. (Lo otro
+   que decía esta deuda —que no se puede elegir núcleo— quedó viejo: `exec` toma `core` desde
+   que existe `core.claim`.)
 
 7. **~~Al reportar un fault, dos núcleos que fallan a la vez entrelazan la salida.~~ RESUELTO.**
    El reporte toma un candado. No se corrompía nada —el estado del fault ya era por núcleo—,
@@ -335,12 +337,15 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
       igual que publica cómo tocar un timbre (P4, D3). En x86_64 entra por `TSS.RSP0` y no por la
       IST, a propósito: así esa pila se ejercita en cada `exec supervised` en vez de ser un campo
       del TSS que nadie mira.
-    - **La restricción de D29 quedó pendiente, atada a la deuda 9.** Abajo dice que en el núcleo
-      del protocolo solo se admite `supervised` y que no es opcional. Aplicarla hoy haría que
-      `raw` **no exista**: `exec` corre siempre en el núcleo del protocolo, así que el kernel
-      ofrecería dos modos con uno inalcanzable, y eso no es lo que dice D27. Va junto con que
-      `exec` pueda elegir núcleo. Lo que **sí** se hace cumplir son las otras dos comprobaciones:
-      `supervised` exige memoria con `user`, y `raw` exige que no lo sea.
+    - **~~La restricción de D29 quedó pendiente.~~ SE HACE CUMPLIR.** En el núcleo del protocolo
+      `exec` solo admite `supervised`; `raw` exige un núcleo reclamado. Estuvo pendiente mientras
+      `exec` corría siempre acá, porque exigirla habría dejado a `raw` sin ningún lugar donde
+      correr — el kernel ofrecería dos modos con uno inalcanzable, que no es lo que dice D27.
+      Desde que `exec` elige núcleo, ya no. No es el kernel eligiendo por el agente (P6): los dos
+      modos siguen estando y los dos se usan; lo que cambia es **dónde**. Y el kernel lo
+      **publica** en vez de dejar que se descubra chocándose: `describe {what:["exec"]}` trae
+      `this_core: supervised` (P4). Las otras dos comprobaciones siguen igual: `supervised` exige
+      memoria con `user`, y `raw` exige que no lo sea.
 
     Y de paso se corrigió algo que estaba mal desde antes: en aarch64 `REGISTERS` tenía `pc` en la
     posición 31, pero el camino de retorno de `exec` guardaba ahí el **puntero de pila** — el
@@ -404,10 +409,15 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
    (deuda 14 cerrada). Ya no queda nada que un agente pueda pedir en una y recibir solo en la
    otra, salvo `irq.install_raw`, que en aarch64 no tiene un camino más crudo que ofrecer.
 
-   Y quedó destrabada la restricción de D29 que la deuda 12 dejó pendiente: ahora que `exec`
-   puede elegir núcleo, exigir `supervised` en el del protocolo ya **no** deja `raw` sin lugar
-   donde correr. Hacerla cumplir es un cambio chico en el verbo y uno grande en las pruebas: casi
-   todas corren `raw` en el núcleo que atiende, y pasarían a necesitar un núcleo reclamado.
+   Y la restricción de D29 **se hace cumplir**: en el núcleo del protocolo el agente corre
+   `supervised`, y si quiere el privilegio entero reclama un núcleo. Fue un cambio chico en el
+   verbo y uno grande en las pruebas, como estaba previsto — casi todas corrían `raw` en el
+   núcleo que atiende y pasaron a pedir uno reclamado. Eso mismo resultó ser lo más valioso:
+   **obligó a que el camino de D13 se use de verdad en todas las pruebas**, y ahí apareció que
+   el núcleo del protocolo esperaba a otro núcleo **con los timbres cerrados**. Un handler que
+   el agente había instalado no corría mientras durara el trabajo, y el cordón tampoco se
+   atendía. Estaba desde que `exec` acepta `core`, y nadie lo veía porque ninguna prueba
+   disparaba una interrupción desde otro núcleo.
 
 3. **Si `exec` debe recibir un estado inicial de registros.** La sección 4 lo especifica
    (`exec(core, handle, off, regs)`) y hoy no lo hace: el código recibe solo su propia

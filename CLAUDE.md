@@ -109,6 +109,12 @@ volver— vuelve como fault estructurado. La pila sale del final del reclamo del
 agente y se vuelve por una ventanilla (`int 0x80` / `svc #0`) cuyos bytes
 publica `describe`, así el agente no los tiene horneados (P4).
 
+**Y D29 también se hace cumplir:** en el núcleo que atiende el protocolo `exec`
+solo admite `supervised`. Ahí manda el kernel, y para que eso sea verdad el
+agente no puede *poder* enmascarar las interrupciones. Si quiere el privilegio
+entero reclama un núcleo, donde la prioridad la decide él. El kernel lo publica
+(`describe exec` trae `this_core`) en vez de dejar que se descubra chocándose.
+
 `describe` sirve mapa de memoria, tablas, reclamos, núcleos, controlador de
 interrupciones y PCIe, leídos de ACPI — más el acuerdo de `exec`: qué modos hay
 y con qué bytes se vuelve de `supervised`.
@@ -142,13 +148,13 @@ Corrélo antes de commitear; CI corre exactamente ese script.
 otra.** Lo que queda es pagar deudas. Las preguntas abiertas están en
 `docs/DISENO.md` §8; las deudas, en §7 — abiertas la 2, 3, 6, 10, 11, 13 y 15.
 
-1. **Hacer cumplir la regla de D29**, que recién ahora se puede: en el núcleo del protocolo el
-   agente debería correr siempre `supervised`, y si quiere `raw` que reclame un núcleo. Antes
-   exigirlo dejaba `raw` sin ningún lugar donde correr; ahora `exec` elige núcleo, así que no.
-   Es un cambio chico en el verbo y grande en las pruebas — casi todas corren `raw` en el núcleo
-   que atiende.
-2. **`exec` en otro núcleo es sincrónico** (deuda 13): el del protocolo espera con un tope, así
+1. **`exec` en otro núcleo es sincrónico** (deuda 13): el del protocolo espera con un tope, así
    que un trabajo largo se informa igual que un núcleo perdido. Falta la forma asincrónica.
+2. **Un BAR que asignó el firmware puede no estar en el mapa** (deuda 15): el agente puede
+   escribirle desde su código en `exec`, pero no con `mem.read`/`mem.write`. Es la hermana de lo
+   que se cerró con la ventana de configuración de PCIe, y tiene una decisión adentro: si el
+   kernel debe entregar un rango que la máquina no listó pero el identity map cubre.
+3. **`exec` no recibe estado inicial de registros** (deuda 6), aunque la sección 4 lo especifica.
 
 ## Cosas que ya costaron caras
 
@@ -186,6 +192,13 @@ Están acá para no volver a pagarlos:
   el de salida. Pedir 39 bits donde la máquina tiene 44 no se rechaza: se
   reinterpreta, y las direcciones que pide el aparato se recortan en silencio.
   Un límite que sobra puede ser tan inválido como uno que falta.
+- **Un camino que ninguna prueba recorre no está andando: está sin probar.**
+  Mientras esperaba a un núcleo reclamado, el núcleo del protocolo esperaba
+  **con los timbres cerrados**, así que un handler del agente no corría y el
+  cordón no se atendía en todo ese rato. Estaba desde que `exec` acepta `core`.
+  No lo encontró nadie mirando: apareció cuando D29 obligó a que las pruebas
+  usaran ese camino, porque recién ahí hubo una que disparaba una interrupción
+  desde otro núcleo.
 
 **Cómo se depura un núcleo que se quedó mudo.** No hay debugger: se marca el
 camino con letras por el cable (`p.uart_write_byte(b'A')`) y se lee la traza.

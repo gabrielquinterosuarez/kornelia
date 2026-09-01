@@ -550,7 +550,7 @@ fn write_index(w: &mut Writer<'_>, m: &Machine, hw: &Hardware, arch: &str) {
 /// El kernel ofrece los dos y no elige: elegir es del agente (P6). Lo que si
 /// hace es **publicar el acuerdo**, para que no lo tenga horneado (P4).
 fn write_exec<P: Platform>(w: &mut Writer<'_>) {
-    w.map(3);
+    w.map(4);
 
     w.text("modes");
     w.array(2);
@@ -569,6 +569,13 @@ fn write_exec<P: Platform>(w: &mut Writer<'_>) {
     // memoria que el agente tiene que dejarle libre a su propio codigo.
     w.text("stack");
     w.text("claim-end");
+
+    // Con que modo corre el nucleo que atiende, si no se pide otro nucleo
+    // (D29). Se publica en vez de dejar que el agente lo descubra chocandose:
+    // que `raw` exista pero no en cualquier lado es justo lo que no se puede
+    // adivinar desde afuera (P4).
+    w.text("this_core");
+    w.text("supervised");
 }
 
 /// El mapa de memoria: un arreglo de `[inicio, bytes, clase]`.
@@ -1041,6 +1048,20 @@ fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
     };
     let off = a.off.unwrap_or(0);
 
+    // **En el nucleo del protocolo manda el kernel** (D29). Para que eso sea
+    // verdad y no una intencion, el agente no puede *poder* enmascarar las
+    // interrupciones ahi — y enmascarar es privilegiado. Asi que en este nucleo
+    // corre supervisado, y si quiere el privilegio entero reclama un nucleo:
+    // ahi la prioridad la decide el, incluido no ser molestado.
+    //
+    // No es el kernel eligiendo por el agente (P6): los dos modos siguen
+    // estando y los dos se pueden usar. Lo que cambia es **donde**. Exigirlo
+    // antes habria dejado a `raw` sin ningun lugar donde correr, porque `exec`
+    // corria siempre aca; desde que elige nucleo, ya no.
+    if !supervised && a.core.is_none() {
+        return reply_error(p, id, "exec raw needs a core: the protocol core only runs supervised");
+    }
+
     // Se comprueba que la entrada este adentro del reclamo. Un byte alcanza:
     // hasta donde llega el codigo lo sabe el codigo, no el kernel.
     let entry = match claims::range_of(handle, off, 1) {
@@ -1073,16 +1094,28 @@ fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
         // En otro nucleo: se le deja el trabajo en el buzon y se espera. El
         // nucleo del protocolo no corre nada del agente aca, solo espera — y
         // con tope, asi que el cordon no se pierde si el otro no contesta.
-        Some(handle) => match unsafe {
-            work::run_on(p, handle, work::Job {
-                entry,
-                region: (c.start, c.bytes),
-                supervised,
-            })
-        } {
-            Err(e) => return reply_error(p, id, e.code()),
-            Ok(o) => o,
-        },
+        Some(handle) => {
+            // Esperando **con los timbres abiertos**. En el nucleo del
+            // protocolo la interrupcion tiene prioridad (D29), y esperar a otro
+            // nucleo no es una excepcion: si se esperara sordo, un handler que
+            // el agente instalo no correria mientras dura el trabajo, y el
+            // cordon tampoco se atenderia. Lo destapo la propia regla de D29:
+            // el codigo que dispara una interrupcion pasa a correr en el nucleo
+            // reclamado, y del otro lado no habia quien la atendiera.
+            p.set_interrupts(true);
+            let r = unsafe {
+                work::run_on(p, handle, work::Job {
+                    entry,
+                    region: (c.start, c.bytes),
+                    supervised,
+                })
+            };
+            p.set_interrupts(false);
+            match r {
+                Err(e) => return reply_error(p, id, e.code()),
+                Ok(o) => o,
+            }
+        }
         // En este mismo. En el nucleo del kernel la interrupcion tiene
         // prioridad sobre el codigo del agente (D29): se prenden los timbres
         // mientras corre, asi un `exec` largo no deja al cordon sin atender. El

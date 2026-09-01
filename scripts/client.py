@@ -297,6 +297,13 @@ def test_exec(proc, timeout, arch):
         _, ok, load = resp
         return ok, load
 
+    # Estos programas corren con privilegio —uno rompe la pila a proposito— asi
+    # que van a un nucleo reclamado (D29).
+    core = core_for_raw(ask_verb, 9)
+    if core is None:
+        print("  no hay un nucleo donde correr con privilegio")
+        return 1
+
     for name, code, expects_fault in (
         ("un programa que anda", prog["ok"], False),
         ("un programa que falla", prog["falla"], True),
@@ -314,7 +321,7 @@ def test_exec(proc, timeout, arch):
             continue
 
         print(f"  {name}: {code.hex()}")
-        ok, r = ask_verb(12, "exec", {"handle": h, "mode": "raw"})
+        ok, r = ask_verb(12, "exec", {"handle": h, "mode": "raw", "core": core})
         if not ok:
             failures.append(f"{name}: exec fallo: {r}")
             continue
@@ -371,8 +378,17 @@ def test_cores(proc, timeout):
     cpus = d["cpus"]
     print(f"  la maquina informa {len(cpus)} nucleos: {[c['id'] for c in cpus]}")
 
-    arrancados = []
+    # Los que ya estan reclamados por una prueba anterior cuentan como
+    # arrancados: desde D29 todo lo que corre con privilegio pide un nucleo, asi
+    # que para cuando llega esta prueba puede haber varios tomados.
+    ok, d = ask_verb(19, "describe", {"what": ["cores"]})
+    arrancados = [c["id"] for c in (d.get("cores") or [])] if ok else []
+    if arrancados:
+        print(f"    ya reclamados por otra prueba: {arrancados}")
+
     for c in cpus:
+        if c["id"] in arrancados:
+            continue
         ok, r = ask_verb(21, "core.claim", {"id": c["id"]})
         if ok:
             print(f"    id={c['id']} -> handle {r['handle']}, {r['state']}")
@@ -489,6 +505,33 @@ def emit_writes(arch, writes, con_ret=True):
     return code + ((0xD65F03C0).to_bytes(4, "little") if con_ret else b"")  # ret
 
 
+def core_for_raw(ask_verb, n=200):
+    """Un nucleo donde se pueda correr `raw` (D29).
+
+    En el nucleo que atiende el protocolo el agente corre **supervisado y
+    punto**: ahi manda el kernel, y para que eso sea verdad y no una intencion,
+    el agente no puede *poder* enmascarar las interrupciones — que es
+    privilegiado. Asi que todo lo que necesita privilegio de verdad —tocar los
+    registros de un aparato, romper la pila a proposito— pide un nucleo.
+
+    Se reutiliza el que ya este reclamado: son varias pruebas en el mismo
+    arranque, y reclamar uno por prueba se quedaria sin nucleos.
+    """
+    ok, d = ask_verb(n, "describe", {"what": ["cores"]})
+    if ok:
+        for c in d.get("cores") or []:
+            if c["state"] == "idle":
+                return c["handle"]
+    ok, cpus = ask_verb(n, "describe", {"what": ["cpus"]})
+    if not ok:
+        return None
+    for c in cpus["cpus"]:
+        ok, r = ask_verb(n, "core.claim", {"id": c["id"]})
+        if ok:
+            return r["handle"]
+    return None
+
+
 def test_doorbell(proc, timeout, arch):
     """El agente toca el timbre del kernel con codigo maquina propio.
 
@@ -526,8 +569,15 @@ def test_doorbell(proc, timeout, arch):
     h = c["handle"]
     ask_verb(42, "mem.write", {"handle": h, "bytes": code})
 
+    # Tocar el timbre es escribirle a un registro del controlador de
+    # interrupciones: necesita privilegio, asi que va a un nucleo (D29).
+    core = core_for_raw(ask_verb, 46)
+    if core is None:
+        print("  no hay un nucleo donde correr con privilegio")
+        return 1
+
     print(f"  el agente toca el timbre: {code.hex()}")
-    ok, r = ask_verb(43, "exec", {"handle": h, "mode": "raw"})
+    ok, r = ask_verb(43, "exec", {"handle": h, "mode": "raw", "core": core})
     if not ok or r.get("faulted"):
         failures.append(f"el codigo del timbre fallo: {r}")
 
@@ -566,6 +616,15 @@ def test_permission(proc, timeout, arch):
 
     ret = (0xD65F03C0).to_bytes(4, "little") if arch == "aarch64" else b"\xc3"
 
+    # Todo lo de abajo corre `raw`, asi que va a un nucleo reclamado (D29). Y
+    # tiene que ir: si se pidiera sin nucleo, el rechazo vendria de D29 y esta
+    # prueba dejaria de probar lo que dice probar — que lo que niega el pedido
+    # es el permiso de la memoria.
+    core = core_for_raw(ask_verb, 79)
+    if core is None:
+        print("  no hay un nucleo donde correr con privilegio")
+        return 1
+
     # Primero, memoria comun: correr ahi tiene que andar.
     ok, c = ask_verb(80, "mem.claim", {"bytes": 4096, "align": 4096})
     if not ok:
@@ -575,7 +634,7 @@ def test_permission(proc, timeout, arch):
     if c["user"]:
         failures.append("una memoria que no se pidio para el agente vino marcada")
     ask_verb(81, "mem.write", {"handle": c["handle"], "bytes": ret})
-    ok, r = ask_verb(82, "exec", {"handle": c["handle"], "mode": "raw"})
+    ok, r = ask_verb(82, "exec", {"handle": c["handle"], "mode": "raw", "core": core})
     if not ok or r.get("faulted"):
         failures.append(f"no se pudo correr codigo en memoria comun: {r}")
     else:
@@ -600,7 +659,7 @@ def test_permission(proc, timeout, arch):
     # `raw` sobre memoria del agente se rechaza **antes** de correr nada. La
     # misma pagina no puede ser las dos cosas, y aceptar el pedido seria
     # prometer algo que el hardware niega un microsegundo despues.
-    ok, r = ask_verb(85, "exec", {"handle": u["handle"], "mode": "raw"})
+    ok, r = ask_verb(85, "exec", {"handle": u["handle"], "mode": "raw", "core": core})
     if ok:
         failures.append("el kernel acepto correr privilegiado en memoria del agente")
     else:
@@ -611,7 +670,7 @@ def test_permission(proc, timeout, arch):
     ok, v = ask_verb(87, "mem.claim", {"at": u["start"], "bytes": 4096})
     if ok:
         ask_verb(88, "mem.write", {"handle": v["handle"], "bytes": ret})
-        ok2, r2 = ask_verb(89, "exec", {"handle": v["handle"], "mode": "raw"})
+        ok2, r2 = ask_verb(89, "exec", {"handle": v["handle"], "mode": "raw", "core": core})
         if not ok2 or r2.get("faulted"):
             failures.append("al soltarla no se le saco el permiso")
         else:
@@ -682,6 +741,14 @@ def test_supervised(proc, timeout, arch):
     if "supervised" not in agreement["modes"] or "raw" not in agreement["modes"]:
         failures.append(f"el kernel no ofrece los dos modos: {agreement['modes']}")
 
+    # D29: en este nucleo manda el kernel, asi que aca el agente corre
+    # supervisado y punto. Se publica en vez de dejar que el agente lo
+    # descubra chocandose: que `raw` exista pero no en cualquier lado no se
+    # puede adivinar desde afuera (P4).
+    print(f"  y en el nucleo que atiende se corre: {agreement.get('this_core')}")
+    if agreement.get("this_core") != "supervised":
+        failures.append("el kernel no publica con que modo corre su propio nucleo")
+
     ok, u = ask_verb(91, "mem.claim", {"bytes": 4096, "user": True})
     if not ok:
         print(f"  no se pudo reclamar para el agente: {u}")
@@ -717,10 +784,17 @@ def test_supervised(proc, timeout, arch):
     else:
         print(f"    volvio como fault: {r['fault']['cause']}")
 
-    # 3. Y los dos pedidos que el kernel tiene que rechazar.
+    # 3. Y los pedidos que el kernel tiene que rechazar.
+    #
+    # El primero es D29 y es la parte que no se puede ablandar: si `raw` se
+    # aceptara aca, el agente podria enmascarar las interrupciones en el nucleo
+    # que sostiene el cordon, y "la interrupcion tiene prioridad" pasaria a ser
+    # una intencion. No se le da nucleo a proposito.
     ok, r = ask_verb(96, "exec", {"handle": h, "mode": "raw"})
     if ok:
-        failures.append("acepto raw sobre memoria del agente")
+        failures.append("acepto raw en el nucleo que atiende el protocolo")
+    else:
+        print(f"    y raw en este nucleo no corre: {r}")
     ok, r = ask_verb(97, "exec", {"handle": h})
     if ok:
         failures.append("acepto un exec sin modo: el kernel eligio por el agente")
@@ -763,8 +837,12 @@ def test_on_core(proc, timeout, arch):
     Reclamar un nucleo servia para reservarlo, no para usarlo: `exec` corria
     siempre en el que atiende el protocolo. La prueba de que eso cambio no es
     lo que el kernel dice, es que **el propio codigo del agente informe donde
-    esta corriendo**: se corre el mismo programa con y sin destino, y los dos
-    numeros tienen que ser distintos.
+    esta corriendo**: se corre el mismo programa en dos nucleos reclamados y
+    los dos numeros tienen que ser distintos, y cada uno el que se pidio.
+
+    Son dos nucleos reclamados y no uno contra el del protocolo porque desde
+    D29 ahi el agente corre supervisado, y el registro que dice que nucleo es
+    —`mpidr_el1` en aarch64— no se puede leer sin privilegio.
     """
     code, register = WHICH_CORE[arch]
     failures = []
@@ -774,26 +852,26 @@ def test_on_core(proc, timeout, arch):
         _, ok, load = resp
         return ok, load
 
-    # Un nucleo reclamado. Si ya hay uno de una prueba anterior, se usa ese.
+    # Dos nucleos: los ya reclamados por pruebas anteriores mas los que hagan
+    # falta.
     ok, d = ask_verb(60, "describe", {"what": ["cores"]})
-    mine = [c for c in d["cores"] if ok and c["state"] == "idle"]
-    if mine:
-        core = mine[0]
-    else:
-        ok, cpus = ask_verb(61, "describe", {"what": ["cpus"]})
-        if not ok or len(cpus["cpus"]) < 2:
-            print("  la maquina tiene un solo nucleo: no hay a donde mandar trabajo")
-            return 0
-        core = None
+    mine = [c for c in (d.get("cores") or []) if ok and c["state"] == "idle"]
+    ok, cpus = ask_verb(61, "describe", {"what": ["cpus"]})
+    if ok:
+        taken = {c["id"] for c in mine}
         for c in cpus["cpus"]:
-            ok, r = ask_verb(62, "core.claim", {"id": c["id"]})
-            if ok:
-                core = r
+            if len(mine) >= 2:
                 break
-        if core is None:
-            print("  no se pudo reclamar ningun nucleo")
-            return 1
-    print(f"  nucleo reclamado: handle {core['handle']}, la maquina lo llama {core['id']}")
+            if c["id"] in taken:
+                continue
+            ok2, r = ask_verb(62, "core.claim", {"id": c["id"]})
+            if ok2:
+                mine.append(r)
+    if len(mine) < 2:
+        print(f"  hacen falta dos nucleos reclamados y hay {len(mine)}")
+        return 0
+    first, second = mine[0], mine[1]
+    print(f"  dos nucleos reclamados: la maquina los llama {first['id']} y {second['id']}")
 
     ok, c = ask_verb(63, "mem.claim", {"bytes": 4096, "align": 4096})
     if not ok:
@@ -804,28 +882,29 @@ def test_on_core(proc, timeout, arch):
 
     mask = 0x00FFFFFF if arch == "aarch64" else 0xFFFFFFFF
 
-    # 1. Sin destino: corre en el nucleo que atiende el protocolo.
-    ok, r = ask_verb(65, "exec", {"handle": h, "mode": "raw"})
+    # El mismo programa en los dos nucleos: cada uno tiene que informar el suyo.
+    ok, r = ask_verb(65, "exec", {"handle": h, "mode": "raw", "core": first["handle"]})
     if not ok or r.get("faulted"):
-        print(f"  FALLA: no se pudo correr en el nucleo del protocolo: {r}")
+        print(f"  FALLA: no se pudo correr en el primer nucleo: {r}")
         return 1
     here = r["registers"][register] & mask
-    print(f"  corriendo aca:      {register}={here}  (core={r['core']})")
+    print(f"  corriendo en uno:   {register}={here}  (core={r['core']})")
 
-    # 2. Con destino: el mismo programa, en el nucleo reclamado.
-    ok, r = ask_verb(66, "exec", {"handle": h, "mode": "raw", "core": core["handle"]})
+    ok, r = ask_verb(66, "exec", {"handle": h, "mode": "raw", "core": second["handle"]})
     if not ok:
-        print(f"  FALLA: exec en otro nucleo fallo: {r}")
+        print(f"  FALLA: exec en el otro nucleo fallo: {r}")
         return 1
     if r.get("faulted"):
         failures.append(f"el codigo fallo en el otro nucleo: {r['fault']}")
     there = r["registers"][register] & mask
-    print(f"  corriendo alla:     {register}={there}  (core={r['core']})")
+    print(f"  y en el otro:       {register}={there}  (core={r['core']})")
 
     if there == here:
         failures.append("los dos dieron el mismo nucleo: no se movio a ningun lado")
-    if there != core["id"]:
-        failures.append(f"corrio en el nucleo {there} y se habia pedido el {core['id']}")
+    if here != first["id"]:
+        failures.append(f"corrio en el nucleo {here} y se habia pedido el {first['id']}")
+    if there != second["id"]:
+        failures.append(f"corrio en el nucleo {there} y se habia pedido el {second['id']}")
 
     # 3. Un handle que no es de un nucleo se rechaza en vez de correr aca.
     ok, r = ask_verb(67, "exec", {"handle": h, "mode": "raw", "core": 9999})
@@ -940,10 +1019,17 @@ def test_dma(proc, timeout, arch):
     ok, prog = ask_verb(109, "mem.claim", {"bytes": 4096, "align": 4096})
     ask_verb(110, "mem.write", {"handle": prog["handle"], "bytes": code})
 
+    # Escribirle a los registros del aparato es privilegiado, asi que va a un
+    # nucleo reclamado (D29).
+    core = core_for_raw(ask_verb, 108)
+    if core is None:
+        print("  no hay un nucleo donde correr con privilegio")
+        return 1
+
     def try_dma(label, handle=None):
         handle = handle or buf["handle"]
         ask_verb(111, "mem.write", {"handle": handle, "bytes": pattern})
-        ok, r = ask_verb(112, "exec", {"handle": prog["handle"], "mode": "raw"})
+        ok, r = ask_verb(112, "exec", {"handle": prog["handle"], "mode": "raw", "core": core})
         if not ok or r.get("faulted"):
             failures.append(f"{label}: el codigo que toca el aparato fallo: {r}")
             return None
@@ -1066,9 +1152,16 @@ def test_handler_during_exec(proc, timeout, arch):
     h2 = c2["handle"]
     ask_verb(76, "mem.write", {"handle": h2, "bytes": disparo + wait})
 
+    # Disparar una interrupcion es escribirle al controlador: privilegiado, asi
+    # que va a un nucleo reclamado (D29).
+    core = core_for_raw(ask_verb, 79)
+    if core is None:
+        print("  no hay un nucleo donde correr con privilegio")
+        return 1
+
     print("  el agente dispara su interrupcion y espera a su propio handler...")
     try:
-        ok, r = ask_verb(77, "exec", {"handle": h2, "mode": "raw"})
+        ok, r = ask_verb(77, "exec", {"handle": h2, "mode": "raw", "core": core})
     except TimeoutError:
         print("  FALLA: el exec no volvio — el handler no corrio durante el exec")
         return 1
@@ -1157,8 +1250,16 @@ def test_handler(proc, timeout, arch):
     ok, c2 = ask_verb(57, "mem.claim", {"bytes": 4096, "align": 4096})
     h2 = c2["handle"]
     ask_verb(58, "mem.write", {"handle": h2, "bytes": code})
+
+    # Hacerla sonar es escribirle al controlador de interrupciones: va a un
+    # nucleo reclamado (D29).
+    core = core_for_raw(ask_verb, 56)
+    if core is None:
+        print("  no hay un nucleo donde correr con privilegio")
+        return 1
+
     print(f"  el agente la hace sonar: {code.hex()}")
-    ok, r = ask_verb(59, "exec", {"handle": h2, "mode": "raw"})
+    ok, r = ask_verb(59, "exec", {"handle": h2, "mode": "raw", "core": core})
     if not ok or r.get("faulted"):
         failures.append(f"el codigo que la hace sonar fallo: {r}")
 
@@ -1282,7 +1383,7 @@ def main():
     ap.add_argument("--what", help="secciones separadas por coma; sin esto pide el indice")
     ap.add_argument("--raw", action="store_true", help="mostrar los bytes que viajan")
     ap.add_argument("--timeout", type=float, default=90.0)
-    ap.add_argument("--smp", type=int, default=1,
+    ap.add_argument("--smp", type=int, default=4,
                     help="cuantos nucleos darle a QEMU")
     ap.add_argument("--exec", action="store_true", dest="run_exec",
                     help="sube codigo maquina de verdad y lo corre")
