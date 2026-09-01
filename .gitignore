@@ -4,3 +4,8 @@
 /target/
 
 # Cargo.lock SI se versiona: esto produce binarios, no una biblioteca.
+
+# Lo que Python deja al lado del cliente. Es derivado: se regenera solo, y
+# versionarlo metia basura binaria en cada commit que tocaba client.py.
+__pycache__/
+*.pyc
