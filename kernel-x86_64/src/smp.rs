@@ -158,13 +158,24 @@ extern "sysv64" fn ap_main(slot: u64) -> ! {
         let _ = crate::idt::install(slot as usize);
     }
 
+    // Su APIC local encendido y la entrada del despertador, que es lo que le
+    // permite dormir sin quedarse sordo.
+    let ready = unsafe { crate::irq::prepare_worker() }.is_ok();
+
     cores::arrived(slot as usize, this_core());
 
-    // Y a esperar trabajo. Todavia no hay forma de darselo: `exec` corre en el
-    // nucleo que atiende el protocolo. Esa es la parte que sigue.
-    loop {
-        unsafe { core::arch::asm!("hlt", options(nomem, nostack)) }
+    if !ready {
+        // Sin despertador no puede recibir trabajo, y girar seria quemar el
+        // nucleo. Se queda quieto, que es lo que hacia antes de que hubiera
+        // forma de mandarle nada.
+        loop {
+            unsafe { core::arch::asm!("hlt", options(nomem, nostack)) }
+        }
     }
+
+    // Y a esperar trabajo de verdad: duerme hasta que el nucleo del protocolo
+    // le deje algo en el buzon y lo despierte.
+    unsafe { kernel_core::work::serve(&mut crate::platform(), slot as usize) }
 }
 
 /// El identificador de este nucleo, tal como lo nombra la maquina.

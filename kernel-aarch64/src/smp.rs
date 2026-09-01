@@ -87,6 +87,22 @@ ap_entry:
     msr  sctlr_el1, x1
     isb
 
+    // Y destrabar los registros SIMD, que arrancan atrapados.
+    //
+    // Esto no es una optimizacion: el compilador usa los registros anchos para
+    // copiar structs, asi que **cualquier** codigo de Rust puede pisar uno sin
+    // que se lo pida. Con CPACR_EL1 en cero eso es una excepcion, y como el
+    // handler de faults tambien copia structs, el fault se repite adentro del
+    // handler y el nucleo entra en un bucle del que no sale ni para avisar.
+    //
+    // El nucleo de arranque no lo necesitaba porque se lo dejo hecho UEFI. Uno
+    // arrancado por PSCI viene con los valores de reset, y ahi esta atrapado —
+    // exactamente la clase de diferencia entre nucleos que no se ve hasta que
+    // el segundo hace algo que el primero hacia gratis.
+    mov  x1, #(3 << 20)
+    msr  cpacr_el1, x1
+    isb
+
     // La tabla de excepciones. Desde aca un fault se captura en vez de matar.
     adrp x1, AP_VBAR
     ldr  x1, [x1, :lo12:AP_VBAR]
@@ -127,13 +143,24 @@ extern "C" fn ap_main(slot: u64) -> ! {
         let _ = crate::vectors::install(slot as usize);
     }
 
+    // Su interfaz del GIC encendida y el despertador habilitado, que es lo que
+    // le permite dormir sin quedarse sordo.
+    let ready = unsafe { crate::irq::prepare_worker() }.is_ok();
+
     cores::arrived(slot as usize, mpidr & 0x00FF_FFFF);
 
-    // Y a esperar trabajo. Todavia no hay forma de darselo: `exec` corre en el
-    // nucleo que atiende el protocolo. Esa es la parte que sigue.
-    loop {
-        unsafe { core::arch::asm!("wfe", options(nomem, nostack)) }
+    if !ready {
+        // Sin despertador no puede recibir trabajo, y girar seria quemar el
+        // nucleo. Se queda quieto, que es lo que hacia antes de que hubiera
+        // forma de mandarle nada.
+        loop {
+            unsafe { core::arch::asm!("wfe", options(nomem, nostack)) }
+        }
     }
+
+    // Y a esperar trabajo de verdad: duerme hasta que el nucleo del protocolo
+    // le deje algo en el buzon y lo despierte.
+    unsafe { kernel_core::work::serve(&mut crate::platform(), slot as usize) }
 }
 
 /// Anota la configuracion que van a copiar los nucleos nuevos.

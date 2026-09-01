@@ -59,7 +59,7 @@ elif ! command -v python3 >/dev/null; then
 else
     for arch in x86_64 aarch64; do
         step "arranca $arch y contesta el protocolo"
-        output=$(timeout 240 ./scripts/client.py --arch "$arch" --smp 4 --what memory,tables --memory --exec --cores --mailbox --doorbell --handler --during --permission --supervised 2>&1 || true)
+        output=$(timeout 240 ./scripts/client.py --arch "$arch" --smp 4 --what memory,tables --memory --exec --cores --mailbox --doorbell --handler --during --permission --supervised --on-core 2>&1 || true)
 
         # Lo que tiene que haber dicho en el banner de texto.
         for expected in "arquitectura: $arch" "memoria:" "tablas:" \
@@ -133,6 +133,14 @@ else
         fi
         grep -qFe "separacion kernel/agente: la hace cumplir el hardware" <<<"$output" \
             || bad "$arch no informa que el hardware haga cumplir la separacion"
+
+        # Y que un nucleo reclamado pueda recibir trabajo (D13). La prueba no
+        # es lo que el kernel dice: el propio codigo del agente informa en que
+        # nucleo esta corriendo, y tiene que dar uno distinto del que atiende.
+        if ! grep -qFe "trabajo en otro nucleo: ok" <<<"$output"; then
+            bad "$arch no le puede dar trabajo a un nucleo reclamado"
+            printf '%s\n' "$output" | grep -E "FALLA:|corriendo|nucleo reclamado" | head -10
+        fi
 
         # Y la mitad de arriba de D27: el agente declara con que privilegio
         # corre, y el hardware lo hace cumplir. La prueba no es lo que el kernel

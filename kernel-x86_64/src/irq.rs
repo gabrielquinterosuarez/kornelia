@@ -44,6 +44,13 @@ const SERIAL_CABLE: u8 = 4;
 /// agente inunde de llamadas el cordon pasa primero (D17, P6).
 const MAILBOX_VECTOR: u8 = 0x30;
 
+/// Y el que usa el nucleo del protocolo para despertar a un nucleo reclamado
+/// que esta durmiendo esperando trabajo.
+///
+/// Lejos del 0x31 en adelante, que se reparten los handlers del agente, y del
+/// 0x40 del cable serie.
+const WAKE_VECTOR: u8 = 0x41;
+
 /// Registro de control de interrupciones del APIC local: la parte de abajo
 /// dispara el envio, la de arriba dice a quien. Son los mismos que usa `smp`
 /// para arrancar los otros nucleos — un IPI es un IPI.
@@ -98,6 +105,40 @@ irq_serial_stub:
     pop rax
     iretq
 
+.globl irq_wake_stub
+
+// Lo que corre cuando a un nucleo reclamado lo despiertan. No tiene nada que
+// hacer: alcanza con que el `hlt` haya vuelto, porque el trabajo ya estaba en
+// el buzon antes de que sonara. Solo avisa que atendio.
+irq_wake_stub:
+    push rax
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push rbx
+
+    mov rbx, rsp
+    and rsp, -16
+    call irq_wake_rust
+    mov rsp, rbx
+
+    pop rbx
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rax
+    iretq
+
 .globl irq_mailbox_stub
 
 // Lo que corre cuando el agente toca el timbre del buzon. Solo despierta: el
@@ -136,6 +177,21 @@ irq_mailbox_stub:
 extern "sysv64" {
     fn irq_serial_stub();
     fn irq_mailbox_stub();
+    fn irq_wake_stub();
+}
+
+/// Avisa que atendio, y nada mas: el despertador no trae informacion, la trae
+/// el buzon de trabajo.
+#[no_mangle]
+extern "sysv64" fn irq_wake_rust() {
+    // SAFETY: cada nucleo tiene su APIC local en la misma direccion, que el
+    // identity map cubre.
+    unsafe {
+        let apic = APIC;
+        if apic != 0 {
+            core::ptr::write_volatile((apic + EOI) as *mut u32, 0);
+        }
+    }
 }
 
 /// Vacia la cola del UART y avisa que ya atendio.
@@ -235,6 +291,44 @@ pub unsafe fn install(hw: &Hardware) -> Result<u8, &'static str> {
 /// —dormir y despues habilitar— se perderia ese despertador.
 pub fn sleep() {
     unsafe { core::arch::asm!("sti; hlt; cli", options(nomem, nostack)) }
+}
+
+/// Prepara a un nucleo reclamado para que lo puedan despertar.
+///
+/// El APIC local es **por nucleo**: que el de arranque este encendido no dice
+/// nada del de este. La entrada de la tabla, en cambio, es compartida, asi que
+/// ponerla de nuevo no molesta.
+///
+/// # Safety
+///
+/// Corre en el nucleo reclamado, con su IDT ya puesta.
+pub unsafe fn prepare_worker() -> Result<(), &'static str> {
+    // La direccion la dejo `install` corriendo en el nucleo de arranque: el
+    // APIC local de cada nucleo vive en la misma direccion, y cada uno ve el
+    // suyo. Lo que NO se hereda es que este encendido.
+    if APIC == 0 {
+        return Err("el APIC todavia no esta encendido");
+    }
+    let svr = core::ptr::read_volatile((APIC + SVR) as *const u32);
+    core::ptr::write_volatile((APIC + SVR) as *mut u32, svr | (1 << 8));
+
+    crate::idt::set_gate(WAKE_VECTOR as usize, irq_wake_stub as *const () as u64)
+}
+
+/// Despierta al nucleo que la maquina nombra con ese identificador.
+///
+/// Las dos escrituras van en este orden: la primera dice a quien, la segunda
+/// dispara. Al reves se le mandaria a quien hubiera quedado de antes.
+pub fn wake(id: u64) {
+    // SAFETY: el APIC lo dejo `install`, y el identity map lo cubre.
+    unsafe {
+        let apic = APIC;
+        if apic == 0 {
+            return;
+        }
+        core::ptr::write_volatile((apic + ICR_HIGH) as *mut u32, (id as u32) << 24);
+        core::ptr::write_volatile((apic + ICR_LOW) as *mut u32, WAKE_VECTOR as u32);
+    }
 }
 
 /// Programa el timbre del buzon: un IPI que el agente se manda a este nucleo.

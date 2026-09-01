@@ -153,6 +153,7 @@ Lo que sí existe:
 | **Timbre del buzón** | Andando en las dos. El agente lo toca con código máquina propio: un IPI por el APIC en x86_64, un SGI por el GIC en aarch64. **Con prioridad más baja que el cable**, así que por más que el agente inunde de llamadas el cordón pasa primero (D17, P6). El kernel cuenta cuántas veces sonó, que es lo que permite comprobarlo. |
 | **`listen`** | Andando en las dos. El kernel escucha por el cable y por el buzón, y contesta por donde le llegó (D17). El acuerdo lo publica `describe`. |
 | **`core.claim`** | Andando en las dos. PSCI en aarch64; INIT/SIPI más un trampolín de 16→32→64 bits en x86_64. El núcleo nuevo copia las tablas de páginas y la captura de faults, y avisa por un atómico. |
+| **Trabajo en un núcleo reclamado** | Andando en las dos. `exec {core}` deja el pedido en un buzón por núcleo y el núcleo **duerme** hasta que lo despierta un IPI/SGI. Comprobado con código del agente que informa en qué núcleo corre. Sincrónico y con tope (deuda 13). |
 | **`exec`** | Andando en las dos. **El fault vuelve como respuesta, no como muerte** (P5): el handler desvía el regreso al punto de recuperación en vez de detener el núcleo. El agente corre en pila propia y las excepciones en otra, así que ni destruyendo el puntero de pila se lleva la máquina. |
 | **Tablas de páginas propias** (D12) | Andando en las dos. Identity map con páginas de 1 GiB; MMIO no cacheable. La raíz se relee del registro y se verifica contra el mapa. |
 | **Timbre del cable serie** | Andando en las dos. El núcleo duerme entre pedidos en vez de preguntarle al UART byte por byte. APIC + IO-APIC en x86_64, GIC en aarch64. Es la misma maquinaria que va a necesitar `irq.install`. |
@@ -222,20 +223,49 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
    cerrada y nadie lo había puesto; en aarch64 funcionaba porque UEFI la dejaba así. Ahora se
    establece explícitamente.
 
-9. **Un núcleo reclamado todavía no puede recibir trabajo.** Arranca, se configura solo y queda
-   esperando, pero `exec` corre siempre en el núcleo que atiende el protocolo: falta un buzón por
-   núcleo y que `exec` acepte a cuál mandarle el trabajo, que es lo que la sección 4 especifica
-   (`exec(core, handle, off, regs, mode)`).
+9. **~~Un núcleo reclamado todavía no puede recibir trabajo.~~ RESUELTO.** `exec` acepta `core`
+   —el handle que devolvió `core.claim`— y el trabajo va a un buzón por núcleo: el del protocolo
+   deja el pedido, el reclamado lo levanta, corre y contesta. Un escritor y un lector por ranura,
+   así que no hay candado; lo que hay es orden de memoria dicho explícitamente, que es lo que
+   aarch64 exige y x86_64 perdona.
 
-   **Y arrastra una consecuencia de D29** (ver deuda 12): la regla dice que en el núcleo del
-   protocolo el agente corre `supervised` y que si quiere `raw` reclame uno propio. Hoy no se
-   puede reclamar uno propio *para correr ahí*, así que hacerla cumplir dejaría `raw` sin ningún
-   lugar donde existir. Las dos cosas se destraban juntas.
+   **El núcleo reclamado duerme entre trabajos** y lo despierta un timbre de núcleo a núcleo (un
+   IPI por el APIC, un SGI por el GIC). Girar esperando habría sido quemar un núcleo entero — lo
+   mismo que el proyecto ya le sacó al núcleo del protocolo cuando el cable tuvo timbre.
+
+   La prueba no es lo que el kernel dice: **el propio código del agente informa en qué núcleo
+   está corriendo** —`cpuid` en x86_64, `mpidr_el1` en aarch64— y el número tiene que ser
+   distinto del núcleo que atiende y coincidir con el que se pidió.
+
+   **Lo que apareció al hacerlo, y es el ejemplo más limpio de por qué D22 pide las dos
+   arquitecturas:** un núcleo arrancado por PSCI viene con los registros SIMD **atrapados**
+   (`CPACR_EL1` en cero), porque ese es su valor de reset. El núcleo de arranque no lo sufría
+   porque UEFI se los había habilitado. Y como el compilador usa registros anchos para copiar
+   structs, la primera copia de una respuesta era una excepción — que el handler de faults
+   volvía a provocar al copiar la suya, así que el núcleo entraba en un bucle de faults **sin
+   alcanzar a avisar por el cordón**. En x86_64 no pasa nada de esto. Es exactamente la clase de
+   diferencia entre núcleos que no se ve hasta que el segundo hace algo que el primero hacía
+   gratis.
+
+   **Queda abierto que `exec` en otro núcleo es sincrónico:** el del protocolo espera la
+   respuesta, con tope. Un trabajo más largo que el tope vuelve como `core did not answer` aunque
+   el núcleo esté sano — ver deuda 13.
 
 10. **Un test falló una vez y no reprodujo.** Ocurrió una sola vez en la suite de `kernel-core` y
    no se repitió en veinte corridas seguidas. Se auditó lo único que puede causarlo —los tests
    que tocan las tablas globales de reclamos y de núcleos— y todos toman el mismo candado. **No
    está diagnosticado**; queda anotado para no darlo por inexistente si vuelve a pasar.
+
+13. **Un `exec` en otro núcleo es sincrónico, y eso le pone techo a lo que el agente puede
+   correr ahí.** El núcleo del protocolo deja el trabajo y **espera**, con un tope de vueltas para
+   que un núcleo que no contesta no se lleve puesto el cordón umbilical (D5, D17). El precio es
+   que un trabajo legítimamente largo se informa igual que uno perdido, y el núcleo queda marcado
+   como fallado sin serlo.
+
+   Lo que falta es la forma asincrónica: `exec` devuelve enseguida un handle de trabajo y el
+   agente pregunta después si terminó. Es lo que un núcleo `dedicated` pide de verdad —correr
+   algo durante horas mientras el agente no está—, y encaja con D14: el resultado sería otro
+   estado de la máquina que sobrevive a la desconexión.
 
 11. **Los atributos de cacheabilidad que informa UEFI se descartan.** D12 anda igual porque la
    cacheabilidad se deduce de la *clase* de cada región, pero UEFI informa además atributos por
@@ -329,11 +359,13 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
 
 1. **Dónde se publica el código.** Hay repositorio git local desde el Hito 1 (rama `main`).
    El alojamiento remoto sigue sin definir: repo aparte, no en empujoneducativo.
-2. **Por dónde seguir.** Queda un solo verbo, `dma.allow` —el IOMMU, el más grande del proyecto
-   y el que más gana con silicio real— y una deuda grande: **darle trabajo a los núcleos
-   reclamados** (deuda 9), que además es lo que destraba la restricción de D29 que quedó
-   pendiente en la deuda 12 — mientras `exec` no pueda elegir núcleo, exigir `supervised` en el
-   del protocolo dejaría `raw` sin ningún lugar donde correr.
+2. **Por dónde seguir.** Queda **un solo verbo**: `dma.allow`, el IOMMU — el más grande del
+   proyecto y el que más gana con silicio real.
+
+   Y quedó destrabada la restricción de D29 que la deuda 12 dejó pendiente: ahora que `exec`
+   puede elegir núcleo, exigir `supervised` en el del protocolo ya **no** deja `raw` sin lugar
+   donde correr. Hacerla cumplir es un cambio chico en el verbo y uno grande en las pruebas: casi
+   todas corren `raw` en el núcleo que atiende, y pasarían a necesitar un núcleo reclamado.
 
 3. **Si `exec` debe recibir un estado inicial de registros.** La sección 4 lo especifica
    (`exec(core, handle, off, regs)`) y hoy no lo hace: el código recibe solo su propia

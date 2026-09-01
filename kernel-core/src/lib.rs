@@ -25,6 +25,7 @@ pub mod protocol;
 pub mod serial;
 pub mod stack;
 pub mod tables;
+pub mod work;
 
 #[cfg(test)]
 mod tests;

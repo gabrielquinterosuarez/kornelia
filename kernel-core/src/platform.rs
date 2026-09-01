@@ -229,6 +229,16 @@ pub trait Platform {
     /// reclamar: sería quitarle el piso a quien está contestando el pedido.
     fn this_core(&self) -> u64;
 
+    /// Despierta a un núcleo que está durmiendo esperando trabajo.
+    ///
+    /// Es un timbre de núcleo a núcleo: un IPI por el APIC en x86_64, un SGI
+    /// por el GIC en aarch64. La misma maquinaria con la que el agente despierta
+    /// al núcleo del protocolo, apuntada al revés.
+    ///
+    /// No dice nada sobre qué hay que hacer — eso ya quedó en el buzón. Solo
+    /// saca al núcleo del `hlt` o del `wfi` para que lo mire.
+    fn wake_core(&mut self, id: u64);
+
     /// Le pide a la máquina que arranque un núcleo, y le dice qué ranura es la
     /// suya para que pueda avisar cuando llegue.
     ///

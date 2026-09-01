@@ -42,6 +42,7 @@ use crate::memory::Kind;
 use crate::platform::Platform;
 use crate::serial;
 use crate::tables;
+use crate::work;
 
 /// Lo mas grande que puede ser un pedido. Lo llena `mem.write` subiendo bytes;
 /// para algo mas grande se sube por partes, que es justo para lo que existe el
@@ -709,6 +710,9 @@ struct Args<'a> {
     /// (D27) y no tiene valor por omision: elegir por el seria justo lo que
     /// D27 le devuelve.
     mode: Option<&'a str>,
+    /// En que nucleo reclamado correr, para `exec`. Es el handle que devolvio
+    /// `core.claim`. Sin esto, corre en el nucleo que atiende el protocolo.
+    core: Option<u64>,
     /// Prestados del buffer de entrada, no copiados: subir codigo maquina no
     /// puede costar una copia mas. La vida util los ata al pedido, asi que se
     /// dejan de poder usar cuando llega el siguiente — que es exactamente
@@ -729,6 +733,7 @@ fn read_args<'a>(r: &mut Reader<'a>) -> Option<Args<'a>> {
         core_id: None,
         interrupt: None,
         mode: None,
+        core: None,
         data: None,
     };
 
@@ -755,6 +760,7 @@ fn read_args<'a>(r: &mut Reader<'a>) -> Option<Args<'a>> {
             "id" => a.core_id = Some(r.uint()?),
             "interrupt" => a.interrupt = Some(r.uint()?),
             "mode" => a.mode = Some(r.text()?),
+            "core" => a.core = Some(r.uint()?),
             _ => r.skip()?,
         }
     }
@@ -945,10 +951,14 @@ fn finish_reply<P: Platform>(p: &mut P, id: u64, w: Writer<'_>) {
 /// kernel eligiera, estaria eligiendo el kernel, que es exactamente lo que D27
 /// le devuelve al agente (P6).
 ///
-/// Lo que todavia no hace: elegir nucleo —falta un buzon por nucleo, deuda 9—
-/// ni recibir un estado inicial de registros. El codigo recibe en el primer
-/// registro de argumento su propia direccion, para poder encontrar sus datos sin
-/// depender de donde lo hayan cargado.
+/// **Y donde corre lo elige el agente:** con `core` —el handle que devolvio
+/// `core.claim`— el trabajo se le deja en el buzon a ese nucleo y este se queda
+/// esperando la respuesta. Sin `core`, corre en el nucleo que atiende el
+/// protocolo, que es lo que hacia siempre.
+///
+/// Lo que todavia no hace: recibir un estado inicial de registros. El codigo
+/// recibe en el primer registro de argumento su propia direccion, para poder
+/// encontrar sus datos sin depender de donde lo hayan cargado.
 fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
     let Some(a) = read_args(r) else {
         return reply_error(p, id, "malformed arguments");
@@ -992,13 +1002,31 @@ fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
     // SAFETY: la direccion esta dentro de un reclamo vigente, y el identity map
     // de D12 cubre toda la memoria de la maquina. Lo que haya ahi puede ser
     // cualquier cosa — de eso se trata.
-    // En el nucleo del kernel la interrupcion tiene prioridad sobre el codigo
-    // del agente (D29): se prenden los timbres mientras corre, asi un `exec`
-    // largo no deja al cordon sin atender. El bucle vuelve a apagarlos al salir
-    // porque su propio diseno depende de eso.
-    p.set_interrupts(true);
-    let outcome = unsafe { p.exec(entry, (c.start, c.bytes), supervised) };
-    p.set_interrupts(false);
+    let outcome = match a.core {
+        // En otro nucleo: se le deja el trabajo en el buzon y se espera. El
+        // nucleo del protocolo no corre nada del agente aca, solo espera — y
+        // con tope, asi que el cordon no se pierde si el otro no contesta.
+        Some(handle) => match unsafe {
+            work::run_on(p, handle, work::Job {
+                entry,
+                region: (c.start, c.bytes),
+                supervised,
+            })
+        } {
+            Err(e) => return reply_error(p, id, e.code()),
+            Ok(o) => o,
+        },
+        // En este mismo. En el nucleo del kernel la interrupcion tiene
+        // prioridad sobre el codigo del agente (D29): se prenden los timbres
+        // mientras corre, asi un `exec` largo no deja al cordon sin atender. El
+        // bucle vuelve a apagarlos al salir porque su diseno depende de eso.
+        None => {
+            p.set_interrupts(true);
+            let o = unsafe { p.exec(entry, (c.start, c.bytes), supervised) };
+            p.set_interrupts(false);
+            o
+        }
+    };
 
     let out = unsafe { &mut *core::ptr::addr_of_mut!(OUTBOX) };
     let mut w = Writer::new(out);
@@ -1008,12 +1036,18 @@ fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
     // del pedido — es su resultado, y va adentro.
     w.bool(true);
 
-    w.map(4);
+    w.map(5);
 
-    // Con que privilegio corrio de verdad. Se devuelve aunque el agente lo
-    // acabe de mandar: la respuesta tiene que poder leerse sola.
+    // Con que privilegio corrio de verdad, y donde. Se devuelven aunque el
+    // agente los acabe de mandar: la respuesta tiene que poder leerse sola.
     w.text("mode");
     w.text(if supervised { "supervised" } else { "raw" });
+
+    w.text("core");
+    match a.core {
+        Some(h) => w.uint(h),
+        None => w.null(),
+    }
 
     w.text("faulted");
     w.bool(outcome.faulted);

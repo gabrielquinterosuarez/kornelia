@@ -733,6 +733,108 @@ def test_supervised(proc, timeout, arch):
     return 0
 
 
+# Un programa que devuelve el numero con el que la maquina nombra al nucleo en
+# el que esta corriendo. Es lo que convierte "corrio en otro nucleo" de una
+# afirmacion del kernel en algo comprobable desde afuera.
+WHICH_CORE = {
+    # mov eax, 1 ; cpuid ; shr ebx, 24 ; mov eax, ebx ; ret
+    # Hoja 1 de CPUID: los 8 bits de arriba de EBX son el APIC ID, que es el
+    # mismo numero con el que la MADT nombra a cada nucleo.
+    "x86_64": (bytes([0xB8, 0x01, 0x00, 0x00, 0x00, 0x0F, 0xA2,
+                      0xC1, 0xEB, 0x18, 0x89, 0xD8, 0xC3]), "rax"),
+    # mrs x0, mpidr_el1 ; ret
+    "aarch64": (bytes([0xA0, 0x00, 0x38, 0xD5, 0xC0, 0x03, 0x5F, 0xD6]), "x0"),
+}
+
+
+def test_on_core(proc, timeout, arch):
+    """El agente elige en que nucleo corre su codigo (D13, D29).
+
+    Reclamar un nucleo servia para reservarlo, no para usarlo: `exec` corria
+    siempre en el que atiende el protocolo. La prueba de que eso cambio no es
+    lo que el kernel dice, es que **el propio codigo del agente informe donde
+    esta corriendo**: se corre el mismo programa con y sin destino, y los dos
+    numeros tienen que ser distintos.
+    """
+    code, register = WHICH_CORE[arch]
+    failures = []
+
+    def ask_verb(n, verb, args):
+        resp, _ = ask(proc, [n, verb, args], timeout)
+        _, ok, load = resp
+        return ok, load
+
+    # Un nucleo reclamado. Si ya hay uno de una prueba anterior, se usa ese.
+    ok, d = ask_verb(60, "describe", {"what": ["cores"]})
+    mine = [c for c in d["cores"] if ok and c["state"] == "idle"]
+    if mine:
+        core = mine[0]
+    else:
+        ok, cpus = ask_verb(61, "describe", {"what": ["cpus"]})
+        if not ok or len(cpus["cpus"]) < 2:
+            print("  la maquina tiene un solo nucleo: no hay a donde mandar trabajo")
+            return 0
+        core = None
+        for c in cpus["cpus"]:
+            ok, r = ask_verb(62, "core.claim", {"id": c["id"]})
+            if ok:
+                core = r
+                break
+        if core is None:
+            print("  no se pudo reclamar ningun nucleo")
+            return 1
+    print(f"  nucleo reclamado: handle {core['handle']}, la maquina lo llama {core['id']}")
+
+    ok, c = ask_verb(63, "mem.claim", {"bytes": 4096, "align": 4096})
+    if not ok:
+        print(f"  no se pudo reclamar memoria: {c}")
+        return 1
+    h = c["handle"]
+    ask_verb(64, "mem.write", {"handle": h, "bytes": code})
+
+    mask = 0x00FFFFFF if arch == "aarch64" else 0xFFFFFFFF
+
+    # 1. Sin destino: corre en el nucleo que atiende el protocolo.
+    ok, r = ask_verb(65, "exec", {"handle": h, "mode": "raw"})
+    if not ok or r.get("faulted"):
+        print(f"  FALLA: no se pudo correr en el nucleo del protocolo: {r}")
+        return 1
+    here = r["registers"][register] & mask
+    print(f"  corriendo aca:      {register}={here}  (core={r['core']})")
+
+    # 2. Con destino: el mismo programa, en el nucleo reclamado.
+    ok, r = ask_verb(66, "exec", {"handle": h, "mode": "raw", "core": core["handle"]})
+    if not ok:
+        print(f"  FALLA: exec en otro nucleo fallo: {r}")
+        return 1
+    if r.get("faulted"):
+        failures.append(f"el codigo fallo en el otro nucleo: {r['fault']}")
+    there = r["registers"][register] & mask
+    print(f"  corriendo alla:     {register}={there}  (core={r['core']})")
+
+    if there == here:
+        failures.append("los dos dieron el mismo nucleo: no se movio a ningun lado")
+    if there != core["id"]:
+        failures.append(f"corrio en el nucleo {there} y se habia pedido el {core['id']}")
+
+    # 3. Un handle que no es de un nucleo se rechaza en vez de correr aca.
+    ok, r = ask_verb(67, "exec", {"handle": h, "mode": "raw", "core": 9999})
+    if ok:
+        failures.append("acepto un nucleo que no existe")
+    else:
+        print(f"    y un nucleo que no existe no cae de vuelta aca: {r}")
+
+    ask_verb(68, "release", {"handle": h})
+
+    print()
+    if failures:
+        for f in failures:
+            print(f"  FALLA: {f}")
+        return 1
+    print("  trabajo en otro nucleo: ok")
+    return 0
+
+
 def test_handler_during_exec(proc, timeout, arch):
     """El handler del agente corre DURANTE un exec largo (D9, D29).
 
@@ -1022,6 +1124,8 @@ def main():
                     help="sube codigo maquina de verdad y lo corre")
     ap.add_argument("--permission", action="store_true",
                     help="pide memoria alcanzable sin privilegio y comprueba que el bit este")
+    ap.add_argument("--on-core", action="store_true", dest="on_core",
+                    help="manda el codigo a correr a un nucleo reclamado")
     ap.add_argument("--supervised", action="store_true",
                     help="corre codigo sin privilegio y comprueba que no pueda colgar la maquina")
     ap.add_argument("--during", action="store_true",
@@ -1096,6 +1200,9 @@ def main():
         if args.during:
             print()
             rc |= test_handler_during_exec(proc, args.timeout, args.arch)
+        if args.on_core:
+            print("\n== el agente elige en que nucleo corre (D13) ==")
+            rc |= test_on_core(proc, args.timeout, args.arch)
         if args.supervised:
             print("\n== el agente declara con que privilegio corre (D27) ==")
             rc |= test_supervised(proc, args.timeout, args.arch)

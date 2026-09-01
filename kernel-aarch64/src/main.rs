@@ -128,6 +128,10 @@ impl Platform for AArch64 {
         smp::start(hw.psci, id, slot)
     }
 
+    fn wake_core(&mut self, id: u64) {
+        irq::wake(id);
+    }
+
     unsafe fn exec(&mut self, entry: u64, region: (u64, u64), supervised: bool) -> Outcome {
         // En aarch64 las dos caches NO son coherentes: hay que empujar lo
         // escrito hasta donde lo ve el camino de instrucciones.
@@ -177,10 +181,20 @@ pub extern "efiapi" fn efi_main(image: *mut c_void, systab: *mut c_void) -> usiz
 /// alcanzable en el momento en que SP se mueve.
 static mut MACHINE: Machine = Machine::mute("no se llego a describir la maquina");
 
+/// La plataforma de este nucleo.
+///
+/// La arma cada nucleo por su cuenta: no es estado compartido sino la puerta a
+/// lo que ya esta puesto. Un nucleo reclamado la necesita para poder correr el
+/// codigo del agente que le dejaron en el buzon.
+pub fn platform() -> impl Platform {
+    // SAFETY: `MACHINE` se escribe una sola vez, en el arranque, antes de que
+    // exista cualquier otro nucleo.
+    AArch64 { machine: unsafe { MACHINE } }
+}
+
 /// Corre ya sobre la pila propia del kernel.
 extern "C" fn boot_core() -> ! {
-    let machine = unsafe { MACHINE };
-    kernel_core::main(&mut AArch64 { machine })
+    kernel_core::main(&mut platform())
 }
 
 /// Se muda a la pila del kernel y salta.

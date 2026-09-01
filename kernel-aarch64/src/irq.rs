@@ -64,6 +64,10 @@ const SERIAL_PRIORITY: u8 = 0x00;
 /// Del 0 al 15 son las que un nucleo se manda a otro. La 8 esta libre.
 const SGI_MAILBOX: u32 = 8;
 
+/// Y el que usa el nucleo del protocolo para despertar a un nucleo reclamado
+/// que esta durmiendo esperando trabajo.
+const SGI_WAKE: u32 = 9;
+
 /// La prioridad del buzon: **mas baja que la del cable** (numero mas grande).
 /// Por mas que el agente inunde de llamadas, el cordon pasa primero (D17, P6).
 const MAILBOX_PRIORITY: u8 = 0x80;
@@ -153,7 +157,10 @@ pub unsafe fn dispatch() {
         if id == SPURIOUS {
             break;
         }
-        if id == SGI_MAILBOX {
+        if id == SGI_WAKE {
+                // Despertar es no hacer nada: el trabajo ya estaba en el buzon
+                // antes de que sonara, y quien duerme lo mira al despertarse.
+        } else if id == SGI_MAILBOX {
                 // Solo despierta. El trabajo lo hace el bucle.
             kernel_core::channel::rang();
         } else if id == CABLE {
@@ -197,6 +204,44 @@ pub fn sleep() {
             "msr daifset, #2",
             options(nomem, nostack)
         );
+    }
+}
+
+/// Prepara a un nucleo reclamado para que lo puedan despertar.
+///
+/// La interfaz de nucleo del GIC es **por nucleo**: que la del de arranque este
+/// encendida no dice nada de la de este. El distribuidor, en cambio, es de toda
+/// la maquina y ya lo encendio el de arranque.
+///
+/// # Safety
+///
+/// Corre en el nucleo reclamado, con su tabla de vectores ya puesta.
+pub unsafe fn prepare_worker() -> Result<(), &'static str> {
+    if GICC == 0 {
+        return Err("el GIC todavia no esta encendido");
+    }
+    write_reg(GICC, GICC_PMR, 0xF0);
+    write_reg(GICC, GICC_CTLR, 1);
+
+    // Los SGI son por nucleo, asi que habilitarlo aca es habilitarlo para este.
+    write_byte(GICD, GICD_IPRIORITYR + SGI_WAKE as u64, MAILBOX_PRIORITY);
+    write_reg(GICD, GICD_ISENABLER, 1 << SGI_WAKE);
+    Ok(())
+}
+
+/// Despierta al nucleo que la maquina nombra con ese identificador.
+///
+/// El registro de envio lleva una **mascara** de nucleos destino en los bits
+/// 23-16, no un numero. En la placa `virt` de QEMU el numero de cada nucleo es
+/// su posicion, asi que el bit que le toca es `1 << id`; en una maquina con
+/// varios grupos de nucleos el MPIDR se parte en niveles y esto no alcanzaria.
+pub fn wake(id: u64) {
+    // SAFETY: el GIC lo dejo `install`, y el identity map cubre su MMIO.
+    unsafe {
+        if GICD == 0 || id >= 8 {
+            return;
+        }
+        write_reg(GICD, GICD_SGIR, ((1u32 << id) << 16) | SGI_WAKE);
     }
 }
 

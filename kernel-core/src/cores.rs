@@ -177,6 +177,28 @@ pub fn is_claimed(id: u64) -> bool {
     all().any(|c| c.id == id)
 }
 
+/// La ranura de un nucleo reclamado, buscada por su handle.
+///
+/// La ranura es la posicion en la tabla, y es lo que usa todo lo que trabaja
+/// por nucleo: el buzon de trabajo, el bloque privado, la pila de excepcion. El
+/// handle es lo que ve el agente (D14), y esto traduce de uno al otro.
+pub fn slot_of(handle: u64) -> Option<usize> {
+    let n = USED.load(Ordering::Acquire);
+    let t = unsafe { &*core::ptr::addr_of!(TABLE) };
+    t[..n.min(MAX)]
+        .iter()
+        .position(|c| matches!(c, Some(c) if c.handle == handle))
+}
+
+/// Con que numero nombra la maquina al nucleo de esa ranura.
+pub fn id_of(slot: usize) -> Option<u64> {
+    if slot >= MAX {
+        return None;
+    }
+    let t = unsafe { &*core::ptr::addr_of!(TABLE) };
+    t[slot].map(|c| c.id)
+}
+
 pub fn all() -> impl Iterator<Item = Core> {
     let n = USED.load(Ordering::Acquire);
     let t = unsafe { &*core::ptr::addr_of!(TABLE) };

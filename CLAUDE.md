@@ -111,32 +111,35 @@ interrupciones y PCIe, leídos de ACPI — más el acuerdo de `exec`: qué modos
 y con qué bytes se vuelve de `supervised`.
 
 `core.claim` arranca los otros núcleos: PSCI en aarch64, INIT/SIPI más un
-trampolín de 16→32→64 bits en x86_64.
+trampolín de 16→32→64 bits en x86_64. **Y ahora reciben trabajo:** `exec {core}`
+deja el pedido en un buzón por núcleo, el núcleo **duerme** hasta que lo
+despierta un IPI/SGI, corre y contesta. Lo comprueba el código del agente
+diciendo en qué núcleo está.
 
 Falta uno: `dma.allow`, el IOMMU.
 
-El portón es `./scripts/check.sh`: frontera + idioma + 87 tests + compila las
+El portón es `./scripts/check.sh`: frontera + idioma + 89 tests + compila las
 dos + las bootea en QEMU y les habla el protocolo con `scripts/client.py`.
 Corrélo antes de commitear; CI corre exactamente ese script.
 
 ## Lo que sigue
 
-Queda **un solo verbo** sin hacer, más una deuda grande. Las preguntas abiertas
-están en `docs/DISENO.md` §8.
+Queda **un solo verbo** sin hacer. Las preguntas abiertas están en
+`docs/DISENO.md` §8.
 
-1. **Darle trabajo a los núcleos reclamados.** Hoy arrancan y quedan esperando,
-   pero `exec` corre siempre en el que atiende el protocolo. Falta un buzón por
-   núcleo y que `exec` acepte a cuál mandárselo (sección 4: `exec(core, ...)`).
+1. **`dma.allow`** — el IOMMU, el único verbo que falta. El más grande del proyecto y el más
+   específico de cada fabricante; es lo que más gana con silicio real.
+2. **Hacer cumplir la regla de D29**, que recién ahora se puede: en el núcleo del protocolo el
+   agente debería correr siempre `supervised`, y si quiere `raw` que reclame un núcleo. Antes
+   exigirlo dejaba `raw` sin ningún lugar donde correr; ahora `exec` elige núcleo, así que no.
+   Es un cambio chico en el verbo y grande en las pruebas — casi todas corren `raw` en el núcleo
+   que atiende.
+3. **`exec` en otro núcleo es sincrónico** (deuda 13): el del protocolo espera con un tope, así
+   que un trabajo largo se informa igual que un núcleo perdido. Falta la forma asincrónica.
 
-   **Destraba además una regla de D29 que quedó pendiente:** en el núcleo del
-   protocolo el agente debería correr siempre `supervised`, pero exigirlo hoy
-   dejaría `raw` sin ningún lugar donde correr — es la deuda 12, ya escrita.
-2. **`dma.allow`** — el IOMMU, el único verbo que falta. El más grande del proyecto y el más específico de
-   cada fabricante; es lo que más gana con silicio real.
-
-Deudas anotadas en `docs/DISENO.md` §7. La más viva: **un núcleo reclamado
-todavía no puede recibir trabajo** — arranca, se configura solo y queda
-esperando, pero `exec` corre siempre en el que atiende el protocolo.
+Deudas anotadas en `docs/DISENO.md` §7. La más viva: **`exec` en otro núcleo es
+sincrónico y con tope**, así que un trabajo largo se informa igual que uno
+perdido.
 
 ## Cómo correrlo
 
@@ -145,5 +148,6 @@ esperando, pero `exec` corre siempre en el que atiende el protocolo.
 ./scripts/run-aarch64.sh
 ./scripts/client.py --what memory   # hablarle el protocolo
 ./scripts/client.py --supervised    # D27: correr sin privilegio y ver el fault
+./scripts/client.py --smp 4 --on-core   # mandar el codigo a otro nucleo
 ./scripts/check.sh                  # el porton entero
 ```
