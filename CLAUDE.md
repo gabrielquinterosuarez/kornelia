@@ -1,7 +1,8 @@
 # Kernel agente-céntrico — contexto del proyecto
 
 > Este archivo se carga solo al abrir Claude Code en esta carpeta.
-> **Leé `docs/DISENO.md` antes de proponer cualquier cambio de arquitectura.**
+> **Leé `docs/DISENO.md` antes de proponer cualquier cambio de arquitectura**, y
+> `docs/MAPA.md` para saber dónde vive cada cosa sin tener que leer todo.
 
 ## Qué es
 
@@ -93,9 +94,11 @@ captura los faults en vez de reiniciarse. **El núcleo que atiende duerme entre
 pedidos**: el cable serie tiene timbre (interrupción), así que ya no gira
 preguntando.
 
-**Los once verbos andan:** `describe`, `mem.claim`, `mem.read`,
-`mem.write`, `release`, `exec`, `core.claim`, `listen` y **`irq.install` /
-`irq.install_raw`** y **`dma.allow`** (los dos últimos, solo en x86_64). El agente sube código máquina, lo corre, y
+**Los once verbos andan.** Dos solo en x86_64, y la máquina lo dice en vez de
+callarlo: `irq.install_raw` (en aarch64 no hay un camino más crudo que el que ya
+se usa) y `dma.allow` (falta programar el SMMUv3 — deuda 14).
+
+El agente sube código máquina, lo corre, y
 si falla **el fault vuelve como respuesta en vez de matar la máquina** (P5) —
 ni siquiera destruyendo el puntero de pila, porque las excepciones entran en una
 pila aparte (IST en x86_64, `SP_EL1` en aarch64).
@@ -128,8 +131,9 @@ Corrélo antes de commitear; CI corre exactamente ese script.
 
 ## Lo que sigue
 
-Queda **un solo verbo** sin hacer. Las preguntas abiertas están en
-`docs/DISENO.md` §8.
+**No queda ningún verbo sin hacer.** Lo que queda es emparejar las dos
+arquitecturas y pagar deudas. Las preguntas abiertas están en `docs/DISENO.md` §8;
+las deudas, en §7 — abiertas la 2, 3, 6, 10, 11, 13, 14 y 15.
 
 1. **El SMMUv3 de aarch64** (deuda 14): es lo único que un agente puede pedir y recibir en una
    arquitectura y no en la otra. Tabla de streams, descriptores de contexto y cola de comandos.
@@ -141,9 +145,36 @@ Queda **un solo verbo** sin hacer. Las preguntas abiertas están en
 3. **`exec` en otro núcleo es sincrónico** (deuda 13): el del protocolo espera con un tope, así
    que un trabajo largo se informa igual que un núcleo perdido. Falta la forma asincrónica.
 
-Deudas anotadas en `docs/DISENO.md` §7. La más viva: **`exec` en otro núcleo es
-sincrónico y con tope**, así que un trabajo largo se informa igual que uno
-perdido.
+## Cosas que ya costaron caras
+
+Bugs que aparecieron una vez, no se ven venir, y **no se parecen a su causa**.
+Están acá para no volver a pagarlos:
+
+- **Un núcleo arrancado por PSCI viene con los registros SIMD atrapados**
+  (`CPACR_EL1` en cero, que es su valor de reset). El de arranque no lo sufre
+  porque UEFI se los habilitó. Y el compilador usa registros anchos para copiar
+  structs, así que la primera copia es una excepción — que el handler de faults
+  vuelve a provocar al copiar la suya. El núcleo entra en un bucle de faults
+  **sin alcanzar a avisar por el cordón**: silencio total. Se arregla en el
+  trampolín, antes de saltar a Rust.
+- **`GCMD` del IOMMU no es una lista de botones: es el estado entero.** El
+  silicio compara lo que se le escribe contra lo que había. Pedirle "tomate la
+  tabla raíz" sin arrastrar el estado **apaga la traducción de paso**, y el
+  síntoma es que todo pasa — o sea que se ve como si anduviera.
+- **Una prueba que pasa porque no pasa nada.** El IOMMU "bloqueando" y el DMA no
+  ocurriendo se ven idénticos desde afuera. Antes de creerle a un bloqueo hay
+  que comprobar que la cosa bloqueada ocurre: se bootea sin IOMMU y se mira.
+
+**Cómo se depura un núcleo que se quedó mudo.** No hay debugger: se marca el
+camino con letras por el cable (`p.uart_write_byte(b'A')`) y se lee la traza.
+Así apareció lo de CPACR — `1ST234KJ2Da2` y ninguna `b` dijo que los dos núcleos
+hacían su parte y el reclamado moría entre terminar el trabajo y guardar la
+respuesta. Las letras se sacan antes de commitear.
+
+**Las máquinas de prueba llevan aparatos a propósito.** `scripts/run-*.sh`
+arrancan QEMU con IOMMU (`-device intel-iommu`, `-machine virt,iommu=smmuv3`) y
+con `-device edu`, que es un motor de DMA que se maneja con cuatro escrituras.
+Sin ese aparato, `dma.allow` no se podría probar contra nada real.
 
 ## Cómo correrlo
 
