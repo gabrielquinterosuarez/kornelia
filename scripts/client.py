@@ -203,6 +203,10 @@ def test_memory(proc, timeout):
         failures.append(f"no respeto la alineacion: {start:#x}")
     if c["kind"] != "free":
         failures.append(f"entrego memoria que no es libre: {c['kind']}")
+    # La cacheabilidad sale de lo que informo el firmware region por region, no
+    # de deducirla de la clase (deuda 11). RAM comun tiene que venir cacheable.
+    if c["caching"] != "write-back":
+        failures.append(f"la RAM no vino cacheable: {c['caching']}")
 
     # 2. Escribir un patron reconocible.
     pattern = bytes([0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x11, 0x22, 0x33])
@@ -237,6 +241,19 @@ def test_memory(proc, timeout):
     ok, e = ask_verb(8, "mem.read", {"handle": h, "len": 4})
     if ok or e.get("error") != "no-such-handle":
         failures.append("el handle sigue vivo despues de soltarlo")
+
+    # Y la otra mitad de la deuda 11: que la cacheabilidad **distinga**. Si todo
+    # viniera con la misma etiqueta, el dato no vendria de la maquina — vendria
+    # de un valor fijo, y esta prueba pasaria igual sin haber leido nada.
+    ok, d = ask_verb(9, "describe", {"what": ["pcie"]})
+    if ok and d["pcie"]:
+        ok, mmio = ask_verb(10, "mem.claim", {"at": d["pcie"]["base"], "bytes": 4096})
+        if ok:
+            print(f"    y los registros de PCIe: kind={mmio['kind']}, "
+                  f"caching={mmio['caching']}")
+            if mmio["caching"] == "write-back":
+                failures.append("los registros de un aparato vinieron cacheables")
+            ask_verb(11, "release", {"handle": mmio["handle"]})
 
     print()
     if failures:

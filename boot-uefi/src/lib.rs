@@ -35,7 +35,7 @@
 use core::ffi::c_void;
 use core::mem::{offset_of, size_of};
 use kernel_core::machine::{Machine, Tables};
-use kernel_core::memory::{Kind, Region};
+use kernel_core::memory::{Caching, Kind, Region};
 
 // ---------------------------------------------------------------------------
 // Codigos de estado
@@ -394,7 +394,15 @@ unsafe fn add_pcie_window(tables: &kernel_core::Tables, count: usize) -> usize {
     }
 
     let dest = &raw mut REGIONS as *mut Region;
-    dest.add(count).write(Region { start: pcie.base, bytes, kind: Kind::Mmio });
+    // La ventana de configuracion son registros: no se cachea. Y esto no sale
+    // del mapa de UEFI —que no la informa— sino de la MCFG, asi que el dato de
+    // cacheabilidad lo pone quien sabe que es (P4).
+    dest.add(count).write(Region {
+        start: pcie.base,
+        bytes,
+        kind: Kind::Mmio,
+        caching: Caching::Uncacheable,
+    });
     1
 }
 
@@ -464,6 +472,7 @@ unsafe fn normalize(buffer: *const u8, size: usize, stride: usize) -> usize {
             start: (*d).physical_start,
             bytes: (*d).pages.saturating_mul(UEFI_PAGE),
             kind: classify((*d).kind),
+            caching: caching_of((*d).attributes),
         };
 
         if region.bytes > 0 {
@@ -508,5 +517,38 @@ fn classify(kind: u32) -> Kind {
         14 => Kind::Persistent,
 
         other => Kind::Other(other),
+    }
+}
+
+/// Traduce los atributos de una region de UEFI a si se puede cachear (deuda 11).
+///
+/// UEFI informa, region por region, cuales de los modos de cache **soporta**:
+/// `WB` es write-back (cacheable), `UC` es sin cachear, y estan tambien `WT` y
+/// `WC`. Es mas preciso que deducirlo de la clase de memoria, que es lo que se
+/// hacia: hay memoria reservada que igual es RAM cacheable, y rangos que parecen
+/// RAM y no lo son.
+///
+/// **Se pregunta si soporta WB antes que si soporta UC, y en ese orden importa:**
+/// la RAM comun soporta los dos, y en ese caso lo que se quiere es cachearla.
+/// Al reves, toda la memoria de la maquina quedaria sin cache y andaria cien
+/// veces mas lento.
+///
+/// Un cero significa que el firmware no dijo nada de esa region, que no es lo
+/// mismo que decir que no se puede cachear.
+fn caching_of(attributes: u64) -> Caching {
+    /// `EFI_MEMORY_WB`: soporta write-back.
+    const WB: u64 = 0x8;
+    /// `EFI_MEMORY_UC`: soporta quedar sin cachear.
+    const UC: u64 = 0x1;
+    /// `EFI_MEMORY_WT` y `EFI_MEMORY_WC`: los otros dos que valen como cache.
+    const WT: u64 = 0x4;
+    const WC: u64 = 0x2;
+
+    if attributes & (WB | WT | WC) != 0 {
+        Caching::WriteBack
+    } else if attributes & UC != 0 {
+        Caching::Uncacheable
+    } else {
+        Caching::Unknown
     }
 }

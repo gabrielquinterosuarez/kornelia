@@ -22,7 +22,7 @@
 //! arma y las carga desde su codigo en `exec` (P2).
 
 use crate::machine::Machine;
-use crate::memory::Kind;
+use crate::memory::{Caching, Kind};
 
 /// Una pagina de 1 GiB. El grano del identity map: con paginas asi, mapear
 /// toda la RAM cuesta unas pocas entradas y la presion sobre el TLB es casi
@@ -69,13 +69,26 @@ pub fn attr_of(m: &Machine, gib: u64) -> Attr {
         if r.start >= end || r.end() <= start_at {
             continue;
         }
-        match r.kind {
-            // Un solo registro adentro alcanza para que la pagina entera tenga
-            // que ser no cacheable: el grano del mapeo es 1 GiB.
-            Kind::Mmio => return Attr::Device,
-            // Lo que la maquina no supo explicar no se asume RAM.
-            Kind::Reserved | Kind::Broken | Kind::Other(_) => {}
-            _ => has_memory = true,
+        // **Lo que la maquina dijo gana sobre lo que se puede deducir** (P4,
+        // deuda 11). El entorno de arranque informa la cacheabilidad region por
+        // region, y es mas precisa que inferirla de la clase: hay memoria
+        // reservada que igual es RAM cacheable, y rangos que parecen RAM y no
+        // se pueden cachear.
+        //
+        // Un solo pedazo no cacheable adentro alcanza para que la pagina entera
+        // tenga que serlo, porque el grano del mapeo es 1 GiB. Por eso este
+        // caso corta y el otro solo anota.
+        match r.caching {
+            Caching::Uncacheable => return Attr::Device,
+            Caching::WriteBack => has_memory = true,
+            Caching::Unknown => match r.kind {
+                // Sin el dato, se deduce de la clase, que es lo que se hacia
+                // antes de que los atributos se leyeran.
+                Kind::Mmio => return Attr::Device,
+                // Lo que la maquina no supo explicar no se asume RAM.
+                Kind::Reserved | Kind::Broken | Kind::Other(_) | Kind::Unreported => {}
+                _ => has_memory = true,
+            },
         }
     }
 

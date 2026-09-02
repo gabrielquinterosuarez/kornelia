@@ -38,7 +38,7 @@ Lo verifica `./scripts/check-boundary.sh`, dentro del portón.
 2. **Idioma** (`check-language.py`) — identificadores en inglés. Es una lista de
    palabras: cuando se cuela una que no está, se **agrega a `FORBIDDEN`** en vez
    de solo corregir el identificador.
-3. **99 tests** de `kernel-core`.
+3. **102 tests** de `kernel-core`.
 4. **Compilan las dos.**
 5. **Arrancan las dos en QEMU y contestan el protocolo**, con `scripts/client.py`.
 6. **Y aarch64 arranca una vez más sin ACPI**, para que se describa por device

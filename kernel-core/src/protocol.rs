@@ -1130,7 +1130,7 @@ fn release<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, hw: &Hardware) {
 }
 
 fn write_claim(w: &mut Writer<'_>, c: &claims::Claim) {
-    w.map(5);
+    w.map(6);
     w.text("handle");
     w.uint(c.handle);
     w.text("start");
@@ -1140,6 +1140,16 @@ fn write_claim(w: &mut Writer<'_>, c: &claims::Claim) {
     // De que clase era la region: el agente decide con el dato a la vista.
     w.text("kind");
     w.text(c.kind.code());
+    // Si se puede cachear, segun lo que informo la maquina (deuda 11). Va por
+    // separado de la clase porque no se deduce de ella: hay memoria reservada
+    // que igual es cacheable. Y el agente lo necesita para escribir un driver —
+    // cachear un registro es que el aparato no se entere de la escritura.
+    w.text("caching");
+    w.text(match c.caching {
+        crate::memory::Caching::WriteBack => "write-back",
+        crate::memory::Caching::Uncacheable => "uncacheable",
+        crate::memory::Caching::Unknown => "unknown",
+    });
     // Si quedo alcanzable sin privilegio. Se informa siempre, porque el tamano
     // pudo haberse redondeado al pedirlo.
     w.text("user");

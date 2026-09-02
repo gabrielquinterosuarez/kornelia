@@ -168,7 +168,7 @@ Ahora los dos verbos van con el mismo punto que usa `exec`, armado alrededor de
 **una sola instrucción**, y el rechazo vuelve como `access-refused` con la
 dirección que cortó y los números crudos de la máquina.
 
-El portón es `./scripts/check.sh`: frontera + idioma + 99 tests + compila las
+El portón es `./scripts/check.sh`: frontera + idioma + 102 tests + compila las
 dos + las bootea en QEMU y les habla el protocolo con `scripts/client.py`, **y
 bootea aarch64 una vez más sin ACPI** para que el device tree no sea una
 intención.
@@ -177,19 +177,19 @@ Corrélo antes de commitear; CI corre exactamente ese script.
 ## Lo que sigue
 
 **No queda ningún verbo sin hacer, ni nada que ande en una arquitectura y no en la
-otra.** Lo que queda es pagar deudas. Las preguntas abiertas están en
-`docs/DISENO.md` §8; las deudas, en §7 — abiertas la 10 y 11, y ninguna rompe
-nada hoy.
+otra, ni ninguna deuda abierta** (§7 de `docs/DISENO.md` está entera en resuelto).
+Las preguntas abiertas siguen en §8. Lo que sigue son cosas que ninguna deuda
+cubría todavía:
 
 1. **Un núcleo cuyo código se colgó queda ocupado para siempre** (lo que dejó abierto la deuda
    13): el agente lo ve —`work` dice `running` y no cambia más— pero no lo puede recuperar.
+   Un bucle infinito no es un fault, y el kernel no tiene cómo distinguirlo de un trabajo largo
+   — que es exactamente la razón por la que `exec` dejó de esperar.
 2. **De la MADT solo se sacan núcleos y el controlador** (lo que quedó de la deuda 3): las rutas
    de interrupción de los aparatos todavía no, y `irq.install` las va a necesitar para algo más
    que las interrupciones que ya conoce.
-3. **Se descartan los atributos de cacheabilidad que informa UEFI** (deuda 11), que son más
-   precisos que deducirlos de la clase de cada región.
-4. **Un test falló una vez y no reprodujo** (deuda 10). No está diagnosticado; queda anotado
-   para no darlo por inexistente si vuelve.
+3. **El blob de arranque (D18) no existe.** Es lo único grande del diseño que no se empezó: hoy
+   un corte de luz deja la máquina esperando que alguien se conecte por cable.
 
 ## Cosas que ya costaron caras
 
@@ -235,6 +235,15 @@ Están acá para no volver a pagarlos:
   arregló con el punto de recuperación de `exec` usado afuera de `exec`
   (`guarded.rs`), pero la moraleja queda: **el kernel también toca memoria que
   puede fallar**, y ahí P5 no se cumple solo por existir el mecanismo de `exec`.
+- **"Se auditó lo único que puede causarlo" es una afirmación sobre lo que uno
+  se acordó de mirar.** Un test fallaba una vez cada tanto y no reproducía. La
+  auditoría revisó los tests que tocan las tablas de reclamos y de núcleos —y
+  esos sí tomaban el candado—; nadie miró los que leen la descripción de la
+  máquina, que pisan **otros** estáticos. Apareció recorriendo la lista de
+  estáticos del crate en vez de la lista de sospechosos.
+  **Y para reproducirlo hubo que correr menos, no más:** con la suite entera no
+  salía ni en 150 corridas; con solo los tres tests que comparten esos estáticos
+  y dieciséis hilos, dos de cada cuatrocientas.
 - **Un camino que ninguna prueba recorre no está andando: está sin probar.**
   Mientras esperaba a un núcleo reclamado, el núcleo del protocolo esperaba
   **con los timbres cerrados**, así que un handler del agente no corría y el

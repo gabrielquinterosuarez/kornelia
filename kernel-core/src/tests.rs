@@ -238,10 +238,10 @@ fn zero_breaks_nothing() {
 #[test]
 fn only_what_is_free_counts_as_free() {
     static REGIONS: [Region; 4] = [
-        Region { start: 0, bytes: 4096, kind: Kind::Free },
-        Region { start: 4096, bytes: 8192, kind: Kind::Firmware },
-        Region { start: 12288, bytes: 4096, kind: Kind::Free },
-        Region { start: 16384, bytes: 1 << 30, kind: Kind::Mmio },
+        Region::new(0, 4096, Kind::Free),
+        Region::new(4096, 8192, Kind::Firmware),
+        Region::new(12288, 4096, Kind::Free),
+        Region::new(16384, 1 << 30, Kind::Mmio),
     ];
     let m = Machine { regions: &REGIONS, tables: Tables::default(), failure: None };
 
@@ -260,7 +260,7 @@ fn a_mute_machine_has_nothing() {
 
 #[test]
 fn the_end_of_a_region_does_not_overflow() {
-    let r = Region { start: u64::MAX - 10, bytes: 1000, kind: Kind::Free };
+    let r = Region::new(u64::MAX - 10, 1000, Kind::Free);
     assert_eq!(r.end(), u64::MAX);
 }
 
@@ -544,10 +544,10 @@ fn invalid_utf8_text_is_rejected() {
 /// Dos regiones del kernel PEGADAS, una libre en el medio del mapa, y un hueco
 /// sin mapear a partir de 0x5000.
 static MAP: [Region; 4] = [
-    Region { start: 0x1000, bytes: 0x1000, kind: Kind::Kernel },
-    Region { start: 0x2000, bytes: 0x1000, kind: Kind::Kernel },
-    Region { start: 0x3000, bytes: 0x1000, kind: Kind::Free },
-    Region { start: 0x4000, bytes: 0x1000, kind: Kind::Firmware },
+    Region::new(0x1000, 0x1000, Kind::Kernel),
+    Region::new(0x2000, 0x1000, Kind::Kernel),
+    Region::new(0x3000, 0x1000, Kind::Free),
+    Region::new(0x4000, 0x1000, Kind::Firmware),
 ];
 
 fn machine() -> Machine {
@@ -608,25 +608,25 @@ fn from_regions(regions: &'static [Region]) -> Machine {
 #[test]
 fn coverage_reaches_the_highest_region_rounding_up() {
     // Un solo byte pasado el GiB obliga a mapear el GiB siguiente entero.
-    static OVER_A_GIB: [Region; 1] = [Region { start: 0, bytes: GIB + 1, kind: Kind::Free }];
+    static OVER_A_GIB: [Region; 1] = [Region::new(0, GIB + 1, Kind::Free)];
     assert_eq!(span_gib(&from_regions(&OVER_A_GIB)), 2);
 
     // Justo en el limite no hace falta uno mas.
-    static EXACTLY_A_GIB: [Region; 1] = [Region { start: 0, bytes: GIB, kind: Kind::Free }];
+    static EXACTLY_A_GIB: [Region; 1] = [Region::new(0, GIB, Kind::Free)];
     assert_eq!(span_gib(&from_regions(&EXACTLY_A_GIB)), 1);
 
     // Se cubre hasta arriba de todo, no hasta donde llega la RAM: ahi viven los
     // BARs de PCIe.
     static HIGH_REGION: [Region; 2] = [
-        Region { start: 0, bytes: GIB, kind: Kind::Free },
-        Region { start: 100 * GIB, bytes: GIB, kind: Kind::Mmio },
+        Region::new(0, GIB, Kind::Free),
+        Region::new(100 * GIB, GIB, Kind::Mmio),
     ];
     assert_eq!(span_gib(&from_regions(&HIGH_REGION)), 101);
 }
 
 #[test]
 fn a_page_with_ram_is_cacheable() {
-    static RAM: [Region; 1] = [Region { start: 0, bytes: GIB, kind: Kind::Free }];
+    static RAM: [Region; 1] = [Region::new(0, GIB, Kind::Free)];
     assert_eq!(attr_of(&from_regions(&RAM), 0), Attr::Memory);
 }
 
@@ -635,16 +635,16 @@ fn a_page_with_ram_is_cacheable() {
 #[test]
 fn a_single_register_makes_the_whole_page_uncacheable() {
     static MIXED: [Region; 2] = [
-        Region { start: 0, bytes: GIB - 4096, kind: Kind::Free },
+        Region::new(0, GIB - 4096, Kind::Free),
         // Una sola pagina de MMIO al final del GiB.
-        Region { start: GIB - 4096, bytes: 4096, kind: Kind::Mmio },
+        Region::new(GIB - 4096, 4096, Kind::Mmio),
     ];
     assert_eq!(attr_of(&from_regions(&MIXED), 0), Attr::Device);
 }
 
 #[test]
 fn an_empty_gap_is_treated_as_a_device() {
-    static FAR_OFF: [Region; 1] = [Region { start: 0, bytes: GIB, kind: Kind::Free }];
+    static FAR_OFF: [Region; 1] = [Region::new(0, GIB, Kind::Free)];
     // La pagina 5 no la menciona nadie: puede haber un dispositivo que este
     // kernel todavia no sabe que existe.
     assert_eq!(attr_of(&from_regions(&FAR_OFF), 5), Attr::Device);
@@ -653,9 +653,9 @@ fn an_empty_gap_is_treated_as_a_device() {
 #[test]
 fn what_the_machine_could_not_explain_is_not_assumed_ram() {
     static UNUSUAL: [Region; 3] = [
-        Region { start: 0, bytes: 4096, kind: Kind::Reserved },
-        Region { start: 4096, bytes: 4096, kind: Kind::Broken },
-        Region { start: 8192, bytes: 4096, kind: Kind::Other(77) },
+        Region::new(0, 4096, Kind::Reserved),
+        Region::new(4096, 4096, Kind::Broken),
+        Region::new(8192, 4096, Kind::Other(77)),
     ];
     assert_eq!(attr_of(&from_regions(&UNUSUAL), 0), Attr::Device);
 }
@@ -663,8 +663,8 @@ fn what_the_machine_could_not_explain_is_not_assumed_ram() {
 #[test]
 fn firmware_and_acpi_tables_are_memory() {
     static FW: [Region; 2] = [
-        Region { start: 0, bytes: 4096, kind: Kind::Firmware },
-        Region { start: 4096, bytes: 4096, kind: Kind::AcpiTables },
+        Region::new(0, 4096, Kind::Firmware),
+        Region::new(4096, 4096, Kind::AcpiTables),
     ];
     assert_eq!(attr_of(&from_regions(&FW), 0), Attr::Memory);
 }
@@ -673,11 +673,7 @@ fn firmware_and_acpi_tables_are_memory() {
 /// contar para las dos.
 #[test]
 fn a_straddling_region_affects_both_pages() {
-    static STRADDLING: [Region; 1] = [Region {
-        start: GIB - 4096,
-        bytes: 8192,
-        kind: Kind::Mmio,
-    }];
+    static STRADDLING: [Region; 1] = [Region::new(GIB - 4096, 8192, Kind::Mmio,)];
     let m = from_regions(&STRADDLING);
     assert_eq!(attr_of(&m, 0), Attr::Device);
     assert_eq!(attr_of(&m, 1), Attr::Device);
@@ -798,9 +794,9 @@ fn with_clean_table<T>(f: impl FnOnce() -> T) -> T {
 
 /// 0x0000-0x1000 kernel, 0x1000-0x5000 libre, 0x5000-0x6000 mmio.
 static SAMPLE_MAP: [Region; 3] = [
-    Region { start: 0x0000, bytes: 0x1000, kind: Kind::Kernel },
-    Region { start: 0x1000, bytes: 0x4000, kind: Kind::Free },
-    Region { start: 0x5000, bytes: 0x1000, kind: Kind::Mmio },
+    Region::new(0x0000, 0x1000, Kind::Kernel),
+    Region::new(0x1000, 0x4000, Kind::Free),
+    Region::new(0x5000, 0x1000, Kind::Mmio),
 ];
 
 fn sample_machine() -> Machine {
@@ -1037,9 +1033,44 @@ fn machine_with_acpi(tables: &[Vec<u8>]) -> (Vec<u8>, Vec<Box<[u8]>>) {
     (acpi_table(b"XSDT", &pointers), fixed)
 }
 
-fn read_hw(xsdt: &[u8]) -> acpi::Hardware {
+/// Un `Hardware` con el candado de los tests tomado.
+///
+/// **Esto fue la deuda 10**, el test que falló una vez y no reprodujo. Leer la
+/// descripción de una máquina —de ACPI o del device tree— escribe en arreglos
+/// estáticos compartidos, y el `Hardware` que vuelve son **slices que apuntan
+/// ahí**. Con los tests en paralelo, otro test podía sobreescribir los núcleos
+/// entre la lectura y el `assert`: dos fallos cada cuatrocientas corridas.
+///
+/// La auditoría de entonces miró los tests de reclamos y de núcleos, que sí
+/// toman el candado. Nadie miró los de descripción, que pisan **otros**
+/// estáticos.
+///
+/// Devolver el guard pegado al dato es lo que lo cierra de verdad: el candado se
+/// suelta cuando el `Hardware` deja de usarse, y eso **lo hace cumplir el
+/// compilador** en vez de una regla escrita que el próximo test puede no leer.
+struct Described {
+    hw: acpi::Hardware,
+    _guard: std::sync::MutexGuard<'static, ()>,
+}
+
+impl core::ops::Deref for Described {
+    type Target = acpi::Hardware;
+    fn deref(&self) -> &acpi::Hardware {
+        &self.hw
+    }
+}
+
+fn read_hw(xsdt: &[u8]) -> Described {
+    let guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let rsdp = Rsdp { revision: 2, rsdt: 0, xsdt: Some(xsdt.as_ptr() as u64) };
-    unsafe { acpi::read(&rsdp) }
+    Described { hw: unsafe { acpi::read(&rsdp) }, _guard: guard }
+}
+
+/// Lo mismo para el otro dialecto: el device tree escribe en sus propios
+/// estáticos, con el mismo problema.
+fn read_tree(blob: &[u8]) -> Described {
+    let guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    Described { hw: unsafe { crate::fdt::read(blob.as_ptr() as u64) }, _guard: guard }
 }
 
 #[test]
@@ -1605,9 +1636,9 @@ fn it_is_counted_every_time_it_is_served() {
 fn which_chunks_have_kernel_inside_is_recognized() {
     // El kernel en 0x1000..0x2000, dentro del primer GiB.
     static MAP: [Region; 3] = [
-        Region { start: 0, bytes: 0x1000, kind: Kind::Free },
-        Region { start: 0x1000, bytes: 0x1000, kind: Kind::Kernel },
-        Region { start: GIB, bytes: GIB, kind: Kind::Free },
+        Region::new(0, 0x1000, Kind::Free),
+        Region::new(0x1000, 0x1000, Kind::Kernel),
+        Region::new(GIB, GIB, Kind::Free),
     ];
     let m = Machine { regions: &MAP, tables: Tables::default(), failure: None };
 
@@ -1628,8 +1659,8 @@ fn which_chunks_have_kernel_inside_is_recognized() {
 #[test]
 fn a_chunk_with_only_devices_is_not_split() {
     static MAP: [Region; 2] = [
-        Region { start: 0, bytes: 0x1000, kind: Kind::Kernel },
-        Region { start: 3 * GIB, bytes: GIB, kind: Kind::Mmio },
+        Region::new(0, 0x1000, Kind::Kernel),
+        Region::new(3 * GIB, GIB, Kind::Mmio),
     ];
     let m = Machine { regions: &MAP, tables: Tables::default(), failure: None };
     assert!(crate::paging::needs_split(&m, 0), "el del kernel si");
@@ -1646,8 +1677,8 @@ fn paging_touches(m: &Machine, a: u64, b: u64) -> bool {
 #[test]
 fn fine_grain_drags_along_what_is_next_to_it() {
     static MAP: [Region; 2] = [
-        Region { start: 0x1000, bytes: 0x1000, kind: Kind::Kernel },
-        Region { start: 0x2000, bytes: 0x1000, kind: Kind::Free },
+        Region::new(0x1000, 0x1000, Kind::Kernel),
+        Region::new(0x2000, 0x1000, Kind::Free),
     ];
     let m = Machine { regions: &MAP, tables: Tables::default(), failure: None };
 
@@ -1790,7 +1821,7 @@ fn a_blob_without_the_magic_is_not_read() {
     let mut bad = sample_tree();
     bad[0] = 0;
     // No se inventa nada: lo que no se pudo leer viene ausente, no en cero.
-    let hw = unsafe { crate::fdt::read(bad.as_ptr() as u64) };
+    let hw = read_tree(&bad);
     assert!(hw.cpus.is_empty());
     assert!(hw.interrupts.is_none());
     assert!(hw.serial.is_none());
@@ -1799,7 +1830,7 @@ fn a_blob_without_the_magic_is_not_read() {
 #[test]
 fn the_cores_come_out_of_the_tree() {
     let blob = sample_tree();
-    let hw = unsafe { crate::fdt::read(blob.as_ptr() as u64) };
+    let hw = read_tree(&blob);
     assert_eq!(hw.cpus.len(), 3);
     assert_eq!(hw.usable_cpus(), 3);
     // El `reg` de un nucleo es el numero con el que la maquina lo nombra, y son
@@ -1810,7 +1841,7 @@ fn the_cores_come_out_of_the_tree() {
 #[test]
 fn the_interrupt_controller_comes_out_of_the_tree() {
     let blob = sample_tree();
-    let hw = unsafe { crate::fdt::read(blob.as_ptr() as u64) };
+    let hw = read_tree(&blob);
     let i = hw.interrupts.expect("el arbol lo declara");
     assert_eq!(i.kind, "gic");
     assert_eq!(i.address, 0x0800_0000);
@@ -1823,7 +1854,7 @@ fn the_interrupt_controller_comes_out_of_the_tree() {
 #[test]
 fn the_serial_port_comes_out_of_the_tree() {
     let blob = sample_tree();
-    let hw = unsafe { crate::fdt::read(blob.as_ptr() as u64) };
+    let hw = read_tree(&blob);
     let s = hw.serial.expect("el arbol lo declara");
     assert_eq!(s.address, 0x0900_0000);
     // Una interrupcion compartida arranca en 32: el arbol las cuenta desde
@@ -1834,11 +1865,79 @@ fn the_serial_port_comes_out_of_the_tree() {
 #[test]
 fn where_pcie_is_comes_out_of_the_tree() {
     let blob = sample_tree();
-    let hw = unsafe { crate::fdt::read(blob.as_ptr() as u64) };
+    let hw = read_tree(&blob);
     let p = hw.pcie.expect("el arbol lo declara");
     // Una direccion de dos celdas: la de arriba tambien cuenta.
     assert_eq!(p.base, 0x40_1000_0000);
     // 256 MiB de ventana son 256 buses, uno por MiB. Y el ultimo es el 255:
     // recortarlo a un byte antes de restarle uno daba cero.
     assert_eq!(p.bus_end, 255);
+}
+
+// ---------------------------------------------------------------------------
+// La cacheabilidad que informa el arranque (deuda 11)
+// ---------------------------------------------------------------------------
+
+fn cached(start: u64, bytes: u64, kind: Kind, caching: crate::memory::Caching) -> Region {
+    Region { start, bytes, kind, caching }
+}
+
+/// Lo que dijo la maquina le gana a lo que se puede deducir de la clase.
+///
+/// El caso que importa es este: memoria **reservada** que el firmware informa
+/// como cacheable. Deducir de la clase daria "sin cachear" —lo reservado no se
+/// asume RAM— y eso es mas lento sin necesidad.
+#[test]
+fn what_the_machine_said_beats_what_can_be_deduced() {
+    use crate::memory::Caching;
+    static MAP: [Region; 1] =
+        [Region { start: 0, bytes: GIB, kind: Kind::Reserved, caching: Caching::WriteBack }];
+    let m = Machine { regions: &MAP, tables: Tables::default(), failure: None };
+    assert_eq!(crate::paging::attr_of(&m, 0), crate::paging::Attr::Memory);
+
+    // Y la misma region sin el dato cae en la deduccion de siempre.
+    static SIN_DATO: [Region; 1] = [Region::new(0, GIB, Kind::Reserved)];
+    let m = Machine { regions: &SIN_DATO, tables: Tables::default(), failure: None };
+    assert_eq!(crate::paging::attr_of(&m, 0), crate::paging::Attr::Device);
+}
+
+/// Un pedazo sin cachear adentro alcanza para que el gigabyte entero lo sea.
+///
+/// El grano del mapeo es 1 GiB, asi que no hay forma de decir cosas distintas
+/// de dos partes del mismo. Y el error caro no es simetrico: cachear un registro
+/// rompe el aparato, no cachear RAM solo la hace lenta.
+#[test]
+fn one_uncacheable_piece_decides_for_the_whole_page() {
+    use crate::memory::Caching;
+    let map = [
+        cached(0, 0x1000, Kind::Mmio, Caching::Uncacheable),
+        cached(0x1000, GIB - 0x1000, Kind::Free, Caching::WriteBack),
+    ];
+    // El slice tiene que vivir mientras viva la `Machine`, y `regions` es
+    // `&'static`: se filtra a proposito, que en un test dura lo que dura.
+    let m = Machine {
+        regions: Box::leak(Box::new(map)),
+        tables: Tables::default(),
+        failure: None,
+    };
+    assert_eq!(crate::paging::attr_of(&m, 0), crate::paging::Attr::Device);
+}
+
+/// La RAM comun soporta write-back **y** sin cachear a la vez, y ahi el orden en
+/// que se pregunta decide todo: si se mirara primero si soporta quedar sin
+/// cache, toda la memoria de la maquina quedaria sin cache.
+#[test]
+fn memory_that_supports_both_is_cached() {
+    // 0xF = WB | WT | WC | UC, que es lo que informa el firmware de la RAM.
+    assert_eq!(crate::paging::attr_of(&both_ways(), 0), crate::paging::Attr::Memory);
+}
+
+fn both_ways() -> Machine {
+    use crate::memory::Caching;
+    // `Caching` ya viene normalizado, asi que lo que se prueba aca es que la
+    // normalizacion eligio cachear. La traduccion de los bits vive en
+    // `boot-uefi`, que es quien habla UEFI (D24).
+    static MAP: [Region; 1] =
+        [Region { start: 0, bytes: GIB, kind: Kind::Free, caching: Caching::WriteBack }];
+    Machine { regions: &MAP, tables: Tables::default(), failure: None }
 }

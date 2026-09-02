@@ -20,7 +20,7 @@
 //! que es distinto de que el kernel decida por el.
 
 use crate::machine::Machine;
-use crate::memory::Kind;
+use crate::memory::{Caching, Kind};
 
 /// Cuantas cosas se pueden tener reclamadas a la vez.
 const MAX: usize = 128;
@@ -36,6 +36,9 @@ pub struct Claim {
     /// De que clase era la region de donde salio. Se informa para que el agente
     /// sepa que se llevo.
     pub kind: Kind,
+    /// Si se puede cachear, segun lo que informo la maquina (deuda 11). Importa
+    /// para escribir un driver: cachear un registro rompe el aparato.
+    pub caching: Caching,
     /// Si es alcanzable desde el nivel sin privilegio (D27).
     ///
     /// Es una propiedad de la memoria, no de la corrida: se pide al reclamarla.
@@ -186,7 +189,7 @@ pub fn claim(m: &Machine, r: Request) -> Result<Claim, Error> {
 fn claim_exact(m: &Machine, start: u64, bytes: u64) -> Result<Claim, Error> {
     let end = start.checked_add(bytes).ok_or(Error::Unmapped)?;
 
-    let kind = match m.region_containing(start) {
+    let (kind, caching) = match m.region_containing(start) {
         // Adentro de una region: tiene que caber entera en ella. Un rango a
         // caballo de dos regiones distintas no se puede describir con una sola
         // etiqueta sin mentir.
@@ -197,7 +200,7 @@ fn claim_exact(m: &Machine, start: u64, bytes: u64) -> Result<Claim, Error> {
             if region.kind == Kind::Kernel {
                 return Err(Error::IsKernel);
             }
-            region.kind
+            (region.kind, region.caching)
         }
         // En un hueco: **la maquina no lo listo**. Ahi es donde suelen quedar
         // los BARs que asigno el firmware sin informarlos en el mapa.
@@ -222,14 +225,17 @@ fn claim_exact(m: &Machine, start: u64, bytes: u64) -> Result<Claim, Error> {
                 // seria prometer una direccion que el CPU no puede tocar.
                 return Err(Error::Unmapped);
             }
-            Kind::Unreported
+            // Un hueco no dice nada de si se puede cachear, y suponerlo seria
+            // inventar: el identity map lo trata como dispositivo justamente
+            // porque no se sabe que hay.
+            (Kind::Unreported, Caching::Unknown)
         }
     };
 
     if overlaps(start, end) {
         return Err(Error::Taken);
     }
-    record(start, bytes, kind)
+    record(start, bytes, kind, caching)
 }
 
 /// Si en ese rango la maquina no informo **nada**, ni una region que lo roce.
@@ -266,7 +272,7 @@ fn find_gap(m: &Machine, r: Request) -> Result<Claim, Error> {
 
             match first_overlap(candidate, end) {
                 // Libre: es este.
-                None => return record(candidate, r.bytes, region.kind),
+                None => return record(candidate, r.bytes, region.kind, region.caching),
                 // Ocupado: se salta hasta despues de lo que estorba. Avanzar de
                 // a poco recorreria byte por byte una maquina con gigabytes.
                 Some(c) => {
@@ -292,7 +298,7 @@ pub fn mark_user(handle: u64) {
     }
 }
 
-fn record(start: u64, bytes: u64, kind: Kind) -> Result<Claim, Error> {
+fn record(start: u64, bytes: u64, kind: Kind, caching: Caching) -> Result<Claim, Error> {
     let t = unsafe { &mut *core::ptr::addr_of_mut!(TABLE) };
     let gap = t.iter_mut().find(|c| c.is_none()).ok_or(Error::TableFull)?;
 
@@ -302,7 +308,7 @@ fn record(start: u64, bytes: u64, kind: Kind) -> Result<Claim, Error> {
         h
     };
 
-    let c = Claim { handle, start, bytes, kind, user: false };
+    let c = Claim { handle, start, bytes, kind, caching, user: false };
     *gap = Some(c);
     Ok(c)
 }

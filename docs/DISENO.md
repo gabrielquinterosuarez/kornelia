@@ -141,9 +141,9 @@ Lo que sí existe:
 | Arranque UEFI en x86_64 y aarch64 | Andando. ~20 KB por kernel. |
 | Cordón umbilical (UART) — **entrada y salida** | 16550 por puertos de E/S en x86, PL011 por MMIO en ARM. La lectura no bloquea (D17: hay que poder escuchar dos canales). |
 | `ExitBootServices` (D25) | Andando. El kernel toma la máquina en el arranque, con reintento si el mapa se movió. |
-| **Mapa de memoria físico real** | Andando en las dos arquitecturas. Se captura de UEFI y se normaliza al vocabulario de `kernel-core` (D24). |
+| **Mapa de memoria físico real** | Andando en las dos arquitecturas. Se captura de UEFI y se normaliza al vocabulario de `kernel-core` (D24), incluida la **cacheabilidad que informa el firmware** región por región, que el mapeo prefiere a deducirla de la clase. |
 | El trait `Platform` | Cinco miembros: `ARCH`, `uart_write_byte`, `uart_read_byte`, `park`, `machine`. |
-| `scripts/check.sh` | El portón: frontera + idioma + 99 tests + compila las dos + **las bootea en QEMU** y les habla el protocolo, más una corrida extra de aarch64 **sin ACPI** para ejercitar el device tree. Probado que falla cuando debe. |
+| `scripts/check.sh` | El portón: frontera + idioma + 102 tests + compila las dos + **las bootea en QEMU** y les habla el protocolo, más una corrida extra de aarch64 **sin ACPI** para ejercitar el device tree. Probado que falla cuando debe. |
 | CI (`.github/workflows/ci.yml`) | Llama al mismo portón, para que no haya chequeos que solo existan en una de las dos partes. |
 | **El protocolo CBOR** (D6) | Andando. Escrito a mano, sin dependencias; verificado contra los vectores canónicos del RFC 8949. |
 | **`describe`** | Andando: sirve `memory`, `tables`, `claims`, `cpus`, `interrupts` y `pcie`. Sin argumentos devuelve el índice, no un volcado (D16). |
@@ -310,10 +310,25 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
    respuesta, con tope. Un trabajo más largo que el tope vuelve como `core did not answer` aunque
    el núcleo esté sano — ver deuda 13.
 
-10. **Un test falló una vez y no reprodujo.** Ocurrió una sola vez en la suite de `kernel-core` y
-   no se repitió en veinte corridas seguidas. Se auditó lo único que puede causarlo —los tests
-   que tocan las tablas globales de reclamos y de núcleos— y todos toman el mismo candado. **No
-   está diagnosticado**; queda anotado para no darlo por inexistente si vuelve a pasar.
+10. **~~Un test falló una vez y no reprodujo.~~ RESUELTO, y reproducido primero.** Era una
+   carrera de verdad: leer la descripción de una máquina —de ACPI o del device tree— escribe en
+   arreglos estáticos compartidos, y el `Hardware` que vuelve son **slices que apuntan ahí**.
+   Con los tests en paralelo, otro test podía sobreescribir los núcleos entre la lectura y el
+   `assert`.
+
+   **La auditoría de entonces miró donde no era.** Revisó los tests que tocan las tablas de
+   reclamos y de núcleos, y esos sí toman el candado; nadie miró los de descripción, que pisan
+   **otros** estáticos. Es un recordatorio de que "se auditó lo único que puede causarlo" es una
+   afirmación sobre lo que uno se acordó de mirar.
+
+   Reproducido antes de arreglarlo, porque un arreglo de algo que no se vio fallar no se puede
+   comprobar: corriendo **solo** los tres tests que comparten esos estáticos, con dieciséis hilos,
+   dio **2 fallos en 400 corridas**. Con la suite entera no aparecía ni en 150. Después del
+   arreglo, 0 en 400.
+
+   Y se arregló de forma que no dependa de que el próximo test se acuerde: la función que lee
+   una descripción devuelve el `Hardware` **con el guard del candado pegado**, así que el
+   candado se suelta cuando el dato deja de usarse y **eso lo hace cumplir el compilador**.
 
 13. **~~Un `exec` en otro núcleo es sincrónico.~~ RESUELTO.** `exec {core, wait:false}` deja el
    trabajo y **contesta enseguida**; el resultado se busca después en
@@ -409,10 +424,24 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
    Y la prueba, que es la que vale, ahora corre en las dos: se lee mal a propósito, se comprueba
    que el kernel lo informe, y después **se le vuelve a hablar a la máquina**.
 
-11. **Los atributos de cacheabilidad que informa UEFI se descartan.** D12 anda igual porque la
-   cacheabilidad se deduce de la *clase* de cada región, pero UEFI informa además atributos por
-   región (`UC`, `WC`, `WT`, `WB`) que son más precisos que esa deducción. Mientras el grano del
-   mapeo sea 1 GiB casi no cambia nada; cuando haya que mapear MMIO fino con `mem.claim`, sí.
+11. **~~Los atributos de cacheabilidad que informa UEFI se descartan.~~ RESUELTO.** El mapa de
+   memoria lleva ahora, región por región, si la máquina dijo que se puede cachear, y el mapeo
+   **prefiere eso a deducirlo de la clase** (P4). Deducir andaba casi siempre, y "casi siempre"
+   en cacheabilidad significa un dispositivo que no se entera de una escritura.
+
+   Se normaliza en vez de guardar los bits crudos: `EFI_MEMORY_WB` es una palabra de UEFI y
+   `kernel-core` no sabe cómo arrancó la máquina (D24). Son tres valores y el tercero importa:
+   `write-back`, `uncacheable`, y **`unknown`** — que el firmware no lo haya dicho no es lo
+   mismo que decir que no se puede cachear, y ahí se sigue deduciendo de la clase.
+
+   **El orden en que se pregunta decide todo:** la RAM común informa que soporta write-back *y*
+   quedar sin cachear, así que si se mirara primero lo segundo, toda la memoria de la máquina
+   quedaría sin cache. Hay un test que fija ese orden.
+
+   Y se informa por el protocolo, en la respuesta de `mem.claim`, porque el agente lo necesita
+   para escribir un driver. Eso es además lo que permite comprobarlo sin creerle al kernel: en
+   la misma corrida, la RAM sale `write-back` y los registros de PCIe salen `uncacheable`. Si
+   todo viniera con la misma etiqueta, el dato no vendría de la máquina.
 
 12. **~~Falta la transición de privilegio de D27.~~ RESUELTO.** `exec` toma `mode`, que **declara
     el agente**: `supervised` entra a anillo 3 en x86_64 y a EL0 en aarch64; `raw` corre con el

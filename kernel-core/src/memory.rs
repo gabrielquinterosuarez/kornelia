@@ -7,6 +7,30 @@
 //! quince numeros con nombres suyos; `Kind` es lo que de eso le importa a quien
 //! va a reclamar memoria.
 
+/// Si esta region se puede cachear, **segun la maquina** y no segun nosotros.
+///
+/// El entorno de arranque informa esto region por region, y es mas preciso que
+/// deducirlo de la clase: hay memoria reservada que igual es RAM cacheable, y
+/// hay rangos que parecen RAM y no se pueden cachear. Deducirlo de la clase
+/// anda casi siempre, y "casi siempre" en cacheabilidad significa un
+/// dispositivo que no se entera de una escritura.
+///
+/// Se normaliza en vez de guardar los bits crudos del firmware: `kernel-core`
+/// no sabe como arranco la maquina (D24), y `EFI_MEMORY_WB` es una palabra de
+/// UEFI.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(test, derive(Debug))]
+pub enum Caching {
+    /// La maquina dice que se puede cachear.
+    WriteBack,
+    /// La maquina dice que **no**. Son registros, o memoria que se comparte con
+    /// algo que no pasa por la cache.
+    Uncacheable,
+    /// La maquina no lo dijo. Se cae en deducirlo de la clase, que es lo que se
+    /// hacia siempre.
+    Unknown,
+}
+
 /// Una region contigua de memoria fisica, tal como la maquina se describe (P4).
 #[derive(Clone, Copy)]
 pub struct Region {
@@ -17,12 +41,22 @@ pub struct Region {
     pub bytes: u64,
     /// Que es esta region para quien quiera reclamarla.
     pub kind: Kind,
+    /// Si se puede cachear, segun lo que informo la maquina.
+    pub caching: Caching,
 }
 
 impl Region {
     /// Region nula, para poder tener arreglos estaticos sin asignador.
     pub const fn empty() -> Self {
-        Self { start: 0, bytes: 0, kind: Kind::Reserved }
+        Self { start: 0, bytes: 0, kind: Kind::Reserved, caching: Caching::Unknown }
+    }
+
+    /// Una region de la que solo se sabe donde esta y que es.
+    ///
+    /// Existe para los tests y para quien no tenga el dato de cacheabilidad: no
+    /// decirlo es distinto de decir que no se puede cachear.
+    pub const fn new(start: u64, bytes: u64, kind: Kind) -> Self {
+        Self { start, bytes, kind, caching: Caching::Unknown }
     }
 
     /// Primera direccion que ya NO pertenece a la region.
