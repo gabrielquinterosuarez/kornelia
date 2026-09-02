@@ -58,6 +58,12 @@ pub fn main<P: Platform>(p: &mut P) -> ! {
     // memoria física por todos lados.
     let hw = read_hardware(p, &machine);
 
+    // Y con eso, mudarse al puerto serie que la máquina dijo que tiene. Va acá
+    // y no más tarde porque de acá en adelante todo lo que se cuenta sale por
+    // el cable: si la mudanza sale mal, conviene que sea con la menor cantidad
+    // posible de cosas ya hechas.
+    move_to_reported_serial(p, &machine, &hw);
+
     // El IOMMU, antes que nada del agente: encendido y sin nada declarado,
     // ningún aparato llega a ninguna parte (D8). Es el punto de partida contra
     // el que `dma.allow` significa algo.
@@ -91,6 +97,55 @@ pub fn main<P: Platform>(p: &mut P) -> ! {
     p.set_interrupts(false);
 
     protocol::serve(p, &machine, &hw, with_doorbell)
+}
+
+/// Se muda al puerto serie que informó la máquina (deuda 2).
+///
+/// El kernel arranca con una dirección horneada porque tiene que poder hablar
+/// antes de leer nada. Pero quedarse con ella una vez que la máquina dijo dónde
+/// tiene su consola sería preferir una suposición a un dato (P4) — y es lo
+/// único que ata este kernel a una placa concreta.
+///
+/// **El aviso va antes de mudarse, y a propósito.** Si la dirección nueva no
+/// fuera un UART, la primera escritura se pierde y no habría con qué contarlo:
+/// la última línea que sale por el cable viejo tiene que decir a dónde se fue.
+fn move_to_reported_serial<P: Platform>(p: &mut P, m: &Machine, hw: &acpi::Hardware) {
+    use core::fmt::Write;
+
+    let Some(sp) = hw.serial else { return };
+    // Si esta arquitectura no habla por memoria, no hay a dónde mudarse.
+    if p.uart_address().is_none() {
+        return;
+    }
+    if p.uart_address() == Some(sp.address) {
+        // Ya estamos ahí. Igual se marca como venida de la máquina: la
+        // dirección **es** la que ella informó, y que además coincida con la
+        // horneada es una casualidad de esta placa, no un mérito del kernel.
+        // SAFETY: es la dirección que ya se está usando.
+        unsafe { p.use_serial_at(sp.address) };
+        return;
+    }
+
+    // Tiene que ser alcanzable. El identity map cubre hasta el tope del mapa;
+    // más arriba, escribir ahí no llegaría a ninguna parte.
+    let reach = paging::span_gib(m).saturating_mul(paging::GIB);
+    if sp.address >= reach {
+        let mut u = Umbilical::new(p);
+        let _ = write!(u, "  serie: la maquina lo pone en {:#x}, fuera del mapa\r\n", sp.address);
+        return;
+    }
+
+    {
+        let mut u = Umbilical::new(p);
+        let _ = write!(u, "  serie: mudandose a {:#x}, que es donde la maquina lo pone\r\n",
+                       sp.address);
+    }
+    // SAFETY: la dirección la informó la máquina y el identity map la cubre.
+    unsafe { p.use_serial_at(sp.address) };
+    {
+        let mut u = Umbilical::new(p);
+        let _ = u.line("  serie: mudado. Esta linea sale por el que dijo la maquina");
+    }
 }
 
 /// Cuenta si la máquina quedó con el IOMMU encendido (D8).
@@ -358,7 +413,7 @@ fn read_hardware<P: Platform>(p: &mut P, m: &Machine) -> acpi::Hardware {
             );
         }
         (Some(sp), Some(_)) => {
-            let _ = write!(u, "  serie: {:#x} confirmado por la maquina", sp.address);
+            let _ = write!(u, "  serie: {:#x} lo dice la maquina", sp.address);
             if sp.gsi != 0 {
                 let _ = write!(u, ", interrupcion {}", sp.gsi);
             }

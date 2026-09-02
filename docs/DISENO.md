@@ -178,11 +178,28 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
 
    **Pero el problema de fondo no está cerrado:** la pila era *una* de las cosas nuestras que
    vivían en memoria que `ExitBootServices` convirtió en libre. Sigue estando la siguiente.
-2. **~~La dirección del PL011 sigue horneada.~~ COMPROBADA.** Sigue escrita a mano porque el kernel necesita poder hablar antes de leer ninguna tabla, pero ya no se da por buena: el arranque la contrasta contra la tabla SPCR de ACPI —que es la máquina diciendo dónde tiene su consola— y avisa si no coinciden. En QEMU `virt` coincide: `0x9000000`, interrupción 33. Lo que falta para cerrarla del todo es *usar* la que dice la tabla en vez de la propia, que solo importa en una placa donde no coincidan.
+2. **~~La dirección del PL011 sigue horneada.~~ RESUELTO.** El kernel arranca con una dirección
+   horneada porque **tiene que poder hablar antes de leer ninguna tabla**: si el arranque se
+   cuelga leyendo ACPI, el cable es lo único que queda para contarlo. Pero apenas la tabla SPCR
+   dice dónde tiene la máquina su consola, **se muda ahí**, y de ese punto en adelante todo lo
+   que sale del kernel pasa por la dirección que dijo la máquina. Con eso la horneada deja de
+   ser algo que el kernel cree y pasa a ser solo con qué arranca (P4).
 
-   **Nota vieja:** *La dirección del PL011 estaba horneada* en `kernel-aarch64/src/uart.rs` (`0x0900_0000`, la
-   placa `virt` de QEMU). La fuente legítima es el device tree —o la tabla SPCR de ACPI—, que
-   todavía no leemos. Mientras siga así, el cordón umbilical solo funciona en esa placa.
+   El aviso va **antes** de mudarse, a propósito: si la dirección nueva no fuera un UART, la
+   primera escritura se pierde y no habría con qué contarlo, así que la última línea que sale
+   por el cable viejo tiene que decir a dónde se fue. Y no se muda a cualquier lado — una
+   dirección fuera de lo que el identity map alcanza se rechaza diciéndolo.
+
+   **Lo que esto no comprueba, y conviene saberlo:** en QEMU `virt` las dos direcciones
+   coinciden, así que el camino de "mudarse a otra distinta" no se ejercita. Lo que sí queda
+   comprobado es que la dirección **en uso** es la que informó la tabla: el kernel llama a la
+   mudanza igual cuando coinciden, y todo el protocolo sale por ahí — si la tabla dijera
+   cualquier cosa, el cordón se cortaría y el portón se pondría rojo. `describe` lo publica
+   como `serial.in_use`.
+
+   En x86_64 no hay a dónde mudarse: el UART está en puertos de E/S, que no son direcciones de
+   memoria. El kernel lo dice en vez de intentarlo.
+
 3. **~~Las tablas de ACPI se encuentran pero no se leen.~~ RESUELTO.** Se recorre el XSDT
    verificando el checksum de cada tabla, y de ahí salen los núcleos (MADT) y dónde se
    configura PCIe (MCFG). `describe` gana las secciones `cpus`, `interrupts` y `pcie`. Las

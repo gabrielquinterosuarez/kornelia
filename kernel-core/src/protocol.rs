@@ -356,11 +356,17 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
                     match hw.serial {
                         None => w.null(),
                         Some(sp) => {
-                            w.map(2);
+                            w.map(3);
                             w.text("address");
                             w.uint(sp.address);
                             w.text("gsi");
                             w.uint(sp.gsi as u64);
+                            // Y si el kernel **la esta usando**, que no es lo
+                            // mismo que informarla: la diferencia entre andar y
+                            // andar porque la maquina dijo donde es lo unico
+                            // que hace que ande en otra placa (P4).
+                            w.text("in_use");
+                            w.bool(p.serial_from_machine());
                         }
                     }
                 }

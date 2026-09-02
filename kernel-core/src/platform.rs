@@ -277,6 +277,28 @@ pub trait Platform {
     /// espacio de direcciones: ahí devuelve `None`.
     fn uart_address(&self) -> Option<u64>;
 
+    /// Se muda al puerto serie que informó la máquina, si puede.
+    ///
+    /// La dirección con la que el kernel arranca **tiene** que estar horneada:
+    /// si el arranque se cuelga antes de leer ninguna tabla, el cable es lo
+    /// único que queda para contarlo. Pero apenas la máquina dice dónde tiene
+    /// su consola, quedarse con la propia sería preferir una suposición a un
+    /// dato (P4) — y es lo único que ata el kernel a una placa concreta.
+    ///
+    /// Devuelve `false` si esta máquina no tiene a dónde mudarse: en x86_64 el
+    /// UART está en puertos de E/S, que no son direcciones de memoria y no es
+    /// lo que informa esa tabla.
+    ///
+    /// # Safety
+    ///
+    /// `addr` tiene que ser la ventana de registros de un UART de la clase que
+    /// esta arquitectura sabe manejar, ya mapeada. Si no lo es, el cordón se
+    /// pierde en la primera escritura.
+    unsafe fn use_serial_at(&mut self, addr: u64) -> bool;
+
+    /// Si el puerto serie en uso es el que informó la máquina.
+    fn serial_from_machine(&self) -> bool;
+
     /// El identificador del núcleo sobre el que corre el kernel.
     ///
     /// Es el que atiende el protocolo, y por eso es el único que no se puede

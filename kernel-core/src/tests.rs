@@ -58,6 +58,14 @@ impl Platform for Fake {
         None
     }
 
+    unsafe fn use_serial_at(&mut self, _addr: u64) -> bool {
+        false
+    }
+
+    fn serial_from_machine(&self) -> bool {
+        false
+    }
+
     /// La plataforma de prueba no toca memoria de verdad: contestar un valor
     /// inventado seria peor que decir que no se puede.
     unsafe fn guarded_read(&mut self, _addr: u64, _width: u64) -> Option<u64> {

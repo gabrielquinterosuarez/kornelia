@@ -119,7 +119,16 @@ impl Platform for AArch64 {
     }
 
     fn uart_address(&self) -> Option<u64> {
-        Some(uart::BASE)
+        Some(uart::base())
+    }
+
+    unsafe fn use_serial_at(&mut self, addr: u64) -> bool {
+        uart::move_to(addr);
+        true
+    }
+
+    fn serial_from_machine(&self) -> bool {
+        uart::from_machine()
     }
 
     fn this_core(&self) -> u64 {

@@ -119,6 +119,16 @@ impl Platform for X86_64 {
         irq::sleep();
     }
 
+    /// En x86_64 el UART esta en puertos de E/S, que no son direcciones de
+    /// memoria: no hay a donde mudarse y decirlo es la respuesta correcta.
+    unsafe fn use_serial_at(&mut self, _addr: u64) -> bool {
+        false
+    }
+
+    fn serial_from_machine(&self) -> bool {
+        false
+    }
+
     fn uart_address(&self) -> Option<u64> {
         None
     }

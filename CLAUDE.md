@@ -92,7 +92,9 @@ Arranca por UEFI en x86_64 y aarch64, le toma la máquina al firmware y **habla
 CBOR** por el cordón umbilical. Corre sobre pila y tablas de páginas propias, y
 captura los faults en vez de reiniciarse. **El núcleo que atiende duerme entre
 pedidos**: el cable serie tiene timbre (interrupción), así que ya no gira
-preguntando.
+preguntando. Y el cable **está donde la máquina dice**: se arranca con una
+dirección horneada porque hay que poder hablar antes de leer nada, pero apenas
+la tabla SPCR dice dónde está la consola, el kernel se muda ahí (P4).
 
 **Los once verbos andan, y enteros en las dos arquitecturas.** El único que sigue
 siendo solo de x86_64 es `irq.install_raw`, porque en aarch64 no hay un camino
@@ -167,12 +169,13 @@ Corrélo antes de commitear; CI corre exactamente ese script.
 
 **No queda ningún verbo sin hacer, ni nada que ande en una arquitectura y no en la
 otra.** Lo que queda es pagar deudas. Las preguntas abiertas están en
-`docs/DISENO.md` §8; las deudas, en §7 — abiertas la 2, 3, 10 y 11, y ninguna
-rompe nada hoy.
+`docs/DISENO.md` §8; las deudas, en §7 — abiertas la 3, 10 y 11, y ninguna rompe
+nada hoy.
 
-1. **La máquina se describe a medias en placas sin ACPI**: el PL011 usa su dirección horneada
-   en vez de la que dice la tabla SPCR (deuda 2), y el device tree no se lee (deuda 3). Es lo
-   que más se aleja de P4, y lo único que hoy ataría el kernel a QEMU `virt`.
+1. **El device tree no se lee** (deuda 3): una placa embebida sin ACPI no reporta nada de sí
+   misma — ni núcleos, ni controlador de interrupciones, ni dónde está su propio cable. Es lo
+   que más se aleja de P4 y lo único que todavía ata el kernel a una máquina con ACPI. Es un
+   parser nuevo, y hay que arrancar QEMU con `acpi=off` para poder probarlo de verdad.
 2. **Un núcleo cuyo código se colgó queda ocupado para siempre** (lo que dejó abierto la deuda
    13): el agente lo ve —`work` dice `running` y no cambia más— pero no lo puede recuperar.
 3. **Se descartan los atributos de cacheabilidad que informa UEFI** (deuda 11), que son más

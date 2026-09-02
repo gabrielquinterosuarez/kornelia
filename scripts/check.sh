@@ -134,6 +134,16 @@ else
         grep -qFe "separacion kernel/agente: la hace cumplir el hardware" <<<"$output" \
             || bad "$arch no informa que el hardware haga cumplir la separacion"
 
+        # Y que el puerto serie en uso sea el que dice la maquina, no el
+        # horneado (deuda 2). La prueba no es que lo informe: es que **todo lo
+        # que sigue sale por ahi**, asi que si esa direccion fuera mala esta
+        # linea no llegaria. Solo aarch64: en x86_64 el UART esta en puertos de
+        # E/S y no hay a donde mudarse, cosa que el kernel tambien dice.
+        if [ "$arch" = "aarch64" ]; then
+            grep -qFe "lo dice la maquina" <<<"$output" \
+                || bad "$arch no usa el puerto serie que informa la maquina"
+        fi
+
         # Y que un nucleo reclamado pueda recibir trabajo (D13). La prueba no
         # es lo que el kernel dice: el propio codigo del agente informa en que
         # nucleo esta corriendo, y tiene que dar uno distinto del que atiende.
