@@ -183,7 +183,40 @@ else
         fi
     done
 
-    # --- 6. Y la misma maquina, describiendose por el OTRO dialecto ---------
+    # --- 6. El blob: persistencia a traves del reinicio (D18, D19, D20) ----
+    #
+    # El firmware trae `blob.bin` de la particion y el kernel lo corre antes de
+    # escuchar el cable. Se exigen **las dos mitades**, porque la segunda es la
+    # que hace que la primera sea reversible:
+    #
+    #   1. que corra, y que el kernel pueda contar que corrio;
+    #   2. que un byte por el cable lo cancele — sin eso, un blob roto deja la
+    #      maquina inutil en cada arranque y hay que sacar el disco.
+    step "el blob se carga y se puede cancelar"
+    blob_dir=$(mktemp -d)
+    trap 'rm -rf "$blob_dir"' EXIT
+    for arch in x86_64 aarch64; do
+        ./scripts/client.py --arch "$arch" --write-blob "$blob_dir/blob.bin" >/dev/null
+
+        output=$(BLOB="$blob_dir/blob.bin" timeout 240 ./scripts/client.py \
+            --arch "$arch" --what memory 2>&1 || true)
+        if ! grep -qFe "el blob volvio, dejando 0xc0ffee" <<<"$output"; then
+            bad "$arch no corrio el blob"
+            printf '%s\n' "$output" | grep -E "blob|FALLA:" | head -5
+        fi
+
+        output=$(BLOB="$blob_dir/blob.bin" timeout 240 ./scripts/client.py \
+            --arch "$arch" --cancel-blob --what memory 2>&1 || true)
+        if ! grep -qFe "cancelado: alguien esta del otro lado" <<<"$output"; then
+            bad "$arch no deja cancelar el blob por el cable"
+            printf '%s\n' "$output" | grep -E "blob|FALLA:" | head -5
+        fi
+        # Y en los dos casos la maquina tiene que quedar contestando: un blob
+        # que corre no puede dejar al kernel sin cordon (D5, D17).
+        grep -qFe "ok=True" <<<"$output" || bad "$arch no contesta despues del blob"
+    done
+
+    # --- 7. Y la misma maquina, describiendose por el OTRO dialecto ---------
     #
     # Sin ACPI el firmware pasa un device tree, que es lo que traen las placas
     # ARM embebidas. Es un formato completamente distinto —un arbol de nodos con

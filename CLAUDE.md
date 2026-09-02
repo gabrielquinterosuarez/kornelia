@@ -168,6 +168,13 @@ Ahora los dos verbos van con el mismo punto que usa `exec`, armado alrededor de
 **una sola instrucción**, y el rechazo vuelve como `access-refused` con la
 dirección que cortó y los números crudos de la máquina.
 
+**Y hay persistencia a través del reinicio** (D18): el firmware trae `blob.bin`
+de la partición —solo él sabe leer FAT32, así que se carga dentro de la ventana
+de D25— y el kernel lo corre antes de escuchar el cable, con la misma red que
+`exec`: un blob roto vuelve como fault y el arranque sigue. Antes de saltar
+**avisa y espera**, y cualquier byte lo cancela; sin eso, un blob malo dejaría la
+máquina inútil en cada arranque y habría que sacarle el disco.
+
 El portón es `./scripts/check.sh`: frontera + idioma + 102 tests + compila las
 dos + las bootea en QEMU y les habla el protocolo con `scripts/client.py`, **y
 bootea aarch64 una vez más sin ACPI** para que el device tree no sea una
@@ -188,8 +195,13 @@ cubría todavía:
 2. **De la MADT solo se sacan núcleos y el controlador** (lo que quedó de la deuda 3): las rutas
    de interrupción de los aparatos todavía no, y `irq.install` las va a necesitar para algo más
    que las interrupciones que ya conoce.
-3. **El blob de arranque (D18) no existe.** Es lo único grande del diseño que no se empezó: hoy
-   un corte de luz deja la máquina esperando que alguien se conecte por cable.
+3. **La ventana de rescate del blob se cuenta en vueltas, no en tiempo** (deuda 17): el kernel
+   no lee ningún reloj, así que las mismas vueltas son segundos en QEMU y milisegundos en
+   silicio real. Ahí eso decide si el rescate existe. Falta leer un reloj — `TSC` o
+   `CNTPCT_EL0`, una instrucción cada uno, sin driver.
+4. **El blob no le puede pedir nada al kernel.** Corre antes del protocolo, así que no tiene
+   verbos: toca la máquina directo, que alcanza para un cargador (D19) pero no para algo que
+   quiera reclamar memoria o instalar un handler.
 
 ## Cosas que ya costaron caras
 

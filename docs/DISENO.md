@@ -148,6 +148,7 @@ Lo que sí existe:
 | **El protocolo CBOR** (D6) | Andando. Escrito a mano, sin dependencias; verificado contra los vectores canónicos del RFC 8949. |
 | **`describe`** | Andando: sirve `memory`, `tables`, `claims`, `cpus`, `interrupts` y `pcie`. Sin argumentos devuelve el índice, no un volcado (D16). |
 | **Lectura de ACPI** | Andando en las dos. MADT (núcleos y controlador de interrupciones) y MCFG (PCIe), con el checksum verificado tabla por tabla. |
+| **El blob de arranque** (D18, D19, D20) | Andando en las dos. El firmware trae `blob.bin` de la misma partición de la que salió el kernel —**lo único que sabe leer FAT32 es él** (D25), así que se carga dentro de la ventana y antes de pedir el mapa— y el kernel lo corre con la maquinaria de `exec`: si falla, el fault vuelve como dato y el arranque sigue hasta el protocolo. Antes de saltar avisa por el cable y espera: **cualquier byte lo cancela**, que es lo que hace que un blob roto no deje la máquina inútil en cada arranque. |
 | **Lectura del device tree** | Andando. El otro dialecto en el que una máquina se describe, para las placas que no traen ACPI: núcleos, controlador de interrupciones con su versión, puerto serie con su interrupción, PCIe e IOMMU. Cuál usar no lo elige el kernel — es cuál dejó el firmware. Se comprueba con un blob armado a mano en los tests y booteando con `acpi=off`, donde el portón exige que ande el IOMMU contra un aparato de verdad. |
 | **Permiso de memoria** (D27) | Andando en las dos. `mem.claim {user: true}` entrega memoria alcanzable sin privilegio, y **lo hace cumplir el hardware**: SMEP en x86_64, el modelo de permisos en aarch64. |
 | **Transición de privilegio** (D27) | Andando en las dos. `exec {mode}` entra a anillo 3 / EL0 y vuelve por una ventanilla —`int 0x80` con `DPL=3`, `svc #0`— cuyos bytes publica `describe`. La pila sale del final del reclamo del agente. **Comprobado por lo que el hardware niega:** apagar las interrupciones desde `supervised` vuelve como fault en vez de dejar la máquina muda. |
@@ -399,6 +400,16 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
    `width` (1, 2, 4 u 8), que **declara el agente** porque el kernel no sabe qué hay del otro
    lado (D4); por omisión sigue siendo uno. Se lee una vez por palabra y se reparte en bytes,
    porque hay registros que cambian de valor con solo mirarlos.
+
+17. **La ventana de rescate del blob se cuenta en vueltas, no en tiempo.** El kernel no lee
+   ningún reloj, así que la espera de D18 son iteraciones — y las mismas iteraciones son
+   segundos en QEMU y milisegundos en silicio real. Para un humano que tiene que llegar a
+   apretar una tecla, esa diferencia es si el rescate existe o no.
+
+   Es el mismo problema que ya tienen `core.claim` y `exec {core}`, que también esperan en
+   vueltas, pero ahí el número solo cambia cuánto se tarda en dar algo por perdido. Acá cambia
+   si se puede rescatar la máquina. Lo que falta es leer un reloj: `TSC` en x86_64, `CNTPCT_EL0`
+   en aarch64 — los dos se leen con una instrucción y ninguno necesita driver.
 
 16. **~~Un acceso de ancho inválido a MMIO mata el kernel en aarch64.~~ RESUELTO.** Salió de la
    prueba de la deuda 15, y era una asimetría que solo aparece con las dos arquitecturas (D22):

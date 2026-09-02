@@ -23,6 +23,14 @@ cargo build --release -p kernel-aarch64 --target aarch64-unknown-uefi
 rm -rf target/esp-aarch64/EFI/BOOT && mkdir -p target/esp-aarch64/EFI/BOOT
 cp target/aarch64-unknown-uefi/release/kernel.efi target/esp-aarch64/EFI/BOOT/BOOTAA64.EFI
 
+# BLOB=<archivo> lo copia a la particion como `blob.bin`, que es donde el kernel
+# lo busca (D18). Sin esto no hay blob y el arranque lo dice: D20 lo permite
+# explicitamente — el blob es borrable e ignorable.
+rm -f target/esp-aarch64/blob.bin
+if [ -n "${BLOB:-}" ]; then
+    cp -f "$BLOB" target/esp-aarch64/blob.bin
+fi
+
 cp -f "$AAVMF_VARS" target/AAVMF_VARS-aarch64.fd
 
 # NO_ACPI=1 arranca la maquina **sin tablas de ACPI**, y entonces el firmware le

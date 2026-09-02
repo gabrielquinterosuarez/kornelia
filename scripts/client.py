@@ -113,9 +113,20 @@ def dec(b, i=0):
 # Hablar con el kernel
 # --------------------------------------------------------------------------
 
-def read_until_marker(proc, timeout, show):
-    """Consume la salida de texto del arranque hasta que empieza el binario."""
+# Lo que el kernel dice cuando abre la ventana de rescate del blob (D18).
+RESCUE_PROMPT = b"mandar cualquier byte"
+
+
+def read_until_marker(proc, timeout, show, cancel_blob=False):
+    """Consume la salida de texto del arranque hasta que empieza el binario.
+
+    Con `cancel_blob`, manda un byte **cuando el kernel avisa** que abrio la
+    ventana de rescate. No sirve mandarlo antes: el firmware usa el serie como
+    su propia consola durante el arranque y se lo come — el rescate parecia no
+    andar y el byte nunca habia llegado al kernel.
+    """
     buf = b""
+    cancelled = False
     while MARKER not in buf:
         ready, _, _ = select.select([proc.stdout], [], [], timeout)
         if not ready:
@@ -124,6 +135,10 @@ def read_until_marker(proc, timeout, show):
         if not c:
             raise EOFError("QEMU se cerro antes de arrancar el protocolo")
         buf += c
+        if cancel_blob and not cancelled and RESCUE_PROMPT in buf:
+            proc.stdin.write(b"\x00")
+            proc.stdin.flush()
+            cancelled = True
     # El resto del renglon de la marca.
     while not buf.endswith(b"\n"):
         buf += proc.stdout.read(1)
@@ -1535,6 +1550,10 @@ def main():
                     help="cuantos nucleos darle a QEMU")
     ap.add_argument("--no-acpi", action="store_true",
                     help="arranca sin ACPI, para que la maquina se describa por device tree")
+    ap.add_argument("--write-blob", metavar="RUTA",
+                    help="escribe un blob.bin de prueba para esta arquitectura y sale")
+    ap.add_argument("--cancel-blob", action="store_true",
+                    help="manda un byte al arrancar, para caer en la ventana de rescate (D18)")
     ap.add_argument("--exec", action="store_true", dest="run_exec",
                     help="sube codigo maquina de verdad y lo corre")
     ap.add_argument("--permission", action="store_true",
@@ -1559,6 +1578,16 @@ def main():
                     help="prueba el lazo completo: claim, write, read, release")
     args = ap.parse_args()
 
+    # El blob de prueba son los mismos bytes que el programa que anda de
+    # `--exec`: deja 0xc0ffee en el primer registro y vuelve. Asi el kernel puede
+    # contar que corrio sin saber nada de lo que hace (D20: el blob es codigo del
+    # agente, el kernel no lo mira).
+    if args.write_blob:
+        with open(args.write_blob, "wb") as f:
+            f.write(PROGRAMS[args.arch]["ok"])
+        print(f"blob de prueba para {args.arch}: {args.write_blob}")
+        return 0
+
     script = os.path.join(ROOT, "scripts", f"run-{args.arch}.sh")
     # bufsize=0 no es un detalle: con buffer, Python se trae un bloque entero a
     # su buffer interno y despues `select` sobre el descriptor dice "no hay
@@ -1576,7 +1605,7 @@ def main():
                             stderr=subprocess.DEVNULL, cwd=ROOT, bufsize=0, env=env)
     try:
         print(f"arrancando {args.arch} en QEMU...")
-        read_until_marker(proc, args.timeout, show=True)
+        read_until_marker(proc, args.timeout, show=True, cancel_blob=args.cancel_blob)
 
         argumentos = {}
         if args.what:

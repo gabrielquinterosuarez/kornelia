@@ -16,6 +16,31 @@ pub struct Machine {
     /// es un dato, no una muerte (P5): el cordon umbilical sigue vivo y hay que
     /// poder contar que paso.
     pub failure: Option<&'static str>,
+    /// Que paso al buscar el blob en el disco (D18).
+    pub blob: Blob,
+}
+
+/// El blob que el entorno de arranque trajo del disco (D18).
+///
+/// Es **codigo del agente pre-armado**, no parte del kernel (D20): lo que el
+/// agente hubiera subido por el cable, ya puesto. El kernel no lo mira ni lo
+/// valida — solo lo corre, y con la misma red que `exec` para que un blob roto
+/// sea un fault y no una maquina muerta (P5).
+///
+/// El tipo vive aca y no en el entorno de arranque porque es **vocabulario
+/// normalizado** (D24): que el firmware sea UEFI o una ROM de arranque cambia
+/// quien lo trae, no que es.
+#[derive(Clone, Copy)]
+pub enum Blob {
+    /// No habia. Es el caso normal de una maquina recien instalada, y D20 lo
+    /// permite explicitamente: el blob es borrable e ignorable.
+    Absent,
+    /// Se trajo, y son estos bytes.
+    Loaded(&'static [u8]),
+    /// Habia algo y no se pudo traer. **No es fatal**: la maquina anda igual,
+    /// solo sin persistencia a traves del reinicio. Pero cambia lo que el kernel
+    /// puede prometer, asi que el motivo viaja para poder contarlo (P4, P5).
+    Failed(&'static str),
 }
 
 /// Donde la maquina dejo escrito lo que es.
@@ -49,6 +74,7 @@ impl Machine {
             regions: &[],
             tables: Tables { acpi: None, device_tree: None, smbios: None },
             failure: Some(reason),
+            blob: Blob::Absent,
         }
     }
 

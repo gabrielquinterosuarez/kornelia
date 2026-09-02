@@ -23,6 +23,14 @@ cargo build --release -p kernel-x86_64 --target x86_64-unknown-uefi
 rm -rf target/esp-x86_64/EFI/BOOT && mkdir -p target/esp-x86_64/EFI/BOOT
 cp target/x86_64-unknown-uefi/release/kernel.efi target/esp-x86_64/EFI/BOOT/BOOTX64.EFI
 
+# BLOB=<archivo> lo copia a la particion como `blob.bin`, que es donde el kernel
+# lo busca (D18). Sin esto no hay blob y el arranque lo dice: D20 lo permite
+# explicitamente — el blob es borrable e ignorable.
+rm -f target/esp-x86_64/blob.bin
+if [ -n "${BLOB:-}" ]; then
+    cp -f "$BLOB" target/esp-x86_64/blob.bin
+fi
+
 # Las variables UEFI tienen que ser escribibles: copia propia.
 cp -f "$OVMF_VARS" target/OVMF_VARS-x86_64.fd
 

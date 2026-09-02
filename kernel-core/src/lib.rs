@@ -84,6 +84,13 @@ pub fn main<P: Platform>(p: &mut P) -> ! {
         report_bell(p, bell);
     }
 
+    // El blob, lo último antes de escuchar el cable (D18). Va acá y no antes
+    // porque necesita todo lo de arriba: tablas de páginas para poder tocar
+    // memoria, captura de faults para que un blob roto sea un dato y no una
+    // máquina muerta, y la descripción de la máquina para que lo que haga tenga
+    // sentido.
+    run_blob(p, &machine, with_doorbell);
+
     // La marca va última: de acá en adelante lo que sale es binario, así que
     // cualquier texto después la convierte en basura para el cliente.
     {
@@ -146,6 +153,126 @@ fn move_to_reported_serial<P: Platform>(p: &mut P, m: &Machine, hw: &acpi::Hardw
     {
         let mut u = Umbilical::new(p);
         let _ = u.line("  serie: mudado. Esta linea sale por el que dijo la maquina");
+    }
+}
+
+/// Cuánto dura la ventana de rescate del blob, en vueltas de espera.
+///
+/// **No hay reloj todavía**, así que no se puede decir "dos segundos": se cuenta
+/// en iteraciones, como la espera de `core.claim`. Queda anotado que la ventana
+/// no se puede expresar en tiempo, que es lo que un humano necesita para saber
+/// si va a llegar a apretar una tecla.
+///
+/// **Y contar vueltas no es contar tiempo**, que es el límite de fondo: las
+/// mismas vueltas son segundos en QEMU y milisegundos en silicio real, así que
+/// la ventana no dura lo mismo en las dos. Queda anotado como deuda — para que
+/// dure un tiempo hace falta un reloj, y el kernel todavía no lee ninguno.
+const RESCUE_ROUNDS: u64 = 3_000_000;
+
+/// Cada cuántas vueltas se mira el cable.
+///
+/// Preguntarle al UART en **cada** vuelta hacía la ventana inusablemente lenta:
+/// leer un puerto es un acceso al aparato, no a memoria, y sesenta millones de
+/// esos son minutos. Girar es barato; preguntar no.
+const RESCUE_POLL: u64 = 4096;
+
+/// Corre el blob que el arranque trajo del disco (D18, D19, D20).
+///
+/// # Por qué hay una ventana de rescate
+///
+/// El blob es código del agente, y el agente puede equivocarse: un blob que se
+/// cuelga o que pisa el kernel deja la máquina inútil **en cada arranque**, y
+/// arreglarlo requeriría sacar el disco. Así que antes de saltar, el kernel
+/// avisa y escucha: cualquier byte por el cable lo cancela.
+///
+/// No es un guardarraíl (P6) — no juzga el blob ni le pone condiciones. Es la
+/// diferencia entre una decisión reversible y una que no.
+///
+/// # Por qué corre con la maquinaria de `exec`
+///
+/// Porque es exactamente lo que el agente hubiera subido (D20), y ya existe la
+/// red para eso: si falla, el fault vuelve como dato (P5) y el arranque sigue
+/// hasta el protocolo. Un blob roto tiene que dejar la máquina **contestando**,
+/// que es lo único que permite reemplazarlo.
+fn run_blob<P: Platform>(p: &mut P, m: &Machine, with_doorbell: bool) {
+    use core::fmt::Write;
+
+    let bytes = match m.blob {
+        machine::Blob::Absent => return,
+        machine::Blob::Failed(reason) => {
+            let mut u = Umbilical::new(p);
+            u.kv("blob", "no se pudo cargar");
+            u.kv("  motivo", reason);
+            return;
+        }
+        machine::Blob::Loaded(bytes) => bytes,
+    };
+
+    {
+        let mut u = Umbilical::new(p);
+        let _ = write!(u, "blob: {} bytes cargados de blob.bin\r\n", bytes.len());
+        u.line("  mandar cualquier byte para NO ejecutarlo");
+    }
+
+    // La ventana.
+    //
+    // **Hay que mirar los dos lugares donde puede caer el byte**, y esto costó
+    // encontrarlo: en este punto el timbre del cable ya está instalado, así que
+    // un byte que llega lo levanta el handler y lo deja en el anillo — al UART
+    // no le queda nada, y preguntarle a él daba siempre "no vino nadie". El
+    // rescate no se ejecutaba y la ventana parecía andar.
+    //
+    // Si el byte llegó **antes** de que el timbre estuviera puesto, en cambio,
+    // sigue en la cola del UART. Los dos casos son reales, así que se miran los
+    // dos.
+    for round in 0..RESCUE_ROUNDS {
+        if round % RESCUE_POLL == 0 {
+            // SAFETY: acá no corre nada más que pueda estar en el anillo.
+            let from_ring = if with_doorbell { unsafe { serial::pop() } } else { None };
+            if from_ring.is_some() || p.uart_read_byte().is_some() {
+                let mut u = Umbilical::new(p);
+                u.line("  cancelado: alguien esta del otro lado");
+                return;
+            }
+        }
+        core::hint::spin_loop();
+    }
+
+    let entry = bytes.as_ptr() as u64;
+    let region = (entry, bytes.len() as u64);
+    {
+        let mut u = Umbilical::new(p);
+        let _ = write!(u, "  ejecutando en {:#x}\r\n", entry);
+    }
+
+    // `raw`: el blob es un cargador de drivers, y un driver toca registros de
+    // dispositivo y tablas de páginas. Bajarlo a `supervised` sería el kernel
+    // decidiendo con qué privilegio corre el código del agente, que es justo lo
+    // que D27 le devuelve al agente.
+    //
+    // SAFETY: los bytes están en la imagen del kernel, que el identity map
+    // cubre. Lo que haya ahí puede ser cualquier cosa — de eso se trata (P2).
+    // Sin registros puestos: el blob recibe en el primero su propia direccion,
+    // que es lo mismo que recibe el codigo de `exec` cuando el agente no pide
+    // otra cosa. Un blob no tiene quien le pase valores — corre solo (P3).
+    let outcome = unsafe { p.exec(entry, region, false, &[]) };
+
+    let mut u = Umbilical::new(p);
+    if outcome.faulted {
+        // Un blob que falla no detiene el arranque: se cuenta y se sigue hasta
+        // el protocolo, que es de donde va a salir el reemplazo.
+        match outcome.fault {
+            Some(f) => {
+                let _ = write!(u, "  el blob fallo: {} en {:#x}\r\n", f.cause.code(), f.pc);
+            }
+            None => u.line("  el blob fallo"),
+        }
+    } else {
+        // Lo que dejó en el primer registro. Es lo único que el kernel puede
+        // contar sin saber qué hace el blob, y alcanza para comprobar desde
+        // afuera que corrió de verdad.
+        let first = outcome.regs.first().copied().unwrap_or(0);
+        let _ = write!(u, "  el blob volvio, dejando {:#x}\r\n", first);
     }
 }
 
