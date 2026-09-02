@@ -879,14 +879,42 @@ fn kernel_memory_is_never_handed_out() {
     });
 }
 
+/// Un hueco del mapa se entrega, pero **diciendo que es un hueco**.
+///
+/// Ahi es donde quedan los BARs que el firmware asigno sin informar. Negarlos no
+/// protegia nada —el identity map los cubre, asi que el codigo del agente ya les
+/// escribia— y el kernel no decide que aparatos existen (P1). Lo que no se hace
+/// es llamarlo `Mmio`: eso seria afirmar lo que la maquina no dijo (P4).
 #[test]
-fn what_the_machine_did_not_report_is_not_handed_out() {
+fn a_hole_is_handed_out_as_unreported() {
     with_clean_table(|| {
         let r = Request { bytes: 0x100, at: Some(0x99000), ..Default::default() };
+        let c = claims::claim(&sample_machine(), r).unwrap();
+        assert_eq!(c.start, 0x99000);
+        assert_eq!(c.kind, Kind::Unreported);
+    });
+}
+
+#[test]
+fn a_range_that_leaves_its_region_is_not_handed_out() {
+    with_clean_table(|| {
+        // Empieza adentro de una region y se sale de ella: entregarlo seria
+        // describir con una etiqueta un rango que tiene dos clases adentro.
+        let r = Request { bytes: 0x2000, at: Some(0x5000), ..Default::default() };
         assert_eq!(claims::claim(&sample_machine(), r), Err(Error::Unmapped));
 
-        // Ni un rango que empieza bien y se sale de la region.
-        let r = Request { bytes: 0x2000, at: Some(0x5000), ..Default::default() };
+        // Y al reves: empieza en el hueco de arriba y entra en una region.
+        let r = Request { bytes: 0x2000, at: Some(0x4800), ..Default::default() };
+        assert_eq!(claims::claim(&sample_machine(), r), Err(Error::Unmapped));
+    });
+}
+
+/// Un hueco arriba de lo que el identity map alcanza no se entrega: seria
+/// prometer una direccion que el CPU no puede tocar.
+#[test]
+fn a_hole_beyond_the_identity_map_is_not_handed_out() {
+    with_clean_table(|| {
+        let r = Request { bytes: 0x100, at: Some(4 << 30), ..Default::default() };
         assert_eq!(claims::claim(&sample_machine(), r), Err(Error::Unmapped));
     });
 }

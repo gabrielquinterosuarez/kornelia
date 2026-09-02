@@ -144,6 +144,13 @@ el número que el bus le pone al aparato.
 de configuración en aarch64; la MCFG de ACPI sí, y se suma al mapa donde el mapa
 se arma. Antes el kernel publicaba una dirección que él mismo hacía inalcanzable.
 
+**Y también alcanza los registros de un aparato.** Un rango que cae en un hueco
+del mapa —donde quedan los BARs que el firmware no listó— se entrega con la clase
+`unreported`, que no es `mmio`: el agente se lleva el rango **y** la advertencia
+de que la máquina nunca dijo qué hay ahí (P4). Y `mem.read`/`mem.write` toman
+`width`, porque un registro de dispositivo no es RAM: muchos solo aceptan
+accesos de su ancho exacto y descartan los más angostos sin avisar.
+
 El portón es `./scripts/check.sh`: frontera + idioma + 89 tests + compila las
 dos + las bootea en QEMU y les habla el protocolo con `scripts/client.py`.
 Corrélo antes de commitear; CI corre exactamente ese script.
@@ -152,12 +159,14 @@ Corrélo antes de commitear; CI corre exactamente ese script.
 
 **No queda ningún verbo sin hacer, ni nada que ande en una arquitectura y no en la
 otra.** Lo que queda es pagar deudas. Las preguntas abiertas están en
-`docs/DISENO.md` §8; las deudas, en §7 — abiertas la 2, 3, 6, 10, 11 y 15.
+`docs/DISENO.md` §8; las deudas, en §7 — abiertas la 2, 3, 6, 10, 11 y 16.
 
-1. **Un BAR que asignó el firmware puede no estar en el mapa** (deuda 15): el agente puede
-   escribirle desde su código en `exec`, pero no con `mem.read`/`mem.write`. Es la hermana de lo
-   que se cerró con la ventana de configuración de PCIe, y tiene una decisión adentro: si el
-   kernel debe entregar un rango que la máquina no listó pero el identity map cubre.
+1. **Un acceso de ancho inválido a MMIO mata el kernel en aarch64** (deuda 16, nueva): en
+   x86_64 devuelve ceros y sigue; en ARM el bus lo rechaza y la máquina queda muda. `mem.read` y
+   `mem.write` corren en el camino del protocolo, donde **no hay punto de recuperación** como el
+   que tiene `exec`. Con lo cual el agente puede quedarse sin cordón con un pedido legítimo, que
+   es lo que D5 y D17 dicen que no puede pasar. La maquinaria para arreglarlo ya existe: es la
+   del fault de `exec`, usada fuera de `exec`.
 2. **`exec` no recibe estado inicial de registros** (deuda 6), aunque la sección 4 lo especifica.
 3. **Un núcleo cuyo código se colgó queda ocupado para siempre** (lo que dejó abierto la deuda
    13): el agente lo ve —`work` dice `running` y no cambia más— pero no lo puede recuperar.
@@ -198,6 +207,11 @@ Están acá para no volver a pagarlos:
   el de salida. Pedir 39 bits donde la máquina tiene 44 no se rechaza: se
   reinterpreta, y las direcciones que pide el aparato se recortan en silencio.
   Un límite que sobra puede ser tan inválido como uno que falta.
+- **El ancho de un acceso a MMIO no es un detalle, y las dos máquinas no fallan
+  igual.** Un registro que solo acepta lecturas de 4 bytes, leído de a uno,
+  devuelve ceros en x86_64 —silencioso, se ve como si el aparato no estuviera— y
+  en aarch64 lo rechaza el bus con un abort externo que **deja la máquina muda**.
+  El mismo pedido: en una arquitectura miente, en la otra mata.
 - **Un camino que ninguna prueba recorre no está andando: está sin probar.**
   Mientras esperaba a un núcleo reclamado, el núcleo del protocolo esperaba
   **con los timbres cerrados**, así que un handler del agente no corría y el

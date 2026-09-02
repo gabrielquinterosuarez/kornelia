@@ -962,6 +962,7 @@ def test_on_core(proc, timeout, arch):
 # Existe para ensenar, y por eso sirve justo para esto — cualquier otra placa
 # con DMA necesitaria un driver entero antes de poder probar nada.
 EDU_ID = 0x11E81234           # dispositivo y fabricante, como vienen juntos
+EDU_VERSION = 0x010000ED      # lo que dice su primer registro, ya en el BAR
 EDU_INTERNAL = 0x40000        # su memoria interna, del lado del aparato
 EDU_DMA_SRC = 0x80
 EDU_DMA_DST = 0x88
@@ -1030,6 +1031,47 @@ def test_dma(proc, timeout, arch):
     ask_verb(104, "mem.write", {"handle": cfg["handle"], "off": slot + 4,
                                 "bytes": bytes([0x06, 0x00])})
     print(f"  sus registros estan en {bar:#x}")
+
+    # Y se le puede reclamar esa ventana, aunque el firmware no la haya listado
+    # en el mapa (deuda 15). Antes se rechazaba con `unmapped`, asi que el
+    # agente solo podia tocar los registros desde su codigo en `exec` — un
+    # rodeo que no protegia nada, porque el identity map ya los cubria.
+    #
+    # La prueba no es que el kernel acepte: es **leer un registro del aparato**
+    # con `mem.read` y que diga lo que tiene que decir. El de identificacion
+    # trae el mismo numero que se encontro recorriendo el bus.
+    ok, win = ask_verb(119, "mem.claim", {"at": bar, "bytes": 4096})
+    if not ok:
+        failures.append(f"no se pudo reclamar la ventana de registros: {win}")
+    else:
+        print(f"  y su ventana se puede reclamar: clase '{win['kind']}'")
+
+        # Y hay que pedir el ancho: este registro solo acepta accesos de cuatro
+        # bytes y descarta los mas angostos. Leerlo de a un byte devuelve ceros
+        # sin avisar, que es la peor forma de fallar — por eso el ancho lo
+        # declara el agente y el kernel no lo adivina.
+        ok, r = ask_verb(120, "mem.read",
+                         {"handle": win["handle"], "off": 0, "len": 4, "width": 4})
+        got = int.from_bytes(r["bytes"], "little") if ok else 0
+        print(f"  y leerle un registro de 4 bytes da: {got:#x}")
+        if got != EDU_VERSION:
+            failures.append(f"el registro del aparato dio {got:#x} y no {EDU_VERSION:#x}")
+
+        # Que el ancho no sea decorativo se comprueba leyendo mal a proposito, y
+        # **solo en x86_64**. Las dos maquinas no fallan igual y esa diferencia
+        # es justo el motivo de D22: en x86 el acceso angosto se descarta y
+        # devuelve ceros; en aarch64 el bus lo rechaza con un abort externo que
+        # **mata el kernel**, porque `mem.read` corre en el camino del protocolo
+        # y ahi no hay punto de recuperacion como el de `exec`. Queda anotado
+        # como deuda: hoy el agente puede dejar la maquina muda con un pedido
+        # legitimo.
+        if arch == "x86_64":
+            ok, r = ask_verb(122, "mem.read", {"handle": win["handle"], "off": 0, "len": 4})
+            narrow = int.from_bytes(r["bytes"], "little") if ok else 0
+            print(f"  y de a un byte, el mismo registro da: {narrow:#x}")
+            if narrow == got:
+                failures.append("el ancho no cambio nada: la prueba no prueba nada")
+        ask_verb(121, "release", {"handle": win["handle"]})
 
     # La memoria donde el aparato va a intentar escribir, con un patron puesto
     # por el CPU: si el DMA llega, lo pisa con ceros.

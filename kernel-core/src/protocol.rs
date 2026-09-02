@@ -766,6 +766,14 @@ struct Args<'a> {
     /// En que nucleo reclamado correr, para `exec`. Es el handle que devolvio
     /// `core.claim`. Sin esto, corre en el nucleo que atiende el protocolo.
     core: Option<u64>,
+    /// De a cuantos bytes se toca la memoria, para `mem.read` y `mem.write`.
+    ///
+    /// Existe porque **un registro de dispositivo no es RAM**: muchos solo
+    /// aceptan accesos de su ancho exacto y descartan los mas angostos, asi que
+    /// leerlos de a un byte devuelve ceros y escribirlos no hace nada. El kernel
+    /// no lo adivina —no sabe que hay del otro lado (D4)— y por omision no
+    /// cambia nada: uno.
+    width: Option<u64>,
     /// Si `exec {core}` espera la respuesta o vuelve enseguida (deuda 13).
     ///
     /// Este **si** tiene valor por omision, a diferencia de `mode`, y la
@@ -799,6 +807,7 @@ fn read_args<'a>(r: &mut Reader<'a>) -> Option<Args<'a>> {
         interrupt: None,
         mode: None,
         core: None,
+        width: None,
         wait: None,
         device: None,
         data: None,
@@ -828,6 +837,7 @@ fn read_args<'a>(r: &mut Reader<'a>) -> Option<Args<'a>> {
             "interrupt" => a.interrupt = Some(r.uint()?),
             "mode" => a.mode = Some(r.text()?),
             "core" => a.core = Some(r.uint()?),
+            "width" => a.width = Some(r.uint()?),
             "wait" => a.wait = Some(r.bool()?),
             "device" => a.device = Some(r.uint()?),
             _ => r.skip()?,
@@ -899,9 +909,13 @@ fn mem_read<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
         return reply_error(p, id, "read too large");
     }
 
+    let width = a.width.unwrap_or(1);
     match claims::range_of(handle, off, len) {
         Err(e) => reply_failure(p, id, e),
         Ok(addr) => {
+            if let Err(e) = check_width(width, addr, len) {
+                return reply_error(p, id, e);
+            }
             let out = unsafe { &mut *core::ptr::addr_of_mut!(OUTBOX) };
             let mut w = Writer::new(out);
             w.array(3);
@@ -909,13 +923,69 @@ fn mem_read<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
             w.bool(true);
             w.map(1);
             w.text("bytes");
-            // De a un byte y volatil: esto puede ser el registro de un
-            // dispositivo, no RAM.
+            // Volatil y del ancho que pidio el agente: esto puede ser el
+            // registro de un dispositivo, no RAM. Se lee **una vez por palabra**
+            // y se reparte en bytes, porque volver a leer el mismo registro para
+            // sacarle el byte siguiente serian varios accesos — y hay registros
+            // que cambian de valor con solo mirarlos.
+            let mut word = 0u64;
             w.bytes_by(len as usize, |i| unsafe {
-                core::ptr::read_volatile((addr + i as u64) as *const u8)
+                let inside = i as u64 % width;
+                if inside == 0 {
+                    word = read_word(addr + i as u64, width);
+                }
+                (word >> (8 * inside)) as u8
             });
             finish_reply(p, id, w);
         }
+    }
+}
+
+/// Que el ancho pedido sea uno que la maquina sepa hacer, y que el rango le
+/// cierre.
+///
+/// Un acceso desalineado o de un ancho raro no falla parejo: en algunas
+/// maquinas anda, en otras da fault, y en un registro de dispositivo puede
+/// hacer media escritura. Se rechaza antes en vez de dejar que la diferencia
+/// aparezca como un bug de una sola arquitectura.
+fn check_width(width: u64, addr: u64, len: u64) -> Result<(), &'static str> {
+    if !matches!(width, 1 | 2 | 4 | 8) {
+        return Err("width must be 1, 2, 4 or 8");
+    }
+    if len % width != 0 {
+        return Err("length must be a multiple of width");
+    }
+    if addr % width != 0 {
+        return Err("address must be aligned to width");
+    }
+    Ok(())
+}
+
+/// Una palabra del ancho pedido, leida de una sola vez.
+///
+/// # Safety
+///
+/// `addr` tiene que estar mapeada y alineada a `width`.
+unsafe fn read_word(addr: u64, width: u64) -> u64 {
+    match width {
+        2 => core::ptr::read_volatile(addr as *const u16) as u64,
+        4 => core::ptr::read_volatile(addr as *const u32) as u64,
+        8 => core::ptr::read_volatile(addr as *const u64),
+        _ => core::ptr::read_volatile(addr as *const u8) as u64,
+    }
+}
+
+/// Escribe una palabra del ancho pedido, de una sola vez.
+///
+/// # Safety
+///
+/// Lo mismo que `read_word`.
+unsafe fn write_word(addr: u64, width: u64, value: u64) {
+    match width {
+        2 => core::ptr::write_volatile(addr as *mut u16, value as u16),
+        4 => core::ptr::write_volatile(addr as *mut u32, value as u32),
+        8 => core::ptr::write_volatile(addr as *mut u64, value),
+        _ => core::ptr::write_volatile(addr as *mut u8, value as u8),
     }
 }
 
@@ -928,11 +998,24 @@ fn mem_write<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
     };
     let off = a.off.unwrap_or(0);
 
+    let width = a.width.unwrap_or(1);
     match claims::range_of(handle, off, data.len() as u64) {
         Err(e) => reply_failure(p, id, e),
         Ok(addr) => {
-            for (i, b) in data.iter().enumerate() {
-                unsafe { core::ptr::write_volatile((addr + i as u64) as *mut u8, *b) };
+            if let Err(e) = check_width(width, addr, data.len() as u64) {
+                return reply_error(p, id, e);
+            }
+            // De a una palabra del ancho pedido. Partir en bytes lo que el
+            // aparato espera entero no es "casi lo mismo": puede descartarse
+            // sin avisar, o tomarse como varias escrituras distintas.
+            let mut i = 0usize;
+            while i < data.len() {
+                let mut word = 0u64;
+                for k in 0..width as usize {
+                    word |= (data[i + k] as u64) << (8 * k);
+                }
+                unsafe { write_word(addr + i as u64, width, word) };
+                i += width as usize;
             }
             let out = unsafe { &mut *core::ptr::addr_of_mut!(OUTBOX) };
             let mut w = Writer::new(out);

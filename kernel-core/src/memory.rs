@@ -62,6 +62,17 @@ pub enum Kind {
     /// Un tipo que este kernel todavia no conoce. Se informa el numero crudo en
     /// vez de inventarle un significado (P4).
     Other(u32),
+    /// **La maquina no dijo nada de este rango.** Es un hueco del mapa que el
+    /// identity map igual alcanza, y ahi suelen vivir los BARs que asigno el
+    /// firmware sin listarlos.
+    ///
+    /// Se entrega, porque el kernel no es quien decide que aparatos existen
+    /// (P1) — y negarlo no protegia nada: el agente ya le escribia desde su
+    /// codigo en `exec`. Pero se entrega **con este nombre** y no como `Mmio`:
+    /// decir "esto son registros de un dispositivo" seria inventar lo que la
+    /// maquina no dijo, y el agente tiene derecho a saber que lo que se lleva
+    /// nadie se lo confirmo (P4).
+    Unreported,
 }
 
 impl Kind {
@@ -82,6 +93,7 @@ impl Kind {
             Kind::Broken => "broken",
             Kind::Persistent => "persistent",
             Kind::Other(_) => "other",
+            Kind::Unreported => "unreported",
         }
     }
 
@@ -98,6 +110,7 @@ impl Kind {
             Kind::Broken => "rota",
             Kind::Persistent => "persistente",
             Kind::Other(_) => "otra",
+            Kind::Unreported => "sin informar",
         }
     }
 }

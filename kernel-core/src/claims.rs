@@ -186,20 +186,60 @@ pub fn claim(m: &Machine, r: Request) -> Result<Claim, Error> {
 fn claim_exact(m: &Machine, start: u64, bytes: u64) -> Result<Claim, Error> {
     let end = start.checked_add(bytes).ok_or(Error::Unmapped)?;
 
-    // Tiene que estar entero adentro de lo que la maquina informo, y de una sola
-    // clase: un rango a caballo de dos regiones distintas no se puede describir
-    // con una sola etiqueta sin mentir.
-    let region = m.region_containing(start).ok_or(Error::Unmapped)?;
-    if end > region.end() {
-        return Err(Error::Unmapped);
-    }
-    if region.kind == Kind::Kernel {
-        return Err(Error::IsKernel);
-    }
+    let kind = match m.region_containing(start) {
+        // Adentro de una region: tiene que caber entera en ella. Un rango a
+        // caballo de dos regiones distintas no se puede describir con una sola
+        // etiqueta sin mentir.
+        Some(region) => {
+            if end > region.end() {
+                return Err(Error::Unmapped);
+            }
+            if region.kind == Kind::Kernel {
+                return Err(Error::IsKernel);
+            }
+            region.kind
+        }
+        // En un hueco: **la maquina no lo listo**. Ahi es donde suelen quedar
+        // los BARs que asigno el firmware sin informarlos en el mapa.
+        //
+        // Se entrega igual, y no es una concesion: negarlo no protegia nada. El
+        // identity map cubre el hueco entero, asi que el agente ya le escribia
+        // desde su codigo en `exec` — lo unico que hacia el rechazo era obligar
+        // a un rodeo. Una capa que estorba sin hacer cumplir nada es justo la
+        // que P2 manda sacar, y decidir que aparatos existen no le toca al
+        // kernel (P1, D4).
+        //
+        // Lo que si se sostiene es no mentir: sale con `Unreported`, no con
+        // `Mmio` (P4).
+        None => {
+            if !is_hole(m, start, end) {
+                // Empieza en un hueco y termina adentro de una region: seria
+                // entregar media cosa de cada clase.
+                return Err(Error::Unmapped);
+            }
+            if end > reach(m) {
+                // Mas arriba de lo que las tablas de paginas mapean. Entregarlo
+                // seria prometer una direccion que el CPU no puede tocar.
+                return Err(Error::Unmapped);
+            }
+            Kind::Unreported
+        }
+    };
+
     if overlaps(start, end) {
         return Err(Error::Taken);
     }
-    record(start, bytes, region.kind)
+    record(start, bytes, kind)
+}
+
+/// Si en ese rango la maquina no informo **nada**, ni una region que lo roce.
+fn is_hole(m: &Machine, start: u64, end: u64) -> bool {
+    !m.regions.iter().any(|r| r.start < end && r.end() > start)
+}
+
+/// Hasta donde llega el identity map, que es hasta donde el CPU puede tocar.
+fn reach(m: &Machine) -> u64 {
+    crate::paging::span_gib(m).saturating_mul(crate::paging::GIB)
 }
 
 /// Busca el primer hueco libre que sirva.

@@ -79,8 +79,8 @@ algo que la lista de diez no podía pedir — ver D28.
 |---|---|
 | `describe` | Devuelve la máquina real: núcleos, registros disponibles, mapa de memoria física, dispositivos, cachés, NUMA. |
 | `mem.claim(bytes, constraints)` | Reclama marcos de memoria física — o un rango MMIO / BAR de un dispositivo. Devuelve un handle. RAM se mapea cacheable; MMIO **no-cacheable** (si no, la CPU cachea las escrituras a registros y el dispositivo nunca se entera). |
-| `mem.read(handle, off, len)` | Bytes crudos hacia afuera. |
-| `mem.write(handle, off, bytes)` | Bytes crudos hacia adentro. |
+| `mem.read(handle, off, len, width)` | Bytes crudos hacia afuera. `width` (1, 2, 4 u 8) es de a cuánto se toca la memoria: un registro de dispositivo puede aceptar solo su ancho exacto. Por omisión, uno. |
+| `mem.write(handle, off, bytes, width)` | Bytes crudos hacia adentro, con el mismo `width`. |
 | `core.claim(id, modo)` | Un núcleo físico. En `dedicated` es solo del agente, con el timer enmascarado. En `shared` es el núcleo que atiende el protocolo: el kernel le pide prestados microsegundos cuando llega un pedido. El núcleo del protocolo **nunca** se entrega como `dedicated`, y el kernel lo dice con los datos para que el agente decida (P4). |
 | `exec(core, handle, off, regs, mode, wait)` | Salta a código máquina. Devuelve estado de registros + fault si lo hubo. `mode` es `supervised` o `raw` y **lo declara el agente** (D27): no tiene valor por omisión, porque elegirlo sería el kernel eligiendo. En el núcleo del protocolo solo se admite `supervised` (D29). Con `core`, `wait:false` contesta enseguida y el resultado queda en `describe {what:["cores"]}`. |
 | `irq.install(interrupt, handle, off)` | Instala un handler. El kernel pone prólogo, epílogo y EOI. El argumento es el número con el que **la máquina** identifica la fuente, no una ranura de tabla: eso último es modelo de x86 y no existe igual en ARM (D3). |
@@ -151,7 +151,7 @@ Lo que sí existe:
 | **Permiso de memoria** (D27) | Andando en las dos. `mem.claim {user: true}` entrega memoria alcanzable sin privilegio, y **lo hace cumplir el hardware**: SMEP en x86_64, el modelo de permisos en aarch64. |
 | **Transición de privilegio** (D27) | Andando en las dos. `exec {mode}` entra a anillo 3 / EL0 y vuelve por una ventanilla —`int 0x80` con `DPL=3`, `svc #0`— cuyos bytes publica `describe`. La pila sale del final del reclamo del agente. **Comprobado por lo que el hardware niega:** apagar las interrupciones desde `supervised` vuelve como fault en vez de dejar la máquina muda. |
 | **Dónde vale cada privilegio** (D29) | Andando en las dos. En el núcleo del protocolo `exec` **solo** admite `supervised`: ahí manda el kernel, y para que eso sea verdad el agente no puede *poder* enmascarar. `raw` exige un núcleo reclamado, donde la prioridad la decide él. El acuerdo se publica (`describe {what:["exec"]}` trae `this_core`) en vez de dejar que se descubra chocándose (P4). |
-| **`mem.claim` · `mem.read` · `mem.write` · `release`** | Andando. Reclamos por tamaño o por dirección exacta (así se pide MMIO), con alineación y tope. Los handles son de la máquina y no se reusan (D14). |
+| **`mem.claim` · `mem.read` · `mem.write` · `release`** | Andando. Reclamos por tamaño o por dirección exacta (así se pide MMIO), con alineación y tope. Los handles son de la máquina y no se reusan (D14). Un rango que cae en un **hueco** del mapa se entrega con la clase `unreported` —ahí viven los BARs que el firmware no listó— y `width` permite tocarlo con el ancho que el aparato exige. |
 | **`irq.install`** | Andando en las dos. El agente pone su código a atender un aparato, y el kernel publica además **cómo hacer sonar esa interrupción a propósito** para que pueda probar su handler sin esperar al aparato. `irq.install_raw` solo en x86_64. |
 | **Timbre del buzón** | Andando en las dos. El agente lo toca con código máquina propio: un IPI por el APIC en x86_64, un SGI por el GIC en aarch64. **Con prioridad más baja que el cable**, así que por más que el agente inunde de llamadas el cordón pasa primero (D17, P6). El kernel cuenta cuántas veces sonó, que es lo que permite comprobarlo. |
 | **`listen`** | Andando en las dos. El kernel escucha por el cable y por el buzón, y contesta por donde le llegó (D17). El acuerdo lo publica `describe`. |
@@ -316,12 +316,38 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
    de que nadie lo lea, entra sola en todo lo que se calcula a partir de él, empezando por
    hasta dónde llega el identity map.
 
-15. **Un BAR que asignó el firmware puede no estar en el mapa de memoria.** `mem.claim` por
-   dirección exacta lo rechaza con `unmapped`, así que el agente no puede leer ni escribir los
-   registros de ese aparato con `mem.read`/`mem.write` — solo desde su propio código en `exec`,
-   porque el identity map cubre el bloque de 1 GiB entero aunque el mapa no liste el rango.
-   Apareció escribiendo la prueba del IOMMU. No bloquea nada, pero es una asimetría que un
-   agente va a encontrar y hoy no está explicada por ningún lado.
+15. **~~Un BAR que asignó el firmware puede no estar en el mapa de memoria.~~ RESUELTO.**
+   `mem.claim` por dirección exacta ahora entrega un rango que cae en un **hueco** del mapa,
+   siempre que el hueco sea entero —ni un borde adentro de una región— y que el identity map lo
+   alcance. Sale con la clase `unreported`, que no es `mmio`: entregarlo con ese nombre sería
+   afirmar lo que la máquina no dijo (P4). El agente se lleva el rango **y** la advertencia.
+
+   El rechazo anterior no protegía nada, y ahí está el argumento: el identity map cubre el hueco
+   igual, así que el código del agente en `exec` ya le escribía. Lo único que hacía `unmapped`
+   era obligar a un rodeo. Una capa que estorba sin hacer cumplir nada es la que P2 manda sacar,
+   y decidir qué aparatos existen no le toca al kernel (P1, D4).
+
+   **Y no alcanzaba con eso, que es lo que la prueba encontró.** Reclamar la ventana y leerla
+   devolvía ceros: `mem.read`/`mem.write` accedían **de a un byte**, y muchos registros solo
+   aceptan accesos de su ancho exacto y descartan los más angostos. Ahora los dos verbos toman
+   `width` (1, 2, 4 u 8), que **declara el agente** porque el kernel no sabe qué hay del otro
+   lado (D4); por omisión sigue siendo uno. Se lee una vez por palabra y se reparte en bytes,
+   porque hay registros que cambian de valor con solo mirarlos.
+
+16. **Un acceso de ancho inválido a MMIO mata el kernel en aarch64.** Salió de la prueba de
+   arriba, y es una asimetría que solo aparece con las dos arquitecturas (D22): leer un registro
+   de 4 bytes de a uno en x86_64 devuelve ceros y sigue, mientras que en aarch64 el bus lo
+   rechaza con un abort externo y **la máquina queda muda**.
+
+   El agujero es de P5: `mem.read` y `mem.write` corren en el camino del protocolo, donde **no
+   hay punto de recuperación**. Durante un `exec` un fault vuelve como dato porque el handler
+   desvía el regreso; acá el acceso lo hace el propio kernel y no hay a dónde desviarlo. Con lo
+   cual el agente puede dejar la máquina sin cordón con un pedido perfectamente legítimo, y eso
+   es exactamente lo que D5 y D17 dicen que no puede pasar.
+
+   Lo que falta es envolver esos dos accesos con el mismo mecanismo que ya usa `exec`: un punto
+   al que el handler pueda volver, para contestar "ese acceso lo rechazó la máquina" en vez de
+   morirse. La maquinaria existe; lo que no existe es la forma de usarla fuera de `exec`.
 
 11. **Los atributos de cacheabilidad que informa UEFI se descartan.** D12 anda igual porque la
    cacheabilidad se deduce de la *clase* de cada región, pero UEFI informa además atributos por
