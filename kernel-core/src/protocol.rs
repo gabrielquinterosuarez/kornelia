@@ -603,7 +603,7 @@ fn write_index(
 /// El kernel ofrece los dos y no elige: elegir es del agente (P6). Lo que si
 /// hace es **publicar el acuerdo**, para que no lo tenga horneado (P4).
 fn write_exec<P: Platform>(w: &mut Writer<'_>) {
-    w.map(5);
+    w.map(6);
 
     w.text("modes");
     w.array(2);
@@ -639,6 +639,13 @@ fn write_exec<P: Platform>(w: &mut Writer<'_>) {
     for name in P::EXEC_INITIAL {
         w.text(name);
     }
+
+    // Hasta donde llega el kernel para cortar un trabajo que no vuelve, en esta
+    // maquina. Cambia lo que el agente puede planear: donde alcanza solo a los
+    // que no enmascararon, correr `raw` con las interrupciones tapadas es
+    // apostar un nucleo a que el codigo termine (D29).
+    w.text("cancel");
+    w.text(if P::CAN_STOP_CORES { "even-if-masked" } else { "only-if-unmasked" });
 }
 
 /// El mapa de memoria: un arreglo de `[inicio, bytes, clase]`.

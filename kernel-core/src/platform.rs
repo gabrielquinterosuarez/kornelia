@@ -440,6 +440,28 @@ pub trait Platform {
     /// saca al núcleo del `hlt` o del `wfi` para que lo mire.
     fn wake_core(&mut self, id: u64);
 
+    /// Le manda a un núcleo la interrupción que **no se puede enmascarar**.
+    ///
+    /// Es el segundo escalón para cortar código que no vuelve. El timbre normal
+    /// alcanza para todo lo que no se tapó los oídos, que es casi todo; esto
+    /// alcanza a quien enmascaró las interrupciones comunes — `cli` en x86_64,
+    /// `msr daifset, #2` en aarch64.
+    ///
+    /// Las dos máquinas tienen una línea aparte para esto y no se llama igual:
+    /// **NMI** en x86_64, **FIQ** en aarch64. Devuelve `false` donde no la haya,
+    /// porque prometer un corte que no va a llegar es peor que decir que no se
+    /// puede (P4).
+    ///
+    /// Sigue habiendo un techo, y es de la arquitectura y no del kernel: quien
+    /// enmascare **todo** queda fuera de alcance. D29 dice que en su núcleo eso
+    /// lo decide el agente.
+    fn stop_core(&mut self, id: u64) -> bool;
+
+    /// Si esta máquina **tiene** esa línea. Se pregunta en vez de intentarlo:
+    /// mandar la interrupción a un núcleo inventado para ver qué pasa sería
+    /// justo la clase de prueba que rompe algo.
+    const CAN_STOP_CORES: bool;
+
     /// Le pide a la máquina que arranque un núcleo, y le dice qué ranura es la
     /// suya para que pueda avisar cuando llegue.
     ///

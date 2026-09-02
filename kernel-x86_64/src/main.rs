@@ -195,6 +195,13 @@ impl Platform for X86_64 {
         irq::wake(id);
     }
 
+    fn stop_core(&mut self, id: u64) -> bool {
+        irq::stop(id)
+    }
+
+    /// El NMI: `cli` no lo puede tapar.
+    const CAN_STOP_CORES: bool = true;
+
     const EXEC_INITIAL: &'static [&'static str] = exec::INITIAL;
 
     unsafe fn exec(

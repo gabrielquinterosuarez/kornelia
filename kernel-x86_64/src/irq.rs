@@ -369,6 +369,24 @@ pub unsafe fn prepare_worker() -> Result<(), &'static str> {
 ///
 /// Las dos escrituras van en este orden: la primera dice a quien, la segunda
 /// dispara. Al reves se le mandaria a quien hubiera quedado de antes.
+/// Le manda un NMI a otro nucleo: la interrupcion que `cli` no puede tapar.
+///
+/// En el registro de comando del APIC, el modo de entrega vive en los bits 8 a
+/// 10, y `100` es NMI. El vector se ignora en ese modo — la entrada de la tabla
+/// que se usa es siempre la 2, que la fija la arquitectura.
+pub fn stop(id: u64) -> bool {
+    // SAFETY: el APIC de este nucleo esta en la direccion que el identity map
+    // cubre, y escribir el comando es lo unico que hace falta.
+    unsafe {
+        if APIC == 0 {
+            return false;
+        }
+        core::ptr::write_volatile((APIC + ICR_HIGH) as *mut u32, (id as u32) << 24);
+        core::ptr::write_volatile((APIC + ICR_LOW) as *mut u32, 4 << 8);
+    }
+    true
+}
+
 pub fn wake(id: u64) {
     // SAFETY: el APIC lo dejo `install`, y el identity map lo cubre.
     unsafe {

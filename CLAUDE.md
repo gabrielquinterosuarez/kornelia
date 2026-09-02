@@ -196,11 +196,12 @@ otra, ni ninguna deuda abierta** (§7 de `docs/DISENO.md` está entera en resuel
 Las preguntas abiertas siguen en §8. Lo que sigue son cosas que ninguna deuda
 cubría todavía:
 
-1. **Falta el segundo escalón para recuperar un núcleo.** Hoy se le manda el timbre normal, y
-   eso alcanza para todo lo que no enmascaró — que es casi todo. Falta lo que hace Linux
-   después: **NMI** en x86_64 (una interrupción que `cli` no puede tapar) y **FIQ** en aarch64
-   (la segunda línea, que `msr daifset, #2` no tapa). Con eso quedaría afuera solo quien
-   enmascare *todo*, y ahí en ARM no hay nada — Linux tampoco puede.
+1. **El segundo escalón para cortar un núcleo falta en aarch64.** En x86_64 está: el NMI corta
+   hasta al que hizo `cli`. En ARM sería el FIQ —`msr daifset, #2` no lo tapa— pero para que una
+   interrupción llegue como FIQ hay que ponerla en el Grupo 0 del GIC y prender `FIQEn`, y hoy
+   *todas* las nuestras son del Grupo 0: prenderlo mandaría por FIQ el cable, el buzón y los
+   handlers del agente. Es riesgo alto sobre lo único que sostiene el cordón. Mientras tanto el
+   kernel lo publica (`describe exec` trae `cancel`) en vez de prometerlo.
 2. **De la MADT solo se sacan núcleos y el controlador** (lo que quedó de la deuda 3): las rutas
    de interrupción de los aparatos todavía no, y `irq.install` las va a necesitar para algo más
    que las interrupciones que ya conoce.

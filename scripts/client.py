@@ -652,6 +652,12 @@ def test_recover(proc, timeout, arch):
     # codigo que **si** enmascara no se deja cortar, y ahi el kernel tiene que
     # fallar y decirlo. Prometer que se recupero un nucleo que sigue corriendo
     # codigo de otro seria lo peor de los dos mundos.
+    # Lo que la maquina promete se le pregunta a ella, no se deduce de como se
+    # llama la arquitectura (P4).
+    ok, d = ask_verb(156, "describe", {"what": ["exec"]})
+    reach = d["exec"].get("cancel") if ok else None
+    print(f"  hasta donde llega el corte en esta maquina: {reach}")
+
     core2 = core_for_raw(ask_verb, 151)
     if core2 is not None:
         ask_verb(152, "mem.write", {"handle": h, "bytes": DEAF_FOREVER[arch]})
@@ -660,7 +666,13 @@ def test_recover(proc, timeout, arch):
         if ok:
             print("  y ahora uno que se tapa los oidos antes de colgarse")
             ok, r = ask_verb(154, "release", {"handle": core2})
-            if ok:
+            if reach == "even-if-masked":
+                # Hay una linea que la mascara comun no tapa: tiene que caer.
+                if not ok:
+                    failures.append(f"prometio cortar aun enmascarado y no pudo: {r}")
+                else:
+                    print(f"  y la linea que no se puede enmascarar lo corta: {r}")
+            elif ok:
                 failures.append("dijo haber recuperado un nucleo que enmascaro")
             else:
                 print(f"  el kernel no lo pudo cortar, y lo dice: {r}")

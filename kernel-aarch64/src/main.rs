@@ -196,6 +196,13 @@ impl Platform for AArch64 {
         irq::wake(id);
     }
 
+    fn stop_core(&mut self, id: u64) -> bool {
+        irq::stop(id)
+    }
+
+    /// Todavia no: el FIQ pide reconfigurar los grupos del GIC.
+    const CAN_STOP_CORES: bool = false;
+
     const EXEC_INITIAL: &'static [&'static str] = exec::INITIAL;
 
     unsafe fn exec(

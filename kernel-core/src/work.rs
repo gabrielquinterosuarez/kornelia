@@ -332,13 +332,31 @@ pub unsafe fn cancel<P: Platform>(p: &mut P, slot: usize) -> bool {
     if !is_busy(slot) {
         return true;
     }
+    let id = cores::id_of(slot).unwrap_or(0);
     ask_cancel(slot);
-    p.wake_core(cores::id_of(slot).unwrap_or(0));
 
-    // Con reloj se espera un tiempo; sin reloj, vueltas. Igual que la ventana
-    // del blob: un plazo que no se sabe cuanto dura no es un plazo.
-    let clock = p.clock();
-    let deadline = clock.map(|c| p.ticks().wrapping_add(c.ticks_for_ms(CANCEL_MS)));
+    // **Se escala, igual que Linux.** Primero el timbre normal, que alcanza para
+    // todo lo que no se tapo los oidos — que es casi todo, porque enmascarar hay
+    // que quererlo. Si no contesta, la linea que la mascara comun no tapa.
+    p.wake_core(id);
+    if wait_until_quiet(p, slot) {
+        return true;
+    }
+
+    // Segundo escalon. Donde no exista, `stop_core` dice que no en vez de
+    // prometer un corte que no llega, y no tiene sentido volver a esperar.
+    if !p.stop_core(id) {
+        return false;
+    }
+    wait_until_quiet(p, slot)
+}
+
+/// Espera a que la ranura deje de estar ocupada, o se cansa.
+///
+/// Con reloj se espera un tiempo; sin reloj, vueltas. Igual que la ventana del
+/// blob: un plazo que no se sabe cuanto dura no es un plazo.
+fn wait_until_quiet<P: Platform>(p: &mut P, slot: usize) -> bool {
+    let deadline = p.clock().map(|c| p.ticks().wrapping_add(c.ticks_for_ms(CANCEL_MS)));
     let mut rounds = 0u64;
     while is_busy(slot) {
         match deadline {

@@ -78,6 +78,14 @@ impl Platform for Fake {
 
     fn wake_core(&mut self, _id: u64) {}
 
+    fn stop_core(&mut self, _id: u64) -> bool {
+        // La plataforma de prueba no tiene con que: es el caso que hay que
+        // poder manejar sin prometer un corte que no llega.
+        false
+    }
+
+    const CAN_STOP_CORES: bool = false;
+
     unsafe fn enable_iommu(
         &mut self,
         _hw: &crate::acpi::Hardware,

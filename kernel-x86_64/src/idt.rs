@@ -187,6 +187,24 @@ extern "C" {
 /// Lo que llama el stub. Corre con los registros ya a salvo.
 #[no_mangle]
 extern "sysv64" fn fault_rust(m: &mut Frame) {
+    // El segundo escalon para cortar un nucleo colgado.
+    //
+    // El vector 2 es el NMI, y **`cli` no lo puede tapar** — de ahi el nombre.
+    // Es lo que alcanza a un codigo que enmascaro las interrupciones normales,
+    // que con el timbre comun quedaba fuera de alcance. Entra por la tabla de
+    // excepciones como cualquier otra, asi que el desvio ya existia: lo unico
+    // que falta es no contarlo como fault, porque no lo es.
+    //
+    // Va antes de armar el `Fault` a proposito: si se anotara, `exec` lo leeria
+    // como si el codigo del agente hubiera fallado.
+    if m.vector == 2 && crate::percpu::armed() != 0 {
+        let slot = crate::percpu::slot();
+        if kernel_core::work::take_cancel(slot) {
+            divert(m);
+            return;
+        }
+    }
+
     let cause = translate(m.vector);
 
     // CR2 guarda la direccion que se quiso tocar, y solo tiene sentido en un
@@ -234,20 +252,7 @@ extern "sysv64" fn fault_rust(m: &mut Frame) {
     // dato (P5). Esto es lo que hace que el codigo del agente no pueda matar al
     // kernel.
     if crate::percpu::armed() != 0 {
-        m.rip = crate::percpu::return_point();
-        // Los dos bits de abajo de CS son el anillo desde el que se entro. Si
-        // el codigo venia de anillo 3 (D27), reescribir solo RIP no alcanza:
-        // el `iretq` volveria **a anillo 3** con una direccion del kernel, que
-        // no es alcanzable desde ahi, y fallaria de nuevo — un fault adentro
-        // del mecanismo que existe para capturar faults.
-        //
-        // Se lee del marco y no de una bandera nuestra: es el hardware
-        // diciendo de donde vino (P4).
-        if m.cs & 3 != 0 {
-            m.cs = crate::gdt::CODE as u64;
-            m.ss = crate::gdt::DATA as u64;
-            m.rsp = crate::percpu::kernel_stack();
-        }
+        divert(m);
         return;
     }
 
@@ -258,6 +263,28 @@ extern "sysv64" fn fault_rust(m: &mut Frame) {
     kernel_core::fault::report(&f, REGISTERS, &mut s);
     loop {
         unsafe { core::arch::asm!("cli; hlt", options(nomem, nostack)) }
+    }
+}
+
+/// Le cambia el destino al `iretq`: en vez de volver al codigo, vuelve al punto
+/// de recuperacion de `exec`.
+///
+/// Lo usan las dos cosas que sacan a un nucleo de donde estaba —un fault y un
+/// corte pedido desde afuera— porque el camino de vuelta es el mismo.
+fn divert(m: &mut Frame) {
+    m.rip = crate::percpu::return_point();
+    // Los dos bits de abajo de CS son el anillo desde el que se entro. Si el
+    // codigo venia de anillo 3 (D27), reescribir solo RIP no alcanza: el
+    // `iretq` volveria **a anillo 3** con una direccion del kernel, que no es
+    // alcanzable desde ahi, y fallaria de nuevo — un fault adentro del
+    // mecanismo que existe para capturar faults.
+    //
+    // Se lee del marco y no de una bandera nuestra: es el hardware diciendo de
+    // donde vino (P4).
+    if m.cs & 3 != 0 {
+        m.cs = crate::gdt::CODE as u64;
+        m.ss = crate::gdt::DATA as u64;
+        m.rsp = crate::percpu::kernel_stack();
     }
 }
 

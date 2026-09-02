@@ -273,6 +273,22 @@ fn cancel_if_asked() {
     }
 }
 
+/// El segundo escalon para cortar un nucleo, que en aarch64 **todavia no hay**.
+///
+/// La linea que la mascara comun no tapa existe: `msr daifset, #2` tapa IRQ y no
+/// FIQ. Pero para que una interrupcion llegue como FIQ hay que ponerla en el
+/// **Grupo 0** del GIC y prender `FIQEn`, y hoy *todas* las nuestras son del
+/// Grupo 0 — prenderlo mandaria por FIQ el cable, el buzon y los handlers del
+/// agente. Moverlas de grupo es un cambio de riesgo alto sobre lo unico que
+/// sostiene el cordon.
+///
+/// Asi que devuelve `false` y el kernel lo informa, en vez de prometer un corte
+/// que no va a llegar (P4). Es la misma clase de asimetria que `irq.install_raw`,
+/// que solo existe en x86_64 y tambien se dice.
+pub fn stop(_id: u64) -> bool {
+    false
+}
+
 pub fn wake(id: u64) {
     // SAFETY: el GIC lo dejo `install`, y el identity map cubre su MMIO.
     unsafe {
