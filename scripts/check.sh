@@ -59,7 +59,7 @@ elif ! command -v python3 >/dev/null; then
 else
     for arch in x86_64 aarch64; do
         step "arranca $arch y contesta el protocolo"
-        output=$(timeout 240 ./scripts/client.py --arch "$arch" --smp 4 --what memory,tables --clock --recover --memory --exec --cores --mailbox --doorbell --handler --during --permission --supervised --on-core --dma 2>&1 || true)
+        output=$(timeout 240 ./scripts/client.py --arch "$arch" --smp 4 --what memory,tables --clock --deadline --recover --memory --exec --cores --mailbox --doorbell --handler --during --permission --supervised --on-core --dma 2>&1 || true)
 
         # Lo que tiene que haber dicho en el banner de texto.
         for expected in "arquitectura: $arch" "memoria:" "tablas:" \
@@ -160,6 +160,16 @@ else
         # Se exige en las dos, y con el mismo texto: VT-d en x86_64, SMMUv3 en
         # aarch64. Que el kernel diga "todavia no lo programo" dejo de alcanzar
         # el dia que hubo con que programarlo.
+        # Y el plazo que declara el agente (D18 tenia el mismo problema, pero
+        # aca es el nucleo del protocolo el que se salva). La prueba no admite
+        # interpretacion: se corre un bucle sin salida **sin nucleo**, o sea
+        # justo donde antes se perdia la maquina. Si el plazo no se cumpliera,
+        # el cliente se quedaria esperando para siempre.
+        if ! grep -qFe "plazo: ok" <<<"$output"; then
+            bad "$arch no hace cumplir el plazo que declara el agente"
+            printf '%s\n' "$output" | grep -E "FALLA:|plazo|cortado" | head -6
+        fi
+
         # Y que un nucleo cuyo codigo no vuelve se pueda recuperar. Las dos
         # mitades: el que no enmascara se corta y **vuelve a servir**, y el que
         # si enmascara no se puede cortar y el kernel lo dice en vez de mentir.

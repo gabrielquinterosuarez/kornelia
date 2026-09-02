@@ -706,6 +706,84 @@ def core_id_of(ask_verb, handle):
     return 1
 
 
+def test_deadline(proc, timeout, arch):
+    """El agente declara cuanto puede tardar su codigo, y el kernel lo cumple.
+
+    Es el caso que dejaba la maquina **escuchando sin contestar**: un bucle
+    infinito en el nucleo del protocolo. Ahi las interrupciones entran —D29 hace
+    que el agente corra sin privilegio, asi que no las puede tapar— pero `exec`
+    no vuelve, y el bucle que atiende el cable no corre mas.
+
+    La prueba no admite interpretacion: se manda un bucle sin salida con un
+    plazo de cien milisegundos, **sin nucleo**, o sea justo donde antes se
+    perdia la maquina. Si el plazo no se cumpliera, esto no volveria nunca.
+    """
+    failures = []
+
+    def ask_verb(n, verb, args):
+        resp, _ = ask(proc, [n, verb, args], timeout)
+        _, ok, load = resp
+        return ok, load
+
+    ok, d = ask_verb(160, "describe", {"what": ["exec"]})
+    if not ok or not d["exec"].get("deadline"):
+        print("  esta maquina no puede hacer cumplir un plazo")
+        return 0
+    print("  la maquina dice que se puede declarar un plazo")
+    # Como se vuelve de `supervised` lo publica la maquina, no se hornea (P4).
+    back = d["exec"]["return"]
+
+    # En el nucleo del protocolo el agente corre supervisado (D29), asi que la
+    # memoria tiene que ser suya.
+    ok, u = ask_verb(161, "mem.claim", {"bytes": 4096, "user": True})
+    if not ok:
+        print(f"  no se pudo reclamar para el agente: {u}")
+        return 1
+    h = u["handle"]
+    ask_verb(162, "mem.write", {"handle": h, "bytes": FOREVER[arch]})
+
+    print("  corriendo un bucle sin salida con 100 ms de plazo...")
+    try:
+        ok, r = ask_verb(163, "exec",
+                         {"handle": h, "mode": "supervised", "deadline_ms": 100})
+    except TimeoutError:
+        print("  FALLA: el exec no volvio — el plazo no se cumplio")
+        return 1
+
+    if not ok:
+        failures.append(f"exec con plazo fallo: {r}")
+    elif not r.get("cancelled"):
+        failures.append(f"volvio sin decir que lo cortaron: {r}")
+    else:
+        print(f"  volvio cortado: cancelled={r['cancelled']}, faulted={r['faulted']}")
+
+    # Y lo mas importante: la maquina sigue contestando.
+    ok, _ = ask_verb(164, "describe", {})
+    if not ok:
+        failures.append("la maquina dejo de contestar")
+    else:
+        print("  y la maquina sigue contestando")
+
+    # Y un plazo que no vence no molesta: el mismo verbo con codigo que termina.
+    ask_verb(165, "mem.write", {"handle": h, "bytes": PROGRAMS[arch]["ok"] + back})
+    ok, r = ask_verb(166, "exec",
+                     {"handle": h, "mode": "supervised", "deadline_ms": 5000})
+    if not ok or r.get("cancelled"):
+        failures.append(f"corto un codigo que termino solo: {r}")
+    else:
+        print("  y un plazo que no vence no corta nada")
+
+    ask_verb(167, "release", {"handle": h})
+
+    print()
+    if failures:
+        for f in failures:
+            print(f"  FALLA: {f}")
+        return 1
+    print("  plazo: ok")
+    return 0
+
+
 def test_clock(proc, timeout):
     """El reloj de la maquina mide tiempo, no vueltas (deuda 17).
 
@@ -1788,6 +1866,8 @@ def main():
                     help="arranca sin ACPI, para que la maquina se describa por device tree")
     ap.add_argument("--write-blob", metavar="RUTA",
                     help="escribe un blob.bin de prueba para esta arquitectura y sale")
+    ap.add_argument("--deadline", action="store_true",
+                    help="el agente declara cuanto puede tardar su codigo")
     ap.add_argument("--recover", action="store_true",
                     help="recupera un nucleo cuyo codigo no vuelve")
     ap.add_argument("--clock", action="store_true",
@@ -1869,6 +1949,9 @@ def main():
         # El lazo de memoria va en el mismo arranque: cada booteo de QEMU son
         # quince segundos, y el porton hace esto por arquitectura.
         rc = 0
+        if args.deadline:
+            print("\n== el agente declara cuanto tarda su codigo ==")
+            rc |= test_deadline(proc, args.timeout, args.arch)
         if args.recover:
             print("\n== recuperar un nucleo cuyo codigo no vuelve ==")
             rc |= test_recover(proc, args.timeout, args.arch)

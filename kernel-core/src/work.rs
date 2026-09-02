@@ -52,7 +52,22 @@ const CANCEL_NONE: u64 = 0;
 const CANCEL_ASKED: u64 = 1;
 const CANCEL_DONE: u64 = 2;
 
-static CANCEL: [AtomicU64; cores::MAX] = [const { AtomicU64::new(CANCEL_NONE) }; cores::MAX];
+/// Una ranura mas que las de `cores`, y esa de mas es la del nucleo que atiende
+/// el protocolo.
+///
+/// Ese nucleo **no se reclama** (es el que esta contestando), asi que no tiene
+/// ranura en la tabla de nucleos: su indice es `cores::MAX`, justo el primero
+/// que se sale del arreglo. Y ahi hay que poder anotar un corte igual, porque el
+/// plazo de `exec {deadline_ms}` corre sobre todo en ese nucleo — es donde un
+/// codigo que no vuelve deja la maquina escuchando sin contestar.
+///
+/// **Esto costo encontrarlo.** Con el arreglo del tamano de `cores::MAX`, la
+/// marca del corte se descartaba por indice sin decir nada: el desvio ocurria,
+/// el codigo se cortaba, y la respuesta salia con el fault viejo del arranque
+/// porque nadie habia anotado que fue un corte.
+const SLOTS: usize = cores::MAX + 1;
+
+static CANCEL: [AtomicU64; SLOTS] = [const { AtomicU64::new(CANCEL_NONE) }; SLOTS];
 
 /// Pide que se interrumpa lo que corre en esa ranura.
 ///
@@ -60,7 +75,7 @@ static CANCEL: [AtomicU64; cores::MAX] = [const { AtomicU64::new(CANCEL_NONE) };
 /// **en el nucleo objetivo**: desde afuera no se puede desviar la ejecucion de
 /// otro nucleo, solo pedirle que se desvie solo.
 pub fn ask_cancel(slot: usize) {
-    if slot < cores::MAX {
+    if slot < SLOTS {
         CANCEL[slot].store(CANCEL_ASKED, Ordering::Release);
     }
 }
@@ -68,7 +83,7 @@ pub fn ask_cancel(slot: usize) {
 /// Lo llama el handler, en el nucleo objetivo: si habia que cortar, lo anota
 /// como hecho y contesta `true` para que el handler desvie.
 pub fn take_cancel(slot: usize) -> bool {
-    slot < cores::MAX
+    slot < SLOTS
         && CANCEL[slot]
             .compare_exchange(CANCEL_ASKED, CANCEL_DONE, Ordering::AcqRel, Ordering::Relaxed)
             .is_ok()
@@ -77,15 +92,26 @@ pub fn take_cancel(slot: usize) -> bool {
 /// Si el ultimo `exec` de esa ranura termino porque se lo cortaron. Lo consume:
 /// la respuesta se arma una sola vez.
 pub fn was_cancelled(slot: usize) -> bool {
-    slot < cores::MAX
+    slot < SLOTS
         && CANCEL[slot]
             .compare_exchange(CANCEL_DONE, CANCEL_NONE, Ordering::AcqRel, Ordering::Relaxed)
             .is_ok()
 }
 
+/// Anota que a esa ranura la cortaron, sin que nadie lo haya pedido de afuera.
+///
+/// Lo llama el handler del reloj cuando vence un plazo: no hubo un `release`
+/// esperando la respuesta, pero el `exec` termino cortado igual y quien arme la
+/// respuesta tiene que poder decirlo.
+pub fn mark_cancelled(slot: usize) {
+    if slot < SLOTS {
+        CANCEL[slot].store(CANCEL_DONE, Ordering::Release);
+    }
+}
+
 /// Deja la ranura sin pedidos de corte pendientes.
 pub fn clear_cancel(slot: usize) {
-    if slot < cores::MAX {
+    if slot < SLOTS {
         CANCEL[slot].store(CANCEL_NONE, Ordering::Release);
     }
 }

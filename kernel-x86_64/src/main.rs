@@ -199,6 +199,18 @@ impl Platform for X86_64 {
         irq::stop(id)
     }
 
+    unsafe fn set_deadline(&mut self, at: Option<u64>) {
+        irq::set_deadline(at);
+    }
+
+    unsafe fn install_deadline(&mut self) -> Result<(), &'static str> {
+        irq::install_deadline(clock::hz())
+    }
+
+    fn deadline_ready(&self) -> bool {
+        irq::deadline_ready()
+    }
+
     /// El NMI: `cli` no lo puede tapar.
     const CAN_STOP_CORES: bool = true;
 
@@ -327,11 +339,11 @@ fn panic(_info: &PanicInfo) -> ! {
 ///
 /// Si ninguna dice nada, se devuelve `None` en vez de inventar un numero: un
 /// tiempo mal calculado es peor que no tener tiempo (P4).
-mod clock {
+pub mod clock {
     use kernel_core::platform::Clock;
 
     /// Le pregunta al CPU por una de sus hojas de informacion.
-    fn cpuid(leaf: u32) -> (u32, u32, u32, u32) {
+    pub fn cpuid(leaf: u32) -> (u32, u32, u32, u32) {
         let (mut a, mut b, mut c, mut d): (u32, u32, u32, u32);
         unsafe {
             core::arch::asm!(
@@ -448,6 +460,12 @@ mod clock {
         }
 
         None
+    }
+
+    /// A que ritmo sube el TSC, o cero si no se sabe. Lo necesita el reloj del
+    /// APIC para traducir un plazo de un contador al otro.
+    pub fn hz() -> u64 {
+        describe().map(|c| c.hz).unwrap_or(0)
     }
 
     pub fn ticks() -> u64 {

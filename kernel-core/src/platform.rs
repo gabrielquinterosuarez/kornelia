@@ -462,6 +462,40 @@ pub trait Platform {
     /// justo la clase de prueba que rompe algo.
     const CAN_STOP_CORES: bool;
 
+    /// Programa el reloj de **este** núcleo para que avise en ese instante, o lo
+    /// desarma con `None`.
+    ///
+    /// Es lo que convierte el contador en un plazo: leerlo dice cuánto pasó,
+    /// pero para cortar código que no vuelve hace falta que además **avise**, y
+    /// eso no se puede hacer preguntando — quien tendría que preguntar es
+    /// justamente el que está colgado.
+    ///
+    /// El instante va en pasos del contador, absoluto, no en milisegundos: la
+    /// traducción la hace `Clock`, que es portable, y así esto no tiene que
+    /// saber a qué ritmo sube.
+    ///
+    /// # Safety
+    ///
+    /// La captura de excepciones tiene que estar puesta: si el aviso llega sin
+    /// handler, es un fault en el kernel.
+    unsafe fn set_deadline(&mut self, at: Option<u64>);
+
+    /// Si el aviso de plazo quedó instalado de verdad.
+    ///
+    /// No es una propiedad de la arquitectura sino de **esta** máquina: depende
+    /// de que el CPU sepa comparar contra el contador y de que el arranque haya
+    /// podido instalarlo. Se informa en vez de suponerlo, porque un plazo que
+    /// no va a llegar es peor que no ofrecerlo (P4).
+    fn deadline_ready(&self) -> bool;
+
+    /// Instala el aviso de plazo. Va en el arranque, con los otros timbres.
+    ///
+    /// # Safety
+    ///
+    /// Después de que la captura de excepciones y el controlador de
+    /// interrupciones estén puestos.
+    unsafe fn install_deadline(&mut self) -> Result<(), &'static str>;
+
     /// Le pide a la máquina que arranque un núcleo, y le dice qué ranura es la
     /// suya para que pueda avisar cuando llegue.
     ///

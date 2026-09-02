@@ -200,6 +200,18 @@ impl Platform for AArch64 {
         irq::stop(id)
     }
 
+    unsafe fn set_deadline(&mut self, at: Option<u64>) {
+        irq::set_deadline(at);
+    }
+
+    unsafe fn install_deadline(&mut self) -> Result<(), &'static str> {
+        irq::install_deadline()
+    }
+
+    fn deadline_ready(&self) -> bool {
+        irq::deadline_ready()
+    }
+
     /// Todavia no: el FIQ pide reconfigurar los grupos del GIC.
     const CAN_STOP_CORES: bool = false;
 

@@ -419,7 +419,7 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
         }
         if q.exec {
             w.text("exec");
-            write_exec::<P>(&mut w);
+            write_exec::<P>(p, &mut w);
         }
         if q.iommu {
             w.text("iommu");
@@ -602,8 +602,8 @@ fn write_index(
 ///
 /// El kernel ofrece los dos y no elige: elegir es del agente (P6). Lo que si
 /// hace es **publicar el acuerdo**, para que no lo tenga horneado (P4).
-fn write_exec<P: Platform>(w: &mut Writer<'_>) {
-    w.map(6);
+fn write_exec<P: Platform>(p: &mut P, w: &mut Writer<'_>) {
+    w.map(7);
 
     w.text("modes");
     w.array(2);
@@ -646,6 +646,12 @@ fn write_exec<P: Platform>(w: &mut Writer<'_>) {
     // apostar un nucleo a que el codigo termine (D29).
     w.text("cancel");
     w.text(if P::CAN_STOP_CORES { "even-if-masked" } else { "only-if-unmasked" });
+
+    // Y si se puede declarar un plazo. Depende de que la maquina diga a que
+    // ritmo sube su contador: sin eso, "cien milisegundos" no se puede traducir
+    // a nada que el silicio entienda (deuda 17).
+    w.text("deadline");
+    w.bool(p.deadline_ready());
 }
 
 /// El mapa de memoria: un arreglo de `[inicio, bytes, clase]`.
@@ -847,6 +853,14 @@ struct Args<'a> {
     /// no lo adivina —no sabe que hay del otro lado (D4)— y por omision no
     /// cambia nada: uno.
     width: Option<u64>,
+    /// Cuanto puede tardar el codigo antes de que se lo corte, en milisegundos.
+    ///
+    /// **Lo declara el agente**, igual que `mode`: el kernel no tiene una
+    /// opinion sobre cuanto puede tardar su codigo, y poner un plazo por
+    /// omision seria justo eso. Sin plazo, un `exec` que no vuelve no vuelve —
+    /// y en el nucleo del protocolo eso deja la maquina escuchando sin
+    /// contestar.
+    deadline_ms: Option<u64>,
     /// Si `exec {core}` espera la respuesta o vuelve enseguida (deuda 13).
     ///
     /// Este **si** tiene valor por omision, a diferencia de `mode`, y la
@@ -882,6 +896,7 @@ fn read_args<'a>(r: &mut Reader<'a>) -> Option<Args<'a>> {
         core: None,
         regs: None,
         width: None,
+        deadline_ms: None,
         wait: None,
         device: None,
         data: None,
@@ -913,6 +928,7 @@ fn read_args<'a>(r: &mut Reader<'a>) -> Option<Args<'a>> {
             "core" => a.core = Some(r.uint()?),
             "regs" => a.regs = Some(r.raw()?),
             "width" => a.width = Some(r.uint()?),
+            "deadline_ms" => a.deadline_ms = Some(r.uint()?),
             "wait" => a.wait = Some(r.bool()?),
             "device" => a.device = Some(r.uint()?),
             _ => r.skip()?,
@@ -1389,9 +1405,23 @@ fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
         // mientras corre, asi un `exec` largo no deja al cordon sin atender. El
         // bucle vuelve a apagarlos al salir porque su diseno depende de eso.
         None => {
+            // El plazo que declaro el agente, si declaro uno. Se traduce a
+            // pasos del contador aca —donde se sabe a que ritmo sube— y el
+            // reloj de este nucleo avisa cuando llega.
+            let until = a
+                .deadline_ms
+                .and_then(|ms| p.clock().map(|c| p.ticks().wrapping_add(c.ticks_for_ms(ms))));
+            // SAFETY: la captura de excepciones esta puesta desde el arranque.
+            unsafe { p.set_deadline(until) };
+
             p.set_interrupts(true);
             let o = unsafe { p.exec(entry, (c.start, c.bytes), supervised, &initial) };
             p.set_interrupts(false);
+
+            // Y desarmarlo: un plazo que sobreviva al `exec` avisaria en el
+            // medio del bucle del protocolo, donde no hay nada que cortar.
+            // SAFETY: idem.
+            unsafe { p.set_deadline(None) };
             o
         }
     };

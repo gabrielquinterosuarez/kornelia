@@ -68,6 +68,15 @@ const SGI_MAILBOX: u32 = 8;
 /// que esta durmiendo esperando trabajo.
 const SGI_WAKE: u32 = 9;
 
+/// El aviso del reloj de este nucleo, que es lo que hace cumplir el plazo que el
+/// agente declara en `exec`.
+///
+/// En aarch64 no hay que programar ningun aparato aparte: el contador generico
+/// **ya trae comparador**, y avisa por una interrupcion privada de cada nucleo.
+/// La numeracion las pone despues de los dieciseis SGI, y el temporizador fisico
+/// no seguro es la catorce: 16 + 14.
+const PPI_TIMER: u32 = 30;
+
 /// La prioridad del buzon: **mas baja que la del cable** (numero mas grande).
 /// Por mas que el agente inunde de llamadas, el cordon pasa primero (D17, P6).
 const MAILBOX_PRIORITY: u8 = 0x80;
@@ -166,6 +175,12 @@ pub unsafe fn dispatch() {
                 // otro nucleo no se puede desviar la ejecucion de este — solo
                 // pedirle que se desvie solo.
             cancel_if_asked();
+        } else if id == PPI_TIMER {
+                // Vencio el plazo que el agente declaro para su codigo. Se corta
+                // con el mismo desvio que un fault: es la unica forma de
+                // recuperar el nucleo que atiende el protocolo, porque el que
+                // tendria que mirar el reloj es justamente el que se colgo.
+            deadline_expired();
         } else if id == SGI_MAILBOX {
                 // Solo despierta. El trabajo lo hace el bucle.
             kernel_core::channel::rang();
@@ -241,6 +256,18 @@ pub unsafe fn prepare_worker() -> Result<(), &'static str> {
 /// 23-16, no un numero. En la placa `virt` de QEMU el numero de cada nucleo es
 /// su posicion, asi que el bit que le toca es `1 << id`; en una maquina con
 /// varios grupos de nucleos el MPIDR se parte en niveles y esto no alcanzaria.
+/// Vencio el plazo declarado: corta lo que este corriendo en este nucleo.
+fn deadline_expired() {
+    // Desarmarlo primero, o vuelve a avisar en cuanto se habiliten los timbres.
+    // SAFETY: es el reloj de este nucleo.
+    unsafe { set_deadline(None) };
+    if crate::percpu::armed() == 0 {
+        return;
+    }
+    kernel_core::work::mark_cancelled(crate::percpu::slot());
+    divert();
+}
+
 /// Desvia el `eret` al punto de recuperacion, si alguien pidio cortar.
 ///
 /// En aarch64 no hace falta el marco de la excepcion: a donde vuelve lo dicen
@@ -255,6 +282,15 @@ fn cancel_if_asked() {
     if crate::percpu::armed() == 0 || !kernel_core::work::take_cancel(slot) {
         return;
     }
+    divert();
+}
+
+/// Le cambia el destino al `eret`: en vez de volver al codigo del agente, vuelve
+/// al punto de recuperacion de `exec`.
+///
+/// En aarch64 no hace falta el marco de la excepcion: a donde vuelve lo dicen
+/// `ELR_EL1` y `SPSR_EL1`, que son registros del sistema y se escriben directo.
+fn divert() {
     let target = crate::percpu::return_point();
     unsafe {
         let mut spsr: u64;
@@ -285,6 +321,50 @@ fn cancel_if_asked() {
 /// Asi que devuelve `false` y el kernel lo informa, en vez de prometer un corte
 /// que no va a llegar (P4). Es la misma clase de asimetria que `irq.install_raw`,
 /// que solo existe en x86_64 y tambien se dice.
+/// Instala el aviso de plazo. En aarch64 alcanza con habilitar su interrupcion:
+/// el comparador es parte del contador que ya se lee (deuda 17).
+///
+/// # Safety
+///
+/// Despues de que la tabla de vectores y el GIC esten puestos.
+/// Si el aviso de plazo quedo instalado. Lo consulta `describe`.
+static mut DEADLINE_READY: bool = false;
+
+pub fn deadline_ready() -> bool {
+    unsafe { DEADLINE_READY }
+}
+
+pub unsafe fn install_deadline() -> Result<(), &'static str> {
+    if GICD == 0 {
+        return Err("no hay GIC");
+    }
+    // Los PPI son por nucleo, asi que habilitarla aca la habilita para este.
+    write_byte(GICD, GICD_IPRIORITYR + PPI_TIMER as u64, MAILBOX_PRIORITY);
+    write_reg(GICD, GICD_ISENABLER, 1 << PPI_TIMER);
+    DEADLINE_READY = true;
+    Ok(())
+}
+
+/// Programa el aviso para ese valor del contador, o lo desarma con `None`.
+///
+/// # Safety
+///
+/// `install_deadline` tiene que haber andado.
+pub unsafe fn set_deadline(at: Option<u64>) {
+    match at {
+        Some(when) => {
+            // El comparador es absoluto: se le da el instante, no una duracion.
+            core::arch::asm!("msr cntp_cval_el0, {}", in(reg) when,
+                             options(nomem, nostack));
+            // Bit 0: andando. Bit 1 en cero: sin enmascarar, o avisaria a nadie.
+            core::arch::asm!("msr cntp_ctl_el0, {}", in(reg) 1u64,
+                             options(nomem, nostack));
+        }
+        None => core::arch::asm!("msr cntp_ctl_el0, {}", in(reg) 0u64,
+                                 options(nomem, nostack)),
+    }
+}
+
 pub fn stop(_id: u64) -> bool {
     false
 }

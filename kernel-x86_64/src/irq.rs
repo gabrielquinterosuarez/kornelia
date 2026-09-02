@@ -59,6 +59,151 @@ const ICR_HIGH: u64 = 0x310;
 
 /// Donde el APIC local dice "ya atendi".
 const EOI: u64 = 0xB0;
+
+/// El registro que configura el reloj local de este nucleo.
+const LVT_TIMER: u64 = 0x320;
+/// Bit 16 del LVT: enmascarada. Se usa para calibrar sin que avise.
+const LVT_MASKED: u32 = 1 << 16;
+/// El vector con el que avisa el plazo.
+const DEADLINE_VECTOR: u8 = 0x42;
+/// Cuenta inicial: el reloj baja desde aca hasta cero y avisa una vez.
+const TMICT: u64 = 0x380;
+/// La cuenta actual, para poder medir cuanto bajo.
+const TMCCT: u64 = 0x390;
+/// El divisor. `0b1011` es dividir por uno: la maxima resolucion que da.
+const TDCR: u64 = 0x3E0;
+const TDCR_BY_ONE: u32 = 0b1011;
+
+/// A que ritmo baja el reloj del APIC, medido contra el TSC.
+///
+/// **Hay que medirlo y no hay a quien preguntarle.** La arquitectura tiene un
+/// modo donde el plazo se compara directo contra el TSC y este numero no hace
+/// falta, pero es **opcional** y este CPU no lo tiene: el bit 24 de
+/// `CPUID.01H:ECX` viene en cero. Se comprobo leyendolo, despues de que un
+/// `asm!` mal declarado hiciera creer lo contrario.
+///
+/// Asi que se usa el modo de cuenta atras, que necesita saber a que ritmo
+/// cuenta. Se mide contra el TSC porque el TSC ya esta calibrado (deuda 17): es
+/// un reloj del que se conoce el ritmo, que es justo lo que hace falta para
+/// averiguar el de otro.
+static mut APIC_HZ: u64 = 0;
+
+/// Si el aviso de plazo quedo instalado. Lo consulta `describe`: un plazo que no
+/// va a llegar es peor que no ofrecerlo (P4).
+static mut DEADLINE_READY: bool = false;
+
+pub fn deadline_ready() -> bool {
+    unsafe { DEADLINE_READY }
+}
+
+/// Instala el aviso de plazo, midiendo el reloj del APIC contra el TSC.
+///
+/// # Safety
+///
+/// Despues de que la IDT y el APIC local esten puestos.
+pub unsafe fn install_deadline(tsc_hz: u64) -> Result<(), &'static str> {
+    if APIC == 0 {
+        return Err("no hay APIC local");
+    }
+    if tsc_hz == 0 {
+        // Sin un reloj del que se sepa el ritmo no hay contra que medir, y sin
+        // medir no se puede traducir "cien milisegundos" a nada.
+        return Err("sin reloj no hay con que traducir un plazo");
+    }
+    crate::idt::set_gate(DEADLINE_VECTOR as usize, irq_deadline_stub as *const () as u64)?;
+
+    // Calibrar con la interrupcion enmascarada: mientras se mide no tiene que
+    // avisar nada.
+    core::ptr::write_volatile((APIC + TDCR) as *mut u32, TDCR_BY_ONE);
+    core::ptr::write_volatile(
+        (APIC + LVT_TIMER) as *mut u32,
+        DEADLINE_VECTOR as u32 | LVT_MASKED,
+    );
+    core::ptr::write_volatile((APIC + TMICT) as *mut u32, u32::MAX);
+
+    // Un milisegundo de TSC alcanza: con el divisor en uno, el reloj del APIC
+    // baja millones de pasos en ese rato.
+    let span = tsc_hz / 1000;
+    let start_tsc = crate::clock::ticks();
+    let start_apic = core::ptr::read_volatile((APIC + TMCCT) as *const u32);
+    while crate::clock::ticks().wrapping_sub(start_tsc) < span {
+        core::hint::spin_loop();
+    }
+    let end_apic = core::ptr::read_volatile((APIC + TMCCT) as *const u32);
+    let elapsed_tsc = crate::clock::ticks().wrapping_sub(start_tsc);
+
+    // Baja, asi que la resta va al reves.
+    let ticked = start_apic.wrapping_sub(end_apic) as u64;
+    if ticked == 0 || elapsed_tsc == 0 {
+        return Err("el reloj del APIC no avanza");
+    }
+    APIC_HZ = ticked.saturating_mul(tsc_hz) / elapsed_tsc;
+    if APIC_HZ == 0 {
+        return Err("no se pudo medir el reloj del APIC");
+    }
+
+    // Y desarmarlo hasta que alguien declare un plazo.
+    core::ptr::write_volatile((APIC + TMICT) as *mut u32, 0);
+    core::ptr::write_volatile((APIC + LVT_TIMER) as *mut u32, DEADLINE_VECTOR as u32);
+    DEADLINE_READY = true;
+    Ok(())
+}
+
+/// Programa el aviso para ese valor del TSC, o lo desarma con `None`.
+///
+/// # Safety
+///
+/// `install_deadline` tiene que haber andado.
+pub unsafe fn set_deadline(at: Option<u64>) {
+    if APIC == 0 || APIC_HZ == 0 {
+        return;
+    }
+    let Some(when) = at else {
+        // Cuenta cero: desarmado.
+        core::ptr::write_volatile((APIC + TMICT) as *mut u32, 0);
+        return;
+    };
+    // El plazo viene en pasos del TSC —el contador que usa el resto del
+    // kernel— y este reloj cuenta a otro ritmo, asi que hay que pasarlo de uno
+    // al otro. Es lo que la medicion del arranque hace posible.
+    let now = crate::clock::ticks();
+    let left = when.saturating_sub(now);
+    let tsc_hz = crate::clock::hz();
+    if left == 0 || tsc_hz == 0 {
+        // Ya vencio: la cuenta mas corta que existe, para que el aviso llegue
+        // igual en vez de no armar nada.
+        core::ptr::write_volatile((APIC + TMICT) as *mut u32, 1);
+        return;
+    }
+    let count = left.saturating_mul(APIC_HZ) / tsc_hz;
+    core::ptr::write_volatile((APIC + TMICT) as *mut u32, count.clamp(1, u32::MAX as u64) as u32);
+}
+
+/// Vencio el plazo que el agente declaro para su codigo.
+///
+/// Corta lo que este corriendo, con el mismo desvio que un fault y que el corte
+/// pedido de afuera. Es la unica forma de recuperar el nucleo que atiende el
+/// protocolo: ahi el codigo del agente corre sin privilegio (D29) asi que las
+/// interrupciones entran, pero el que tendria que mirar el reloj es justamente
+/// el que se colgo.
+#[no_mangle]
+extern "sysv64" fn irq_deadline_rust(frame: *mut Frame) {
+    // SAFETY: el APIC de este nucleo esta donde el identity map lo cubre.
+    unsafe {
+        if APIC != 0 {
+            core::ptr::write_volatile((APIC + EOI) as *mut u32, 0);
+        }
+        // Y desarmarlo, o vuelve a avisar en cuanto se habiliten los timbres.
+        set_deadline(None);
+    }
+
+    if crate::percpu::armed() == 0 {
+        return;
+    }
+    kernel_core::work::mark_cancelled(crate::percpu::slot());
+    // SAFETY: el stub paso el marco que el procesador apilo.
+    unsafe { divert(&mut *frame) };
+}
 /// Registro de interrupcion espuria: su bit 8 prende el APIC local.
 const SVR: u64 = 0xF0;
 
@@ -91,6 +236,41 @@ irq_serial_stub:
     mov rbx, rsp
     and rsp, -16
     call irq_serial_rust
+    mov rsp, rbx
+
+    pop rbx
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rax
+    iretq
+
+.globl irq_deadline_stub
+
+// Lo que corre cuando vence el plazo que el agente declaro. Igual que el del
+// despertador: guarda lo que va a tocar y le pasa al handler el marco, que es lo
+// unico con lo que se puede cambiar a donde vuelve.
+irq_deadline_stub:
+    push rax
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push rbx
+
+    lea rdi, [rsp + 80]
+    mov rbx, rsp
+    and rsp, -16
+    call irq_deadline_rust
     mov rsp, rbx
 
     pop rbx
@@ -183,6 +363,7 @@ extern "sysv64" {
     fn irq_serial_stub();
     fn irq_mailbox_stub();
     fn irq_wake_stub();
+    fn irq_deadline_stub();
 }
 
 /// El marco que el procesador apila al entrar a una interrupcion.
@@ -230,17 +411,26 @@ extern "sysv64" fn irq_wake_rust(frame: *mut Frame) {
 
     // SAFETY: el stub paso el marco que el procesador apilo, que esta en la
     // pila de este nucleo.
-    unsafe {
-        let m = &mut *frame;
-        m.rip = crate::percpu::return_point();
-        // Si el codigo venia de anillo 3, volver ahi con una direccion del
-        // kernel fallaria: hay que volver tambien de anillo. Es lo mismo que
-        // hace el handler de faults, y por el mismo motivo.
-        if m.cs & 3 != 0 {
-            m.cs = crate::gdt::CODE as u64;
-            m.ss = crate::gdt::DATA as u64;
-            m.rsp = crate::percpu::kernel_stack();
-        }
+    unsafe { divert(&mut *frame) };
+}
+
+/// Le cambia el destino al `iretq`: en vez de volver al codigo del agente,
+/// vuelve al punto de recuperacion de `exec`.
+///
+/// Lo usan los dos handlers que sacan a un nucleo de donde estaba —el corte
+/// pedido de afuera y el plazo vencido— y es el mismo desvio que hace el de
+/// faults. Va sobre el marco corto que apila una interrupcion: el de las
+/// excepciones lleva ademas todos los registros que guarda su stub, asi que los
+/// tipos no son el mismo.
+fn divert(m: &mut Frame) {
+    m.rip = crate::percpu::return_point();
+    // Si el codigo venia de anillo 3, volver ahi con una direccion del kernel
+    // fallaria: hay que volver tambien de anillo. Es lo mismo que hace el
+    // handler de faults, y por el mismo motivo.
+    if m.cs & 3 != 0 {
+        m.cs = crate::gdt::CODE as u64;
+        m.ss = crate::gdt::DATA as u64;
+        m.rsp = crate::percpu::kernel_stack();
     }
 }
 

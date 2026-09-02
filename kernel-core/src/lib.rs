@@ -92,6 +92,11 @@ pub fn main<P: Platform>(p: &mut P) -> ! {
         report_bell(p, bell);
     }
 
+    // Y el aviso de plazo, que es lo que hace cumplir `exec {deadline_ms}`.
+    // SAFETY: la captura de excepciones y el controlador ya están puestos.
+    let deadline = unsafe { p.install_deadline() };
+    report_deadline(p, deadline);
+
     // El blob, lo último antes de escuchar el cable (D18). Va acá y no antes
     // porque necesita todo lo de arriba: tablas de páginas para poder tocar
     // memoria, captura de faults para que un blob roto sea un dato y no una
@@ -319,6 +324,23 @@ fn run_blob<P: Platform>(p: &mut P, m: &Machine, with_doorbell: bool) {
         // afuera que corrió de verdad.
         let first = outcome.regs.first().copied().unwrap_or(0);
         let _ = write!(u, "  el blob volvio, dejando {:#x}\r\n", first);
+    }
+}
+
+/// Cuenta si se puede declarar un plazo para el código del agente.
+///
+/// Que no se pueda no es fatal: la máquina anda igual, y un `exec` sin plazo es
+/// lo que había siempre. Pero cambia lo que el kernel puede prometer — sin esto,
+/// un código que no vuelve en el núcleo del protocolo deja la máquina
+/// escuchando sin contestar, y solo se sale reiniciando.
+fn report_deadline<P: Platform>(p: &mut P, r: Result<(), &'static str>) {
+    let mut u = Umbilical::new(p);
+    match r {
+        Ok(()) => u.line("plazo: el agente puede declarar cuanto tarda su codigo"),
+        Err(reason) => {
+            u.line("plazo: NO se puede declarar");
+            u.kv("  motivo", reason);
+        }
     }
 }
 

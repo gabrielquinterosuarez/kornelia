@@ -86,6 +86,16 @@ impl Platform for Fake {
 
     const CAN_STOP_CORES: bool = false;
 
+    unsafe fn set_deadline(&mut self, _at: Option<u64>) {}
+
+    unsafe fn install_deadline(&mut self) -> Result<(), &'static str> {
+        Err("la plataforma de prueba no tiene reloj")
+    }
+
+    fn deadline_ready(&self) -> bool {
+        false
+    }
+
     unsafe fn enable_iommu(
         &mut self,
         _hw: &crate::acpi::Hardware,

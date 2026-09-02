@@ -112,6 +112,13 @@ volver— vuelve como fault estructurado. La pila sale del final del reclamo del
 agente y se vuelve por una ventanilla (`int 0x80` / `svc #0`) cuyos bytes
 publica `describe`, así el agente no los tiene horneados (P4).
 
+**Y el agente declara cuánto puede tardar su código:** `exec {deadline_ms}` lo
+corta si no vuelve, y vuelve como `cancelled`. Eso es lo que salva al núcleo que
+atiende el protocolo — ahí las interrupciones entran (por D29 el agente corre
+sin privilegio), pero el que tendría que mirar el reloj es el que se colgó. El
+plazo lo declara el agente, igual que `mode`: un valor por omisión sería el
+kernel opinando sobre cuánto puede tardar su código.
+
 **Y D29 también se hace cumplir:** en el núcleo que atiende el protocolo `exec`
 solo admite `supervised`. Ahí manda el kernel, y para que eso sea verdad el
 agente no puede *poder* enmascarar las interrupciones. Si quiere el privilegio
@@ -265,6 +272,17 @@ Están acá para no volver a pagarlos:
   **Y para reproducirlo hubo que correr menos, no más:** con la suite entera no
   salía ni en 150 corridas; con solo los tres tests que comparten esos estáticos
   y dieciséis hilos, dos de cada cuatrocientas.
+- **El núcleo que atiende el protocolo no tiene ranura en la tabla de núcleos**,
+  porque no se reclama: su índice es `cores::MAX`, justo el primero que se sale
+  de cualquier arreglo dimensionado por esa constante. Un arreglo así descartaba
+  la marca de "a este lo cortaron" **por índice y sin decir nada**: el corte
+  ocurría, y la respuesta salía con el fault viejo del arranque porque nadie
+  había anotado qué había pasado.
+- **Instrumentar por el cable dentro de un handler cambia el fenómeno.** Escribir
+  una letra desde el handler del reloj movió el timing lo suficiente para que el
+  `exec` dejara de volver. Y las letras salen después del marcador, así que el
+  cliente las come como CBOR. Para algo que depende de tiempos, conviene dejar el
+  dato en un estático y publicarlo por `describe`.
 - **Un camino que ninguna prueba recorre no está andando: está sin probar.**
   Mientras esperaba a un núcleo reclamado, el núcleo del protocolo esperaba
   **con los timbres cerrados**, así que un handler del agente no corría y el
