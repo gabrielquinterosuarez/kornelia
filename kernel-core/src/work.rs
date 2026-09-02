@@ -256,6 +256,17 @@ pub unsafe fn serve<P: Platform>(p: &mut P, slot: usize) -> ! {
     }
 }
 
+/// Vacia el buzon de una ranura.
+///
+/// Se llama al soltar un nucleo: un resultado viejo que sobreviviera al
+/// `release` aparecería en el proximo reclamo como si fuera suyo, y el agente
+/// leeria la respuesta de un trabajo que no mando.
+pub fn forget(slot: usize) {
+    if slot < cores::MAX {
+        STATE[slot].store(EMPTY, Ordering::Release);
+    }
+}
+
 /// Deja todos los buzones vacios. Solo para los tests.
 #[cfg(test)]
 pub fn reset() {

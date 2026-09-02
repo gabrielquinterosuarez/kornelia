@@ -1070,6 +1070,40 @@ def test_on_core(proc, timeout, arch):
             if done["faulted"]:
                 failures.append(f"el trabajo sin esperar fallo: {done['fault']}")
 
+    # 5. Y se puede devolver el nucleo. `core.claim` no tenia inverso: un nucleo
+    #    reclamado quedaba reclamado para siempre, aunque su codigo hubiera
+    #    terminado bien. La prueba es que despues de soltarlo se lo pueda
+    #    **volver a reclamar y usar**, porque soltarlo no lo apaga: sigue
+    #    durmiendo en su buzon.
+    ok, r = ask_verb(71, "release", {"handle": second["handle"]})
+    if not ok:
+        failures.append(f"no se pudo devolver el nucleo: {r}")
+    else:
+        print(f"  devuelto: {r}")
+        ok, again = ask_verb(72, "core.claim", {"id": second["id"]})
+        if not ok:
+            failures.append(f"un nucleo devuelto no se puede reclamar de nuevo: {again}")
+        else:
+            # Handle nuevo: los handles no se reusan nunca (D14).
+            if again["handle"] == second["handle"]:
+                failures.append("le dio el mismo handle a un reclamo nuevo")
+            # Y el buzon tiene que estar limpio: el resultado del trabajo
+            # anterior no puede aparecer como si fuera de este reclamo.
+            ok, d = ask_verb(73, "describe", {"what": ["cores"]})
+            w = next((c["work"] for c in d["cores"] if c["handle"] == again["handle"]), "?")
+            print(f"  reclamado otra vez: handle {again['handle']}, work={w}")
+            if w is not None:
+                failures.append(f"el reclamo nuevo vino con el trabajo del anterior: {w}")
+            # Y sirve: sigue vivo, no hubo que arrancarlo de nuevo.
+            ok, r = ask_verb(74, "exec",
+                             {"handle": h, "mode": "raw", "core": again["handle"]})
+            if not ok or r.get("faulted"):
+                failures.append(f"un nucleo devuelto y reclamado no corre: {r}")
+            elif (r["registers"][register] & mask) != again["id"]:
+                failures.append("corrio en otro nucleo del que se pidio")
+            else:
+                print("  y sigue sirviendo, sin haberlo arrancado de nuevo")
+
     ask_verb(68, "release", {"handle": h})
 
     print()

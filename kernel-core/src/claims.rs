@@ -126,10 +126,6 @@ impl Default for Request {
 
 static mut TABLE: [Option<Claim>; MAX] = [None; MAX];
 
-/// El proximo handle. Solo sube: un handle liberado **no se reusa**, para que
-/// un pedido que llega tarde con un handle viejo de un error y no toque lo que
-/// otro reclamo despues en el mismo lugar.
-static mut NEXT: u64 = 1;
 
 /// Todos los reclamos vigentes.
 pub fn all() -> impl Iterator<Item = Claim> {
@@ -302,11 +298,7 @@ fn record(start: u64, bytes: u64, kind: Kind, caching: Caching) -> Result<Claim,
     let t = unsafe { &mut *core::ptr::addr_of_mut!(TABLE) };
     let gap = t.iter_mut().find(|c| c.is_none()).ok_or(Error::TableFull)?;
 
-    let handle = unsafe {
-        let h = NEXT;
-        NEXT += 1;
-        h
-    };
+    let handle = crate::handles::next();
 
     let c = Claim { handle, start, bytes, kind, caching, user: false };
     *gap = Some(c);
@@ -342,6 +334,6 @@ pub fn range_of(handle: u64, off: u64, len: u64) -> Result<u64, Error> {
 pub fn reset() {
     unsafe {
         *core::ptr::addr_of_mut!(TABLE) = [None; MAX];
-        NEXT = 1;
     }
+    crate::handles::reset();
 }

@@ -1135,6 +1135,36 @@ fn release<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, hw: &Hardware) {
         return reply_error(p, id, "release needs handle");
     };
 
+    // Un handle puede ser de memoria o de un nucleo, y salen del mismo contador
+    // (ver `handles`), asi que no hay ambiguedad: es uno o el otro.
+    //
+    // Soltar un nucleo no lo apaga: sigue vivo y durmiendo en su buzon, y por
+    // eso se lo puede volver a reclamar sin arrancarlo de nuevo. Lo que se
+    // devuelve es el derecho a mandarle trabajo.
+    if let Some(slot) = cores::slot_of(handle) {
+        return match cores::release(handle) {
+            Err(e) => reply_core_failure(p, id, e),
+            Ok(_) => {
+                // Y se vacia el buzon: un resultado viejo que sobreviviera al
+                // `release` aparecería en el proximo reclamo como si fuera suyo.
+                work::forget(slot);
+                let out = unsafe { &mut *core::ptr::addr_of_mut!(OUTBOX) };
+                let mut w = Writer::new(out);
+                w.array(3);
+                w.uint(id);
+                w.bool(true);
+                w.map(2);
+                w.text("released");
+                w.uint(handle);
+                // Que siga vivo es lo que hace que reclamarlo otra vez sea
+                // barato, asi que se dice.
+                w.text("core");
+                w.bool(true);
+                finish_reply(p, id, w);
+            }
+        };
+    }
+
     // Si era alcanzable sin privilegio, se le saca el permiso antes de soltarla:
     // memoria devuelta que sigue marcada seria un agujero silencioso.
     if let Some(c) = claims::get(handle) {
@@ -1579,6 +1609,21 @@ fn core_claim<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, hw: &Hardware
         Err(e) => return reply_core_failure(p, id, e),
         Ok(x) => x,
     };
+
+    // Si ese nucleo ya arranco —porque se reclamo antes y se solto— **no se
+    // vuelve a arrancar**: sigue vivo y durmiendo en su buzon, con sus tablas y
+    // su captura de faults puestas. Arrancarlo otra vez seria resetearlo, y lo
+    // que el agente pidio es usarlo.
+    if cores::has_arrived(slot) {
+        cores::settle(slot, cores::State::Idle);
+        let out = unsafe { &mut *core::ptr::addr_of_mut!(OUTBOX) };
+        let mut w = Writer::new(out);
+        w.array(3);
+        w.uint(id);
+        w.bool(true);
+        write_core::<P>(&mut w, &cores::Core { handle, id: request, state: cores::State::Idle });
+        return finish_reply(p, id, w);
+    }
 
     // SAFETY: las tablas de paginas y la captura de faults ya estan puestas;
     // el nucleo nuevo copia esa configuracion.

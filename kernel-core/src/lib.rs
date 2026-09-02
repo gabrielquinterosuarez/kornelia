@@ -19,6 +19,7 @@ pub mod dma;
 pub mod fault;
 pub mod fdt;
 pub mod handlers;
+pub mod handles;
 pub mod machine;
 pub mod memory;
 pub mod paging;

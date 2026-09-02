@@ -91,6 +91,8 @@ pub enum Error {
     NotSupported,
     /// La maquina no informa como arrancarlos.
     NoMechanism,
+    /// Tiene trabajo en curso. No se suelta con codigo de alguien adentro.
+    Working,
 }
 
 impl Error {
@@ -104,6 +106,7 @@ impl Error {
             Error::NeverArrived => "core-never-arrived",
             Error::NotSupported => "not-supported",
             Error::NoMechanism => "no-start-mechanism",
+            Error::Working => "core-working",
         }
     }
 }
@@ -116,7 +119,6 @@ static ARRIVAL: [AtomicU64; MAX] = [const { AtomicU64::new(0) }; MAX];
 static USED: AtomicUsize = AtomicUsize::new(0);
 
 static mut TABLE: [Option<Core>; MAX] = [None; MAX];
-static mut NEXT: u64 = 1;
 
 /// Lo que un nucleo recien arrancado llama para avisar que llego.
 ///
@@ -135,29 +137,71 @@ pub fn has_arrived(slot: usize) -> bool {
     slot < MAX && ARRIVAL[slot].load(Ordering::Acquire) != 0
 }
 
-/// Reserva una ranura para un nucleo que se va a arrancar.
+/// Reserva una ranura para un nucleo.
 ///
 /// Devuelve el numero de ranura, que es lo que el codigo de arranque le pasa al
 /// nucleo nuevo para que sepa cual es la suya.
+///
+/// **La ranura es del nucleo fisico para siempre**, una vez que arranco: su
+/// bucle duerme esperando trabajo en el buzon de *esa* ranura, asi que un nucleo
+/// que se solto y se vuelve a reclamar tiene que recibir la misma. Lo que si es
+/// nuevo es el handle — esos no se reusan nunca (D14), para que un pedido que
+/// llega tarde con uno viejo de un error en vez de tocar el reclamo de otro.
 pub fn reserve(id: u64) -> Result<(usize, u64), Error> {
-    let slot = USED.load(Ordering::Relaxed);
-    if slot >= MAX {
-        return Err(Error::TableFull);
-    }
+    let n = USED.load(Ordering::Acquire);
+    let t = unsafe { &*core::ptr::addr_of!(TABLE) };
 
-    let handle = unsafe {
-        let h = NEXT;
-        NEXT += 1;
-        h
+    // Si ese nucleo ya arranco alguna vez, su ranura es esa y no otra.
+    let mut slot = (0..n.min(MAX)).find(|&i| ARRIVAL[i].load(Ordering::Acquire) == id.wrapping_add(1));
+
+    if slot.is_none() {
+        // Una libre: primero las que quedaron vacias al soltarlas, y si no, la
+        // siguiente sin usar.
+        slot = (0..n.min(MAX)).find(|&i| t[i].is_none() && ARRIVAL[i].load(Ordering::Acquire) == 0);
+    }
+    let slot = match slot {
+        Some(s) => s,
+        None if n < MAX => n,
+        None => return Err(Error::TableFull),
     };
 
-    ARRIVAL[slot].store(0, Ordering::Release);
+    let handle = crate::handles::next();
+
+    // El estado inicial depende de si hay que arrancarlo o ya esta andando: un
+    // nucleo que vuelve de un `release` no se reinicia, sigue donde estaba.
+    let state = if has_arrived(slot) { State::Idle } else {
+        ARRIVAL[slot].store(0, Ordering::Release);
+        State::Starting
+    };
     unsafe {
-        (&mut *core::ptr::addr_of_mut!(TABLE))[slot] =
-            Some(Core { handle, id, state: State::Starting });
+        (&mut *core::ptr::addr_of_mut!(TABLE))[slot] = Some(Core { handle, id, state });
     }
-    USED.store(slot + 1, Ordering::Release);
+    if slot >= n {
+        USED.store(slot + 1, Ordering::Release);
+    }
     Ok((slot, handle))
+}
+
+/// Devuelve un nucleo reclamado. `true` si el handle era de uno.
+///
+/// **No lo apaga ni lo reinicia**: el nucleo sigue vivo, durmiendo en su buzon,
+/// y por eso se lo puede volver a reclamar sin arrancarlo de nuevo. Lo que se
+/// devuelve es el derecho a mandarle trabajo.
+///
+/// No se suelta uno que tenga trabajo **en curso**: mientras su codigo corre, el
+/// nucleo tiene dueno, y entregarselo a otro reclamo seria darle un nucleo con
+/// el codigo de alguien mas adentro.
+pub fn release(handle: u64) -> Result<usize, Error> {
+    let Some(slot) = slot_of(handle) else {
+        return Err(Error::NoSuchCore);
+    };
+    if crate::work::is_busy(slot) {
+        return Err(Error::Working);
+    }
+    unsafe {
+        (&mut *core::ptr::addr_of_mut!(TABLE))[slot] = None;
+    }
+    Ok(slot)
 }
 
 /// Anota como termino el arranque de esa ranura.
@@ -218,6 +262,5 @@ pub fn reset() {
     USED.store(0, Ordering::Release);
     unsafe {
         *core::ptr::addr_of_mut!(TABLE) = [None; MAX];
-        NEXT = 1;
     }
 }
