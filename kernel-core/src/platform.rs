@@ -137,7 +137,32 @@ pub trait Platform {
     /// - **para volver no alcanza un retorno común**: hay que ejecutar
     ///   `EXEC_RETURN`. Un retorno común salta a lo que haya quedado en la pila
     ///   y termina en fault — que se captura como cualquier otro (P5).
-    unsafe fn exec(&mut self, entry: u64, region: (u64, u64), supervised: bool) -> Outcome;
+    /// `initial` es con qué valores arrancan los registros, en el orden de
+    /// `REGISTERS` y con `None` en los que el agente no dijo nada. Los que no
+    /// pidió quedan en cero, salvo el registro por el que se pasa el primer
+    /// argumento: ahí va la dirección de entrada, para que el código pueda
+    /// encontrar sus datos sin depender de dónde lo hayan cargado. Si el agente
+    /// **sí** puso ese registro, gana el agente: es su código (P2).
+    unsafe fn exec(
+        &mut self,
+        entry: u64,
+        region: (u64, u64),
+        supervised: bool,
+        initial: &[Option<u64>],
+    ) -> Outcome;
+
+    /// Qué registros se pueden poner al arrancar un `exec`.
+    ///
+    /// Es un subconjunto de `REGISTERS` y no todos, porque hay tres que no son
+    /// del agente aunque figuren en la lista: dónde empieza a ejecutar lo dice
+    /// `off`, la pila la pone el kernel —y lo publica como `stack`—, y el
+    /// registro de estado no es un valor que se cargue, es consecuencia de
+    /// cómo se entra.
+    ///
+    /// Se publica en `describe` para que el agente no lo descubra chocándose
+    /// (P4), y va acá y no horneado en el protocolo porque los nombres son los
+    /// de esta máquina (D3).
+    const EXEC_INITIAL: &'static [&'static str];
 
     /// Las instrucciones con las que el código `supervised` le devuelve el
     /// control al kernel.

@@ -551,7 +551,7 @@ fn write_index(w: &mut Writer<'_>, m: &Machine, hw: &Hardware, arch: &str) {
 /// El kernel ofrece los dos y no elige: elegir es del agente (P6). Lo que si
 /// hace es **publicar el acuerdo**, para que no lo tenga horneado (P4).
 fn write_exec<P: Platform>(w: &mut Writer<'_>) {
-    w.map(4);
+    w.map(5);
 
     w.text("modes");
     w.array(2);
@@ -577,6 +577,16 @@ fn write_exec<P: Platform>(w: &mut Writer<'_>) {
     // adivinar desde afuera (P4).
     w.text("this_core");
     w.text("supervised");
+
+    // Y que registros se pueden poner al arrancar. No son todos los que hay:
+    // donde empieza a ejecutar lo dice `off`, la pila la pone el kernel, y el
+    // registro de estado es consecuencia de como se entra, no un valor que se
+    // cargue. Se publica en vez de que el agente lo descubra chocandose (P4).
+    w.text("initial");
+    w.array(P::EXEC_INITIAL.len());
+    for name in P::EXEC_INITIAL {
+        w.text(name);
+    }
 }
 
 /// El mapa de memoria: un arreglo de `[inicio, bytes, clase]`.
@@ -766,6 +776,10 @@ struct Args<'a> {
     /// En que nucleo reclamado correr, para `exec`. Es el handle que devolvio
     /// `core.claim`. Sin esto, corre en el nucleo que atiende el protocolo.
     core: Option<u64>,
+    /// Con que valores arrancan los registros, para `exec`. Se guarda **sin
+    /// interpretar**: los nombres son los de esta maquina (D3), y quien sabe
+    /// cuales son es la arquitectura, no el protocolo.
+    regs: Option<&'a [u8]>,
     /// De a cuantos bytes se toca la memoria, para `mem.read` y `mem.write`.
     ///
     /// Existe porque **un registro de dispositivo no es RAM**: muchos solo
@@ -807,6 +821,7 @@ fn read_args<'a>(r: &mut Reader<'a>) -> Option<Args<'a>> {
         interrupt: None,
         mode: None,
         core: None,
+        regs: None,
         width: None,
         wait: None,
         device: None,
@@ -837,6 +852,7 @@ fn read_args<'a>(r: &mut Reader<'a>) -> Option<Args<'a>> {
             "interrupt" => a.interrupt = Some(r.uint()?),
             "mode" => a.mode = Some(r.text()?),
             "core" => a.core = Some(r.uint()?),
+            "regs" => a.regs = Some(r.raw()?),
             "width" => a.width = Some(r.uint()?),
             "wait" => a.wait = Some(r.bool()?),
             "device" => a.device = Some(r.uint()?),
@@ -1171,6 +1187,15 @@ fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
     };
     let off = a.off.unwrap_or(0);
 
+    // Con que valores arrancan los registros. Los nombres son los de esta
+    // maquina, asi que se resuelven contra los que ella publica (D3).
+    let mut initial = [None; MAX_REGISTERS];
+    if let Some(raw) = a.regs {
+        if let Err(e) = read_initial::<P>(raw, &mut initial) {
+            return reply_error(p, id, e);
+        }
+    }
+
     // **En el nucleo del protocolo manda el kernel** (D29). Para que eso sea
     // verdad y no una intencion, el agente no puede *poder* enmascarar las
     // interrupciones ahi — y enmascarar es privilegiado. Asi que en este nucleo
@@ -1218,7 +1243,7 @@ fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
         // nucleo del protocolo no corre nada del agente aca, solo espera — y
         // con tope, asi que el cordon no se pierde si el otro no contesta.
         Some(handle) => {
-            let job = work::Job { entry, region: (c.start, c.bytes), supervised };
+            let job = work::Job { entry, region: (c.start, c.bytes), supervised, initial };
 
             // Sin esperar: se deja el trabajo y se contesta enseguida (deuda
             // 13). El resultado se busca despues con `describe {what:["cores"]}`
@@ -1252,13 +1277,52 @@ fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
         // bucle vuelve a apagarlos al salir porque su diseno depende de eso.
         None => {
             p.set_interrupts(true);
-            let o = unsafe { p.exec(entry, (c.start, c.bytes), supervised) };
+            let o = unsafe { p.exec(entry, (c.start, c.bytes), supervised, &initial) };
             p.set_interrupts(false);
             o
         }
     };
 
     reply_exec(p, id, supervised, a.core, Some(outcome));
+}
+
+/// Lo mas largo que puede ser `REGISTERS`. aarch64 tiene 34; el margen es para
+/// que agregar uno no sea un cambio en dos lugares.
+pub(crate) const MAX_REGISTERS: usize = 40;
+
+/// Resuelve `{nombre: valor}` contra los registros que informa esta maquina.
+///
+/// Un nombre que no existe **se rechaza** en vez de ignorarse: el agente pidio
+/// algo concreto, y correr su codigo con un registro sin poner seria hacer algo
+/// distinto de lo que pidio sin decirselo. Lo mismo con uno que existe pero no
+/// se puede poner — la lista de cuales se pueden la publica `describe`.
+fn read_initial<P: Platform>(
+    raw: &[u8],
+    out: &mut [Option<u64>; MAX_REGISTERS],
+) -> Result<(), &'static str> {
+    let mut r = Reader::new(raw);
+    let Some(pairs) = r.map() else {
+        return Err("regs must be a map of register name to value");
+    };
+    for _ in 0..pairs {
+        let Some(name) = r.text() else {
+            return Err("register names must be text");
+        };
+        let Some(value) = r.uint() else {
+            return Err("register values must be unsigned integers");
+        };
+        if !P::EXEC_INITIAL.contains(&name) {
+            return Err("that register cannot be set: see describe exec");
+        }
+        let Some(i) = P::REGISTERS.iter().position(|x| *x == name) else {
+            return Err("no such register on this machine");
+        };
+        if i >= MAX_REGISTERS {
+            return Err("register out of range");
+        }
+        out[i] = Some(value);
+    }
+    Ok(())
 }
 
 /// La respuesta de `exec`, igual haya terminado o recien empezado.

@@ -82,7 +82,7 @@ algo que la lista de diez no podía pedir — ver D28.
 | `mem.read(handle, off, len, width)` | Bytes crudos hacia afuera. `width` (1, 2, 4 u 8) es de a cuánto se toca la memoria: un registro de dispositivo puede aceptar solo su ancho exacto. Por omisión, uno. |
 | `mem.write(handle, off, bytes, width)` | Bytes crudos hacia adentro, con el mismo `width`. |
 | `core.claim(id, modo)` | Un núcleo físico. En `dedicated` es solo del agente, con el timer enmascarado. En `shared` es el núcleo que atiende el protocolo: el kernel le pide prestados microsegundos cuando llega un pedido. El núcleo del protocolo **nunca** se entrega como `dedicated`, y el kernel lo dice con los datos para que el agente decida (P4). |
-| `exec(core, handle, off, regs, mode, wait)` | Salta a código máquina. Devuelve estado de registros + fault si lo hubo. `mode` es `supervised` o `raw` y **lo declara el agente** (D27): no tiene valor por omisión, porque elegirlo sería el kernel eligiendo. En el núcleo del protocolo solo se admite `supervised` (D29). Con `core`, `wait:false` contesta enseguida y el resultado queda en `describe {what:["cores"]}`. |
+| `exec(core, handle, off, regs, mode, wait)` | Salta a código máquina. Devuelve estado de registros + fault si lo hubo. `regs` es con qué valores arranca, nombrados como los nombra **esta** máquina (D3); cuáles se pueden poner lo publica `describe`. `mode` es `supervised` o `raw` y **lo declara el agente** (D27): no tiene valor por omisión, porque elegirlo sería el kernel eligiendo. En el núcleo del protocolo solo se admite `supervised` (D29). Con `core`, `wait:false` contesta enseguida y el resultado queda en `describe {what:["cores"]}`. |
 | `irq.install(interrupt, handle, off)` | Instala un handler. El kernel pone prólogo, epílogo y EOI. El argumento es el número con el que **la máquina** identifica la fuente, no una ranura de tabla: eso último es modelo de x86 y no existe igual en ARM (D3). |
 | `irq.install_raw(interrupt, handle, off)` | Igual, pero el agente hace todo. Sin red de contención. **En aarch64 devuelve error**: el GIC entrega el número y el reparto es en software, así que no hay un camino más crudo que el que ya se usa — decirlo es mejor que aceptar el pedido y dar otra cosa (P4). |
 | `dma.allow(device, handle)` | Declara qué memoria puede tocar un dispositivo. Programa el IOMMU. |
@@ -157,7 +157,7 @@ Lo que sí existe:
 | **`listen`** | Andando en las dos. El kernel escucha por el cable y por el buzón, y contesta por donde le llegó (D17). El acuerdo lo publica `describe`. |
 | **`core.claim`** | Andando en las dos. PSCI en aarch64; INIT/SIPI más un trampolín de 16→32→64 bits en x86_64. El núcleo nuevo copia las tablas de páginas y la captura de faults, y avisa por un atómico. |
 | **Trabajo en un núcleo reclamado** | Andando en las dos. `exec {core}` deja el pedido en un buzón por núcleo y el núcleo **duerme** hasta que lo despierta un IPI/SGI. Comprobado con código del agente que informa en qué núcleo corre. El del protocolo espera **con los timbres abiertos**, así un handler del agente corre y el cordón se sigue atendiendo mientras dura el trabajo. **Y se puede no esperar** (`wait:false`): el resultado queda en `describe {what:["cores"]}` hasta que se mande otro trabajo, así que sobrevive a la desconexión (D14). |
-| **`exec`** | Andando en las dos. **El fault vuelve como respuesta, no como muerte** (P5): el handler desvía el regreso al punto de recuperación en vez de detener el núcleo. El agente corre en pila propia y las excepciones en otra, así que ni destruyendo el puntero de pila se lleva la máquina. |
+| **`exec`** | Andando en las dos, con estado inicial de registros y todo. **El fault vuelve como respuesta, no como muerte** (P5): el handler desvía el regreso al punto de recuperación en vez de detener el núcleo. El agente corre en pila propia y las excepciones en otra, así que ni destruyendo el puntero de pila se lleva la máquina. |
 | **Tablas de páginas propias** (D12) | Andando en las dos. Identity map con páginas de 1 GiB; MMIO no cacheable. La raíz se relee del registro y se verifica contra el mapa. |
 | **Timbre del cable serie** | Andando en las dos. El núcleo duerme entre pedidos en vez de preguntarle al UART byte por byte. APIC + IO-APIC en x86_64, GIC en aarch64. Es la misma maquinaria que va a necesitar `irq.install`. |
 | **Captura de faults** (P5, D7) | Andando en las dos. Causa + crudo + dirección + registros. Autotest de breakpoint en cada arranque. Todavía no viaja por CBOR ni vuelve al agente. |
@@ -208,10 +208,23 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
    y después falla: vuelve como fault capturado en las dos. Y comprobado al revés — sacándole
    la IST a x86_64, el mismo programa reinicia la máquina.
 
-6. **`exec` no recibe un estado inicial de registros**, aunque la sección 4 lo especifica. El
-   código recibe en el primer registro de argumento su propia dirección, y nada más. (Lo otro
-   que decía esta deuda —que no se puede elegir núcleo— quedó viejo: `exec` toma `core` desde
-   que existe `core.claim`.)
+6. **~~`exec` no recibe un estado inicial de registros.~~ RESUELTO.** `exec {regs}` toma un mapa
+   de nombre a valor, y los nombres son **los que informa esta máquina** (D3): se resuelven
+   contra `REGISTERS` en vez de estar horneados en el protocolo. Un nombre que no existe se
+   rechaza en vez de ignorarse — correr el código con un registro sin poner sería hacer algo
+   distinto de lo que el agente pidió, sin decírselo.
+
+   No se pueden poner todos, y `describe {what:["exec"]}` publica cuáles sí (P4). Quedan afuera
+   cuatro, cada uno por su motivo: dónde empieza a ejecutar lo dice `off`; la pila la pone el
+   kernel y ya la publicaba como `stack`; el registro de estado no es un valor que se cargue
+   sino consecuencia de cómo se entra —y en `supervised` lleva las interrupciones prendidas a
+   propósito (D29), así que dejarlo escribir sería dar por la ventana lo que D29 niega por la
+   puerta—; y en aarch64 `x30`, que corriendo `raw` es la dirección a la que el código vuelve
+   cuando termina.
+
+   El que no se pide queda en cero, salvo el registro del primer argumento, que sigue llevando
+   la dirección de entrada como antes. Si el agente **sí** lo pone, gana el agente: es su código
+   (P2).
 
 7. **~~Al reportar un fault, dos núcleos que fallan a la vez entrelazan la salida.~~ RESUELTO.**
    El reporte toma un candado. No se corrompía nada —el estado del fault ya era por núcleo—,

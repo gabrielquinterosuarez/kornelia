@@ -81,11 +81,41 @@ exec_trampoline:
     cbnz x1,  exec_supervised
     msr  spsel, #0
 
-    // El codigo recibe en x0 su propia direccion.
-    mov  x9,  x0
-    blr  x9
+    // Los registros que pidio el agente. Se cargan **todos** desde el bloque —el
+    // lado de Rust ya resolvio cual queda en cero y cual lleva la direccion de
+    // entrada— asi que despues de esto no queda ninguno libre, y por eso el
+    // salto sale de x30, que se carga al final con la direccion.
+    //
+    // `sp` no se carga: la pila la pone el kernel y lo publica `describe`.
+    add  x30, x20, #32                // la base de regs
+    ldp  x0,  x1,  [x30, #(0 * 8)]
+    ldp  x2,  x3,  [x30, #(2 * 8)]
+    ldp  x4,  x5,  [x30, #(4 * 8)]
+    ldp  x6,  x7,  [x30, #(6 * 8)]
+    ldp  x8,  x9,  [x30, #(8 * 8)]
+    ldp  x10, x11, [x30, #(10 * 8)]
+    ldp  x12, x13, [x30, #(12 * 8)]
+    ldp  x14, x15, [x30, #(14 * 8)]
+    ldp  x16, x17, [x30, #(16 * 8)]
+    ldp  x18, x19, [x30, #(18 * 8)]
+    ldp  x21, x22, [x30, #(21 * 8)]
+    ldp  x23, x24, [x30, #(23 * 8)]
+    ldp  x25, x26, [x30, #(25 * 8)]
+    ldp  x27, x28, [x30, #(27 * 8)]
+    ldr  x29,      [x30, #(29 * 8)]
+    // x20 lleva el bloque y se necesita hasta el final; x30 es el puntero a
+    // regs. Los dos se cargan ultimos, con la direccion de salto en el medio.
+    ldr  x20,      [x30, #(20 * 8)]
+    mrs  x30, tpidr_el1
+    ldr  x30, [x30, #312]             // entry
+    blr  x30
 
-    // Volvio solo. Se fotografian los registros; nada de esto usa la pila.
+    // Volvio solo. El bloque se relee de tpidr_el1 en vez de confiar en x20:
+    // x20 lo cargo el agente con lo que pidio, y despues de correr su codigo
+    // vale lo que el haya dejado.
+    mrs  x20, tpidr_el1
+
+    // Se fotografian los registros; nada de esto usa la pila.
     add  x10, x20, #32                // donde arranca regs
     stp  x0,  x1,  [x10, #(0 * 8)]
     stp  x2,  x3,  [x10, #(2 * 8)]
@@ -130,7 +160,32 @@ exec_supervised:
     // el punto de todo esto.
     mrs  x9,  daif
     msr  spsr_el1, x9
-    // x0 sigue siendo su propia direccion, igual que en el camino de `raw`.
+
+    // Y los registros que pidio el agente, recien ahora: ELR_EL1 ya tiene la
+    // direccion de entrada, asi que se pueden pisar todos. El `eret` no usa
+    // ninguno — saca de ELR y SPSR, que son registros de sistema.
+    add  x30, x20, #32
+    ldp  x0,  x1,  [x30, #(0 * 8)]
+    ldp  x2,  x3,  [x30, #(2 * 8)]
+    ldp  x4,  x5,  [x30, #(4 * 8)]
+    ldp  x6,  x7,  [x30, #(6 * 8)]
+    ldp  x8,  x9,  [x30, #(8 * 8)]
+    ldp  x10, x11, [x30, #(10 * 8)]
+    ldp  x12, x13, [x30, #(12 * 8)]
+    ldp  x14, x15, [x30, #(14 * 8)]
+    ldp  x16, x17, [x30, #(16 * 8)]
+    ldp  x18, x19, [x30, #(18 * 8)]
+    ldp  x21, x22, [x30, #(21 * 8)]
+    ldp  x23, x24, [x30, #(23 * 8)]
+    ldp  x25, x26, [x30, #(25 * 8)]
+    ldp  x27, x28, [x30, #(27 * 8)]
+    ldr  x29,      [x30, #(29 * 8)]
+    ldr  x20,      [x30, #(20 * 8)]
+    // Y x30 ultimo, que hasta aca era el puntero al bloque del kernel. Se carga
+    // de su ranura —cero, porque no esta entre los que se pueden poner— en vez
+    // de dejarselo: el agente supervisado no puede leer ahi, pero regalarle la
+    // direccion igual no hace falta.
+    ldr  x30,      [x30, #(30 * 8)]
     eret
 
 .globl exec_window
@@ -215,9 +270,45 @@ extern "C" {
 /// # Safety
 ///
 /// `entry` tiene que apuntar a memoria mapeada y ejecutable.
-pub unsafe fn run(entry: u64, region: (u64, u64), supervised: bool) -> Outcome {
+/// Los registros que el agente puede poner al arrancar (D3, P4).
+///
+/// x0 a x29 y nada mas. Quedan afuera `pc` —donde empieza a ejecutar lo dice
+/// `off`—, `sp` —la pila la pone el kernel y lo publica `describe`—, `pstate`
+/// —no es un valor que se cargue sino consecuencia de como se entra, y en
+/// `supervised` lleva las interrupciones prendidas a proposito (D29)— y **x30**,
+/// que corriendo `raw` es la direccion a la que vuelve el codigo cuando termina:
+/// dejar que el agente lo pise seria que no pueda volver.
+pub const INITIAL: &[&str] = &[
+    "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13",
+    "x14", "x15", "x16", "x17", "x18", "x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26",
+    "x27", "x28", "x29",
+];
+
+/// El registro por el que se pasa el primer argumento, como indice dentro de
+/// `REGISTERS`, que es como viene `initial`.
+const FIRST_ARGUMENT: usize = 0; // x0
+
+pub unsafe fn run(
+    entry: u64,
+    region: (u64, u64),
+    supervised: bool,
+    initial: &[Option<u64>],
+) -> Outcome {
     let slot = crate::percpu::slot();
     let block = crate::percpu::block(slot);
+
+    // Los valores con los que arranca. El que no pidio queda en cero, salvo el
+    // primer argumento: ahi va la direccion de entrada, para que el codigo
+    // pueda encontrar sus datos sin depender de donde lo hayan cargado. Si el
+    // agente **si** lo puso, gana el agente: es su codigo (P2).
+    for i in 0..(*block).regs.len() {
+        (*block).regs[i] = match initial.get(i).copied().flatten() {
+            Some(v) => v,
+            None if i == FIRST_ARGUMENT => entry,
+            None => 0,
+        };
+    }
+    (*block).entry = entry;
 
     // De donde sale la pila. En EL0 la del kernel no se puede ni escribir, asi
     // que corriendo supervisado la pila es el final del reclamo del propio

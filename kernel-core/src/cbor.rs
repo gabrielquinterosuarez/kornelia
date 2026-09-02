@@ -346,6 +346,19 @@ impl<'a> Reader<'a> {
         }
     }
 
+    /// El item que viene, **sin interpretar**, y avanza.
+    ///
+    /// Existe para guardar un pedazo del mensaje y leerlo mas tarde, cuando
+    /// quien sabe interpretarlo no es quien esta recorriendo: los registros que
+    /// trae `exec` se nombran con los nombres de **esta** maquina (D3), y el
+    /// que los conoce es el codigo de la arquitectura, no el del protocolo.
+    pub fn raw(&mut self) -> Option<&'a [u8]> {
+        let start = self.pos;
+        let end = scan_one(self.b, self.pos, 0).ok()?;
+        self.pos = end;
+        self.b.get(start..end)
+    }
+
     /// Saltea el item que viene, sea lo que sea.
     ///
     /// Es lo que permite ignorar una clave que este kernel no conoce sin perder

@@ -173,11 +173,19 @@ impl Platform for X86_64 {
         irq::wake(id);
     }
 
-    unsafe fn exec(&mut self, entry: u64, region: (u64, u64), supervised: bool) -> Outcome {
+    const EXEC_INITIAL: &'static [&'static str] = exec::INITIAL;
+
+    unsafe fn exec(
+        &mut self,
+        entry: u64,
+        region: (u64, u64),
+        supervised: bool,
+        initial: &[Option<u64>],
+    ) -> Outcome {
         // x86_64 mantiene coherente la cache de instrucciones con la de datos:
         // codigo recien escrito se ve sin pedir nada. La region hace falta
         // igual: de ahi sale la pila cuando corre supervisado (D27).
-        exec::run(entry, region, supervised)
+        exec::run(entry, region, supervised, initial)
     }
 
     /// `int 0x80`. El agente no tiene que saber que es un `int`: los recibe

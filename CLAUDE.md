@@ -98,10 +98,11 @@ preguntando.
 siendo solo de x86_64 es `irq.install_raw`, porque en aarch64 no hay un camino
 más crudo que el que ya se usa — y la máquina lo dice en vez de callarlo.
 
-El agente sube código máquina, lo corre, y
-si falla **el fault vuelve como respuesta en vez de matar la máquina** (P5) —
-ni siquiera destruyendo el puntero de pila, porque las excepciones entran en una
-pila aparte (IST en x86_64, `SP_EL1` en aarch64).
+El agente sube código máquina, lo corre **con los registros que él pone** —los
+nombra como los nombra esta máquina, y `describe` publica cuáles se pueden
+poner (D3, P4)— y si falla **el fault vuelve como respuesta en vez de matar la
+máquina** (P5): ni siquiera destruyendo el puntero de pila, porque las
+excepciones entran en una pila aparte (IST en x86_64, `SP_EL1` en aarch64).
 
 **D27 está entero:** el agente declara con qué privilegio corre y `exec supervised`
 entra a anillo 3 / EL0. Ahora `cli` —lo único de lo que el kernel no podía
@@ -166,11 +167,18 @@ Corrélo antes de commitear; CI corre exactamente ese script.
 
 **No queda ningún verbo sin hacer, ni nada que ande en una arquitectura y no en la
 otra.** Lo que queda es pagar deudas. Las preguntas abiertas están en
-`docs/DISENO.md` §8; las deudas, en §7 — abiertas la 2, 3, 6, 10 y 11.
+`docs/DISENO.md` §8; las deudas, en §7 — abiertas la 2, 3, 10 y 11, y ninguna
+rompe nada hoy.
 
-1. **`exec` no recibe estado inicial de registros** (deuda 6), aunque la sección 4 lo especifica.
-3. **Un núcleo cuyo código se colgó queda ocupado para siempre** (lo que dejó abierto la deuda
+1. **La máquina se describe a medias en placas sin ACPI**: el PL011 usa su dirección horneada
+   en vez de la que dice la tabla SPCR (deuda 2), y el device tree no se lee (deuda 3). Es lo
+   que más se aleja de P4, y lo único que hoy ataría el kernel a QEMU `virt`.
+2. **Un núcleo cuyo código se colgó queda ocupado para siempre** (lo que dejó abierto la deuda
    13): el agente lo ve —`work` dice `running` y no cambia más— pero no lo puede recuperar.
+3. **Se descartan los atributos de cacheabilidad que informa UEFI** (deuda 11), que son más
+   precisos que deducirlos de la clase de cada región.
+4. **Un test falló una vez y no reprodujo** (deuda 10). No está diagnosticado; queda anotado
+   para no darlo por inexistente si vuelve.
 
 ## Cosas que ya costaron caras
 

@@ -92,12 +92,30 @@ exec_trampoline:
     test rsi, rsi
     jnz exec_supervised
 
-    // El codigo recibe en rdi su propia direccion, para poder encontrar sus
-    // datos sin depender de donde lo hayan cargado.
-    mov rax, rdi
-    // Y corre en su propia pila: si la rompe, la del kernel queda entera.
+    // Corre en su propia pila: si la rompe, la del kernel queda entera.
     mov rsp, gs:[24]
-    call rax
+    // Y con los registros que pidio el agente. Se cargan **todos** desde el
+    // bloque —el de Rust ya resolvio cual queda en cero y cual lleva la
+    // direccion de entrada— asi que despues de esto no queda ninguno libre:
+    // por eso el salto sale del bloque y no de un registro.
+    //
+    // rsp no se carga: la pila la pone el kernel y lo publica `describe`.
+    mov rax, gs:[32]
+    mov rbx, gs:[40]
+    mov rcx, gs:[48]
+    mov rdx, gs:[56]
+    mov rsi, gs:[64]
+    mov rdi, gs:[72]
+    mov rbp, gs:[80]
+    mov r8,  gs:[96]
+    mov r9,  gs:[104]
+    mov r10, gs:[112]
+    mov r11, gs:[120]
+    mov r12, gs:[128]
+    mov r13, gs:[136]
+    mov r14, gs:[144]
+    mov r15, gs:[152]
+    call qword ptr gs:[184]
 
     // Volvio solo. El punto de recuperacion sigue armado mientras se toma la
     // foto: `pushfq` de mas abajo tambien apila, y si la pila del agente quedo
@@ -144,9 +162,25 @@ exec_supervised:
                                        // queda en cero: sin puertos de E/S.
     push 0x1b                          // CS  = codigo de anillo 3
     push rdi                           // la direccion de entrada
-    // Y en rdi, su propia direccion, igual que en `raw`. Lo demas queda como
-    // este: el agente no puede leer memoria del kernel aunque le sobre un
-    // puntero en un registro, porque las tablas de paginas no lo dejan.
+    // El marco ya esta armado, asi que recien ahora se cargan los registros
+    // que pidio el agente: cargarlos antes los habria pisado el `push rdi`.
+    // Los `push` de arriba mueven rsp y memoria, no los registros, asi que el
+    // `iretq` sigue encontrando su marco donde lo dejo.
+    mov rax, gs:[32]
+    mov rbx, gs:[40]
+    mov rcx, gs:[48]
+    mov rdx, gs:[56]
+    mov rsi, gs:[64]
+    mov rdi, gs:[72]
+    mov rbp, gs:[80]
+    mov r8,  gs:[96]
+    mov r9,  gs:[104]
+    mov r10, gs:[112]
+    mov r11, gs:[120]
+    mov r12, gs:[128]
+    mov r13, gs:[136]
+    mov r14, gs:[144]
+    mov r15, gs:[152]
     iretq
 
 .globl exec_window
@@ -235,9 +269,45 @@ const _: () = assert!(crate::gdt::DATA_USER == 0x23);
 /// `entry` tiene que apuntar a memoria mapeada y ejecutable. Corre en el nucleo
 /// que la llama, sobre la pila de agente de ese nucleo — o, si va supervisado,
 /// sobre el final de `region`.
-pub unsafe fn run(entry: u64, region: (u64, u64), supervised: bool) -> Outcome {
+/// Los registros que el agente puede poner al arrancar (D3, P4).
+///
+/// Son los de proposito general y nada mas. `rip` queda afuera porque donde
+/// empieza a ejecutar lo dice `off`; `rsp` porque la pila la pone el kernel y
+/// lo publica `describe`; y `rflags` porque no es un valor que se cargue sino
+/// consecuencia de como se entra — en `supervised` lleva las interrupciones
+/// prendidas a proposito (D29), y dejar que el agente lo pisara seria darle por
+/// la ventana lo que D29 le niega por la puerta.
+pub const INITIAL: &[&str] = &[
+    "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "r8", "r9", "r10", "r11", "r12", "r13",
+    "r14", "r15",
+];
+
+/// El registro por el que se pasa el primer argumento en esta arquitectura.
+///
+/// Su indice dentro de `REGISTERS`, que es como viene `initial`.
+const FIRST_ARGUMENT: usize = 5; // rdi
+
+pub unsafe fn run(
+    entry: u64,
+    region: (u64, u64),
+    supervised: bool,
+    initial: &[Option<u64>],
+) -> Outcome {
     let slot = crate::percpu::slot();
     let block = crate::percpu::block(slot);
+
+    // Los valores con los que arranca. El que no pidio queda en cero, salvo el
+    // primer argumento: ahi va la direccion de entrada, para que el codigo
+    // pueda encontrar sus datos sin depender de donde lo hayan cargado. Si el
+    // agente **si** lo puso, gana el agente: es su codigo (P2).
+    for i in 0..(*block).regs.len() {
+        (*block).regs[i] = match initial.get(i).copied().flatten() {
+            Some(v) => v,
+            None if i == FIRST_ARGUMENT => entry,
+            None => 0,
+        };
+    }
+    (*block).entry = entry;
 
     // De donde sale la pila. Se pone en cada llamada y no una vez al arrancar:
     // es barato, y asi no hay un orden de inicializacion que recordar.

@@ -175,11 +175,19 @@ impl Platform for AArch64 {
         irq::wake(id);
     }
 
-    unsafe fn exec(&mut self, entry: u64, region: (u64, u64), supervised: bool) -> Outcome {
+    const EXEC_INITIAL: &'static [&'static str] = exec::INITIAL;
+
+    unsafe fn exec(
+        &mut self,
+        entry: u64,
+        region: (u64, u64),
+        supervised: bool,
+        initial: &[Option<u64>],
+    ) -> Outcome {
         // En aarch64 las dos caches NO son coherentes: hay que empujar lo
         // escrito hasta donde lo ve el camino de instrucciones.
         exec::sync_cache(region.0, region.1);
-        exec::run(entry, region, supervised)
+        exec::run(entry, region, supervised, initial)
     }
 
     /// `svc #0`. El agente no tiene que saber que es un `svc`: los recibe como

@@ -353,6 +353,44 @@ def test_exec(proc, timeout, arch):
     else:
         print("  la maquina sigue viva despues del fault")
 
+    # Y los registros con los que arranca los pone el agente (deuda 6). Cuales
+    # se pueden poner lo dice la maquina, que es la que sabe como se llaman (D3).
+    ok, d = ask_verb(16, "describe", {"what": ["exec"]})
+    settable = d["exec"]["initial"] if ok else []
+    print(f"  registros que se pueden poner: {len(settable)}, empezando por {settable[:3]}")
+    if not settable:
+        failures.append("el kernel no publica que registros se pueden poner")
+    else:
+        # Un programa que no hace nada: lo unico que se mira es con que valores
+        # arranco. Si el kernel no los cargara, volverian en cero.
+        ok, c = ask_verb(17, "mem.claim", {"bytes": 4096, "align": 4096})
+        h = c["handle"]
+        ret = (0xD65F03C0).to_bytes(4, "little") if arch == "aarch64" else b"\xc3"
+        ask_verb(18, "mem.write", {"handle": h, "bytes": ret})
+        # El segundo y el tercero: el primero lleva por omision la direccion de
+        # entrada, asi que no distinguiria "lo puso el agente" de "lo puso el
+        # kernel".
+        want = {settable[1]: 0xCAFE, settable[2]: 0xD00D}
+        ok, r = ask_verb(19, "exec",
+                         {"handle": h, "mode": "raw", "core": core, "regs": want})
+        if not ok or r.get("faulted"):
+            failures.append(f"no se pudo correr con registros iniciales: {r}")
+        else:
+            got = {k: r["registers"][k] for k in want}
+            print(f"  se pidio {want} y volvio {got}")
+            if got != want:
+                failures.append(f"los registros no arrancaron como se pidio: {got}")
+
+        # Y uno que la maquina no tiene se rechaza en vez de ignorarse: correr
+        # con un registro sin poner seria hacer algo distinto de lo pedido.
+        ok, r = ask_verb(20, "exec",
+                         {"handle": h, "mode": "raw", "core": core, "regs": {"nada": 1}})
+        if ok:
+            failures.append("acepto un registro que esta maquina no tiene")
+        else:
+            print(f"    y un registro que no existe se rechaza: {r}")
+        ask_verb(21, "release", {"handle": h})
+
     print()
     if failures:
         for f in failures:
@@ -1080,7 +1118,6 @@ def test_dma(proc, timeout, arch):
             failures.append("la maquina dejo de contestar despues del acceso rechazado")
         else:
             print("  y despues de eso la maquina sigue contestando")
-        ask_verb(121, "release", {"handle": win["handle"]})
 
     # La memoria donde el aparato va a intentar escribir, con un patron puesto
     # por el CPU: si el DMA llega, lo pisa con ceros.
@@ -1118,10 +1155,18 @@ def test_dma(proc, timeout, arch):
         if not ok or r.get("faulted"):
             failures.append(f"{label}: el codigo que toca el aparato fallo: {r}")
             return None
-        # El DMA no es inmediato: el aparato lo hace por su cuenta. Se le da
-        # tiempo con pedidos que no lo tocan.
-        for _ in range(20):
-            ask_verb(113, "describe", {})
+        # El DMA no es inmediato: el aparato lo hace por su cuenta. Se le
+        # **pregunta a el** si termino —limpia el bit de arranque al terminar—
+        # en vez de darle un rato y esperar que alcance. Antes esto eran veinte
+        # pedidos cualquiera, y funcionaba hasta que la prueba se hizo un poco
+        # mas lenta: una espera medida en "un rato" es una prueba que falla o
+        # pasa por motivos que no tienen que ver con lo que prueba.
+        for _ in range(200):
+            ok, r = ask_verb(113, "mem.read",
+                             {"handle": win["handle"], "off": EDU_DMA_CMD,
+                              "len": 8, "width": 8})
+            if not ok or not int.from_bytes(r["bytes"], "little") & EDU_DMA_START:
+                break
         ok, r = ask_verb(114, "mem.read", {"handle": handle, "off": 0, "len": 8})
         return r["bytes"] if ok else None
 
@@ -1157,6 +1202,7 @@ def test_dma(proc, timeout, arch):
     ok, v = ask_verb(117, "mem.claim", {"at": buf["start"], "bytes": 4096})
     if ok:
         got = try_dma("despues de soltar", v["handle"])
+        ask_verb(121, "release", {"handle": win["handle"]})
         print(f"  y despues de soltarla:          {got.hex() if got else '?'}")
         if got != pattern:
             failures.append("al soltar el reclamo no se le saco el permiso al aparato")

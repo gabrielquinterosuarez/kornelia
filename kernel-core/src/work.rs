@@ -49,6 +49,12 @@ pub struct Job {
     pub region: (u64, u64),
     /// Con que privilegio lo declaro el agente (D27).
     pub supervised: bool,
+    /// Con que valores arrancan los registros, en el orden de `REGISTERS`.
+    ///
+    /// Va copiado y no prestado a proposito: el buzon sobrevive al pedido que
+    /// lo lleno —de eso se trata `wait:false`— asi que apuntar al buffer de
+    /// entrada seria apuntar a algo que el proximo pedido pisa.
+    pub initial: [Option<u64>; crate::protocol::MAX_REGISTERS],
 }
 
 /// Lo que contesto el nucleo que lo corrio.
@@ -63,7 +69,8 @@ struct Answer {
 }
 
 static mut JOBS: [Job; cores::MAX] =
-    [const { Job { entry: 0, region: (0, 0), supervised: false } }; cores::MAX];
+    [const { Job { entry: 0, region: (0, 0), supervised: false,
+        initial: [None; crate::protocol::MAX_REGISTERS] } }; cores::MAX];
 static mut ANSWERS: [Answer; cores::MAX] =
     [const { Answer { faulted: false, regs: &[], fault: None } }; cores::MAX];
 
@@ -235,7 +242,7 @@ pub unsafe fn serve<P: Platform>(p: &mut P, slot: usize) -> ! {
             // (D29). El precio tambien es suyo: un nucleo que se queda sordo no
             // recibe el proximo trabajo.
             p.set_interrupts(true);
-            let outcome = p.exec(job.entry, job.region, job.supervised);
+            let outcome = p.exec(job.entry, job.region, job.supervised, &job.initial);
 
             (*core::ptr::addr_of_mut!(ANSWERS))[slot] =
                 Answer { faulted: outcome.faulted, regs: outcome.regs, fault: outcome.fault };

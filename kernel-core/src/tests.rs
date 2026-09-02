@@ -101,9 +101,12 @@ impl Platform for Fake {
         _entry: u64,
         _region: (u64, u64),
         _supervised: bool,
+        _initial: &[Option<u64>],
     ) -> crate::fault::Outcome {
         crate::fault::Outcome { faulted: false, regs: &[], fault: None }
     }
+
+    const EXEC_INITIAL: &'static [&'static str] = &["r0", "r1"];
 
     /// Una maquina de mentira devuelve bytes de mentira: lo que importa es que
     /// `describe` los publique, no que sean ejecutables.
@@ -1167,7 +1170,8 @@ fn with_clean_cores<T>(f: impl FnOnce() -> T) -> T {
 fn work_for_a_core_that_does_not_exist_is_refused() {
     with_clean_cores(|| {
         crate::work::reset();
-        let job = crate::work::Job { entry: 0x1000, region: (0x1000, 0x1000), supervised: false };
+        let job = crate::work::Job { entry: 0x1000, region: (0x1000, 0x1000), supervised: false,
+            initial: [None; crate::protocol::MAX_REGISTERS] };
         // SAFETY: no llega a correr nada — el handle no es de nadie.
         let e = unsafe { crate::work::run_on(&mut Fake::new(), 999, job) };
         assert_eq!(e.err(), Some(crate::work::Error::NoSuchCore));
@@ -1181,7 +1185,8 @@ fn a_core_that_has_not_arrived_gets_no_work() {
         // Reservado no es llegado: mandarle trabajo a un nucleo que todavia no
         // avisó seria esperar para siempre una respuesta que nadie va a dar.
         let (_, handle) = cores::reserve(7).unwrap();
-        let job = crate::work::Job { entry: 0x1000, region: (0x1000, 0x1000), supervised: false };
+        let job = crate::work::Job { entry: 0x1000, region: (0x1000, 0x1000), supervised: false,
+            initial: [None; crate::protocol::MAX_REGISTERS] };
         // SAFETY: no llega a correr nada — el nucleo no llego.
         let e = unsafe { crate::work::run_on(&mut Fake::new(), handle, job) };
         assert_eq!(e.err(), Some(crate::work::Error::NotReady));
@@ -1206,7 +1211,8 @@ fn work_sent_without_waiting_is_reported_as_running() {
         crate::work::reset();
         let (slot, handle) = cores::reserve(7).unwrap();
         cores::arrived(slot, 7);
-        let job = crate::work::Job { entry: 0x1000, region: (0x1000, 0x1000), supervised: false };
+        let job = crate::work::Job { entry: 0x1000, region: (0x1000, 0x1000), supervised: false,
+            initial: [None; crate::protocol::MAX_REGISTERS] };
         // SAFETY: nadie corre nada — no hay un nucleo de verdad del otro lado,
         // asi que el pedido se queda en el buzon.
         assert!(unsafe { crate::work::submit(&mut Fake::new(), handle, job) }.is_ok());
@@ -1225,7 +1231,8 @@ fn a_core_already_running_takes_no_more_work() {
         crate::work::reset();
         let (slot, handle) = cores::reserve(7).unwrap();
         cores::arrived(slot, 7);
-        let job = crate::work::Job { entry: 0x1000, region: (0x1000, 0x1000), supervised: false };
+        let job = crate::work::Job { entry: 0x1000, region: (0x1000, 0x1000), supervised: false,
+            initial: [None; crate::protocol::MAX_REGISTERS] };
         // SAFETY: igual que arriba, no llega a correr nada.
         unsafe { crate::work::submit(&mut Fake::new(), handle, job) }.unwrap();
         // No se encola: el agente ya sabe lo que mando, y guardarle un segundo

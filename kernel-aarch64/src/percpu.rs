@@ -46,11 +46,15 @@ pub struct PerCpu {
     pub regs: [u64; 34],
     /// Que ranura es esta.
     pub slot: u64,
+    /// A donde saltar. Va en el bloque y no en un registro porque los registros
+    /// se cargan con lo que pidio el agente justo antes de saltar, asi que no
+    /// queda ninguno libre para llevar la direccion.
+    pub entry: u64,
 }
 
 impl PerCpu {
     const fn new() -> Self {
-        Self { armed: 0, rip: 0, sp: 0, stack: 0, regs: [0; 34], slot: 0 }
+        Self { armed: 0, rip: 0, sp: 0, stack: 0, regs: [0; 34], slot: 0, entry: 0 }
     }
 }
 
@@ -60,6 +64,7 @@ const _: () = assert!(core::mem::offset_of!(PerCpu, sp) == 16);
 const _: () = assert!(core::mem::offset_of!(PerCpu, stack) == 24);
 const _: () = assert!(core::mem::offset_of!(PerCpu, regs) == 32);
 const _: () = assert!(core::mem::offset_of!(PerCpu, slot) == 304);
+const _: () = assert!(core::mem::offset_of!(PerCpu, entry) == 312);
 
 static mut BLOCKS: [PerCpu; SLOTS] = [const { PerCpu::new() }; SLOTS];
 
