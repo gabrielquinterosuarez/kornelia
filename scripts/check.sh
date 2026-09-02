@@ -59,7 +59,7 @@ elif ! command -v python3 >/dev/null; then
 else
     for arch in x86_64 aarch64; do
         step "arranca $arch y contesta el protocolo"
-        output=$(timeout 240 ./scripts/client.py --arch "$arch" --smp 4 --what memory,tables --clock --deadline --recover --memory --exec --cores --mailbox --doorbell --handler --during --permission --supervised --on-core --dma 2>&1 || true)
+        output=$(timeout 240 ./scripts/client.py --arch "$arch" --smp 4 --what memory,tables --clock --msi --deadline --recover --memory --exec --cores --mailbox --doorbell --handler --during --permission --supervised --on-core --dma 2>&1 || true)
 
         # Lo que tiene que haber dicho en el banner de texto.
         for expected in "arquitectura: $arch" "memoria:" "tablas:" \
@@ -160,6 +160,15 @@ else
         # Se exige en las dos, y con el mismo texto: VT-d en x86_64, SMMUv3 en
         # aarch64. Que el kernel diga "todavia no lo programo" dejo de alcanzar
         # el dia que hubo con que programarlo.
+        # Y que un aparato de verdad dispare su interrupcion **escribiendo en
+        # memoria** (MSI), que es como interrumpen los aparatos de hoy. La
+        # prueba no le cree al kernel: el handler del agente deja una marca en
+        # su propia memoria y se comprueba que aparezca.
+        if ! grep -qFe "msi: ok" <<<"$output"; then
+            bad "$arch no deja que un aparato dispare su interrupcion por escritura"
+            printf '%s\n' "$output" | grep -E "FALLA:|marca|eligio" | head -6
+        fi
+
         # Y el plazo que declara el agente (D18 tenia el mismo problema, pero
         # aca es el nucleo del protocolo el que se salva). La prueba no admite
         # interpretacion: se corre un bucle sin salida **sin nucleo**, o sea

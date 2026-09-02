@@ -204,6 +204,16 @@ impl Platform for AArch64 {
         irq::set_deadline(at);
     }
 
+    unsafe fn install_msi(
+        &mut self,
+        hw: &kernel_core::acpi::Hardware,
+        slot: usize,
+        raw: bool,
+    ) -> Result<(u32, kernel_core::channel::Doorbell), kernel_core::handlers::Error> {
+        let _ = hw;
+        irq::install_msi(hw, slot, raw)
+    }
+
     unsafe fn install_deadline(&mut self) -> Result<(), &'static str> {
         irq::install_deadline()
     }

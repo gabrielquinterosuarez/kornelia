@@ -406,6 +406,8 @@ pub unsafe fn install_doorbell() -> Result<kernel_core::channel::Doorbell, &'sta
 
 /// Marcar una interrupcion como pendiente sin que el aparato hable.
 const GICD_ISPENDR: u64 = 0x200;
+/// Como se dispara cada interrupcion: por flanco o por nivel. Dos bits cada una.
+const GICD_ICFGR: u64 = 0xC00;
 
 /// La prioridad de los aparatos del agente: **mas baja que el cable**. Un
 /// aparato que se vuelva loco no puede tapar el cordon (D17, P6).
@@ -416,6 +418,71 @@ const AGENT_PRIORITY: u8 = 0xA0;
 /// # Safety
 ///
 /// `install` tiene que haber corrido antes.
+/// El registro del frame donde se escribe para disparar. Lo fija GICv2m.
+const V2M_SETSPI: u64 = 0x40;
+
+/// Instala un handler para una interrupcion disparada por escritura (MSI).
+///
+/// Aca si hace falta la MADT: en ARM el aparato no le puede escribir al GIC
+/// directamente, hay un *frame* en el medio, y donde esta lo dice la tabla.
+///
+/// # Safety
+///
+/// La entrada del handler tiene que estar en un reclamo vigente.
+pub unsafe fn install_msi(
+    hw: &Hardware,
+    slot: usize,
+    raw: bool,
+) -> Result<(u32, kernel_core::channel::Doorbell), kernel_core::handlers::Error> {
+    use kernel_core::handlers::Error;
+
+    if GICD == 0 {
+        return Err(Error::NoSuchInterrupt);
+    }
+    // Igual que por cable: el reparto lo hace el kernel en software, asi que no
+    // hay un camino mas crudo que este.
+    if raw {
+        return Err(Error::NoRawPath);
+    }
+    let Some(frame) = hw.msi else {
+        return Err(Error::NoSuchInterrupt);
+    };
+    if slot as u32 >= frame.spi_count {
+        return Err(Error::NoSuchInterrupt);
+    }
+    let interrupt = frame.spi_base + slot as u32;
+
+    write_byte(GICD, GICD_IPRIORITYR + interrupt as u64, AGENT_PRIORITY);
+    write_byte(GICD, GICD_ITARGETSR + interrupt as u64, 1);
+
+    // **Por flanco, y esto no es un detalle.** El frame no sostiene una linea:
+    // hace un pulso, la sube y la baja. Por omision el GIC trata una
+    // interrupcion de aparato como sensible a nivel, y con eso el pulso se
+    // pierde si nadie lo tomo en ese instante — el aparato escribe, el silicio
+    // deja pasar la escritura, y la interrupcion no llega nunca. Un MSI es por
+    // definicion un flanco, asi que hay que decirselo.
+    //
+    // Son dos bits por interrupcion; el de arriba en uno es "por flanco".
+    let cfg = GICD_ICFGR + (interrupt as u64 / 16) * 4;
+    let shift = (interrupt % 16) * 2;
+    let current = read_reg(GICD, cfg);
+    write_reg(GICD, cfg, (current & !(0b11 << shift)) | (0b10 << shift));
+
+    write_reg(GICD, GICD_ISENABLER + (interrupt as u64 / 32) * 4, 1 << (interrupt % 32));
+
+    // Lo que el aparato tiene que escribir: el numero, en el registro de
+    // disparo del frame. Es lo mismo que el agente le pone a su aparato y lo
+    // mismo con que puede hacerla sonar a mano.
+    Ok((
+        interrupt,
+        kernel_core::channel::Doorbell {
+            writes: [(frame.base + V2M_SETSPI, interrupt as u64, 4), (0, 0, 0)],
+            count: 1,
+            id: interrupt,
+        },
+    ))
+}
+
 pub unsafe fn install_agent(
     hw: &Hardware,
     interrupt: u32,

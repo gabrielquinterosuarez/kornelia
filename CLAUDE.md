@@ -203,15 +203,17 @@ otra, ni ninguna deuda abierta** (§7 de `docs/DISENO.md` está entera en resuel
 Las preguntas abiertas siguen en §8. Lo que sigue son cosas que ninguna deuda
 cubría todavía:
 
-1. **El segundo escalón para cortar un núcleo falta en aarch64.** En x86_64 está: el NMI corta
+1. **Un aparato PCIe ya puede interrumpir al agente** (`irq.install {msi:true}`): los aparatos
+   de hoy no tienen cable, escriben un dato en una dirección. Lo que **no** está es el camino
+   viejo (INTx), y no es olvido: saber qué cable le toca a un aparato pide interpretar AML, un
+   lenguaje entero adentro de ACPI. MSI lo hace innecesario.
+2. **El segundo escalón para cortar un núcleo falta en aarch64.** En x86_64 está: el NMI corta
    hasta al que hizo `cli`. En ARM sería el FIQ —`msr daifset, #2` no lo tapa— pero para que una
    interrupción llegue como FIQ hay que ponerla en el Grupo 0 del GIC y prender `FIQEn`, y hoy
    *todas* las nuestras son del Grupo 0: prenderlo mandaría por FIQ el cable, el buzón y los
    handlers del agente. Es riesgo alto sobre lo único que sostiene el cordón. Mientras tanto el
    kernel lo publica (`describe exec` trae `cancel`) en vez de prometerlo.
-2. **De la MADT solo se sacan núcleos y el controlador** (lo que quedó de la deuda 3): las rutas
-   de interrupción de los aparatos todavía no, y `irq.install` las va a necesitar para algo más
-   que las interrupciones que ya conoce.
+
 3. **`core.claim` y `exec {core}` siguen esperando en vueltas**, ahora que hay reloj con qué
    medir. Ahí el número solo cambia cuánto se tarda en dar un núcleo por perdido, así que no
    rompe nada — pero un tope en vueltas es un tope que no se puede explicar.
@@ -255,6 +257,13 @@ Están acá para no volver a pagarlos:
   el de salida. Pedir 39 bits donde la máquina tiene 44 no se rechaza: se
   reinterpreta, y las direcciones que pide el aparato se recortan en silencio.
   Un límite que sobra puede ser tan inválido como uno que falta.
+- **Una interrupcion que llega como pulso se pierde si el GIC la trata como
+  nivel.** El frame que convierte una escritura en interrupción (MSI) no sostiene
+  la línea: la sube y la baja. Por omisión el GIC trata las de aparato como
+  sensibles a nivel, así que el pulso se perdía — el aparato escribía, el IOMMU
+  dejaba pasar la escritura, y la interrupción no llegaba nunca. Hay que
+  configurarla **por flanco** en `GICD_ICFGR`. Se encontró separando las dos
+  mitades: hacerla sonar a mano con lo que el kernel publica, sin aparato.
 - **El ancho de un acceso a MMIO no es un detalle, y las dos máquinas no fallan
   igual.** Un registro que solo acepta lecturas de 4 bytes, leído de a uno,
   devuelve ceros en x86_64 —silencioso, se ve como si el aparato no estuviera— y

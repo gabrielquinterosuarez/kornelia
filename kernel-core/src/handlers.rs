@@ -118,6 +118,22 @@ pub fn release_slot(slot: usize) {
 }
 
 /// Anota como se hace sonar esa interrupcion a proposito.
+/// Corrige el numero de la interrupcion de una ranura ya tomada.
+///
+/// Hace falta porque con MSI **el numero lo elige la arquitectura**: la ranura
+/// se toma antes de saberlo, y el reparto la busca por ese numero. Sin esto, un
+/// handler instalado por escritura no lo encontraria nunca nadie.
+pub fn set_interrupt(slot: usize, interrupt: u32) {
+    if slot >= MAX {
+        return;
+    }
+    unsafe {
+        if let Some(h) = &mut (*core::ptr::addr_of_mut!(TABLE))[slot] {
+            h.interrupt = interrupt;
+        }
+    }
+}
+
 pub fn set_trigger(slot: usize, t: crate::channel::Doorbell) {
     if slot >= MAX {
         return;

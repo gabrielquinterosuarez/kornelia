@@ -140,6 +140,26 @@ pub struct Iommu {
     pub address_width: u8,
 }
 
+/// Por donde un aparato dispara una interrupcion **escribiendo en memoria**.
+///
+/// Los aparatos PCIe de hoy no tienen un cable de interrupcion: escriben un dato
+/// en una direccion y el silicio lo convierte en interrupcion (MSI). Eso les
+/// permite tener muchas interrupciones distintas sin cables, y es lo que un
+/// driver moderno usa.
+///
+/// En x86_64 la direccion es la del APIC local y no hace falta ninguna tabla. En
+/// aarch64 hay un aparato en el medio —un *frame* de MSI en GICv2, un ITS en
+/// GICv3— y **donde esta lo dice la MADT**: es lo unico que ella aporta a esto.
+#[derive(Clone, Copy)]
+pub struct MsiFrame {
+    /// Donde se escribe. El registro que dispara esta adentro de este rango.
+    pub base: u64,
+    /// El primer numero de interrupcion que este frame puede disparar.
+    pub spi_base: u32,
+    /// Cuantos puede disparar, a partir de ese.
+    pub spi_count: u32,
+}
+
 /// El contador de frecuencia fija que informa ACPI, para calibrar el otro.
 #[derive(Clone, Copy)]
 pub struct Timer {
@@ -170,6 +190,9 @@ pub struct Hardware {
     pub serial: Option<Serial>,
     /// El IOMMU, si la maquina tiene uno (D8).
     pub iommu: Option<Iommu>,
+    /// Por donde un aparato dispara una interrupcion escribiendo en memoria, en
+    /// las maquinas donde hace falta un aparato en el medio (aarch64).
+    pub msi: Option<MsiFrame>,
     /// Un contador de frecuencia **fija y conocida**, para calibrar el de la
     /// arquitectura (deuda 17).
     ///
@@ -196,6 +219,7 @@ impl Hardware {
             overrides: &[],
             serial: None,
             iommu: None,
+            msi: None,
             timer: None,
             signatures: &[],
         }
@@ -453,6 +477,32 @@ unsafe fn read_madt(
                     if i.cpu_interface == 0 && len >= 40 {
                         i.cpu_interface = u64_at(table, off + 32);
                     }
+                }
+            }
+
+            // 13: el frame por donde un aparato dispara una interrupcion
+            // escribiendo en memoria (MSI). Solo existe del lado ARM: en x86 la
+            // direccion es la del APIC y no hay tabla que leer.
+            13 => {
+                if hw.msi.is_none() && len >= 24 {
+                    let flags = u32_at(table, off + 16);
+                    // El bit 0 dice si la tabla trae el rango de numeros; si no,
+                    // hay que leerlo de los registros del propio frame. Se toma
+                    // el que la tabla informa solo cuando dice tenerlo (P4).
+                    // Los dos son de 16 bits, y el conteo va **antes** que la
+                    // base. Leerlos como de 32 daba un rango imposible: la
+                    // direccion del frame estaba bien y los numeros eran basura,
+                    // que es la forma en que un offset corrido se manifiesta.
+                    let (spi_base, spi_count) = if flags & 1 != 0 {
+                        (u16_at(table, off + 22) as u32, u16_at(table, off + 20) as u32)
+                    } else {
+                        (0, 0)
+                    };
+                    hw.msi = Some(MsiFrame {
+                        base: u64_at(table, off + 8),
+                        spi_base,
+                        spi_count,
+                    });
                 }
             }
 

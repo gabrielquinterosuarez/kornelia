@@ -706,6 +706,173 @@ def core_id_of(ask_verb, handle):
     return 1
 
 
+def test_msi(proc, timeout, arch):
+    """El agente le hace disparar una interrupcion a un aparato de verdad (D4).
+
+    Los aparatos PCIe de hoy no tienen cable de interrupcion: **escriben un dato
+    en una direccion** y el silicio lo convierte en interrupcion. Saber que cable
+    le tocaria al aparato requeriria interpretar AML, un lenguaje entero adentro
+    de ACPI; esto no lo necesita.
+
+    El kernel elige el numero, instala el handler y publica **la escritura que lo
+    dispara**. El agente le pone esa direccion y ese dato al aparato en su
+    registro de MSI, y desde ahi el aparato interrumpe solo.
+
+    La prueba no le cree al kernel: el handler del agente escribe una marca en su
+    propia memoria, y lo que se comprueba es que **la marca aparezca** despues de
+    que el aparato haya hablado.
+    """
+    failures = []
+
+    def ask_verb(n, verb, args):
+        resp, _ = ask(proc, [n, verb, args], timeout)
+        _, ok, load = resp
+        return ok, load
+
+    ok, c = ask_verb(170, "mem.claim", {"bytes": 4096, "align": 4096})
+    if not ok:
+        print(f"  no se pudo reclamar: {c}")
+        return 1
+    h, base = c["handle"], c["start"]
+    flag = base + 2048
+
+    # El handler: escribe una marca en la bandera y vuelve.
+    if arch == "x86_64":
+        handler = b"\x48\xb8" + flag.to_bytes(8, "little") + b"\xc6\x00\x2a\xc3"
+    else:
+        handler = mov_reg_imm64(0, flag) + \
+                  (0x52800541).to_bytes(4, "little") + \
+                  (0x39000001).to_bytes(4, "little") + \
+                  (0xD65F03C0).to_bytes(4, "little")
+    ask_verb(171, "mem.write", {"handle": h, "off": 0, "bytes": handler})
+    ask_verb(172, "mem.write", {"handle": h, "off": 2048, "bytes": b"\x00"})
+
+    # El kernel elige el numero: el agente no tiene como saber cual esta libre.
+    ok, r = ask_verb(173, "irq.install", {"handle": h, "msi": True})
+    if not ok:
+        print(f"  esta maquina no ofrece interrupciones por escritura: {r}")
+        return 0
+    writes = r["trigger"]
+    print(f"  el kernel eligio la interrupcion {r['interrupt']}")
+    print(f"  y se dispara escribiendo: {[(hex(a), hex(v), w) for a, v, w in writes]}")
+    if not writes:
+        failures.append("no publico como dispararla")
+        return 1
+    msi_addr, msi_data, _ = writes[0]
+
+    # Antes del aparato: **hacerla sonar a mano**, con la misma escritura que el
+    # kernel acaba de publicar. Separa las dos mitades — si esto no anda, el
+    # problema es como quedo instalada la interrupcion; si anda y el aparato no
+    # la dispara, el problema es del aparato o de lo que hay entre los dos.
+    core0 = core_for_raw(ask_verb, 193)
+    if core0 is not None:
+        ring = emit_writes(arch, [(msi_addr, msi_data, 4)])
+        ok, rp = ask_verb(194, "mem.claim", {"bytes": 4096, "align": 4096})
+        ask_verb(195, "mem.write", {"handle": rp["handle"], "bytes": ring})
+        ask_verb(196, "exec", {"handle": rp["handle"], "mode": "raw", "core": core0})
+        for _ in range(10):
+            ask_verb(197, "describe", {})
+        ok, m = ask_verb(198, "mem.read", {"handle": h, "off": 2048, "len": 1})
+        by_hand = m["bytes"][0] if ok else 0
+        print(f"  sonandola a mano, la marca queda en: {by_hand:#x}")
+        if by_hand != 0x2A:
+            failures.append("la interrupcion no suena ni escribiendola a mano")
+        # Y se limpia, para que lo que venga despues no herede esta marca.
+        ask_verb(199, "mem.write", {"handle": h, "off": 2048, "bytes": b"\x00"})
+        ask_verb(200, "release", {"handle": rp["handle"]})
+
+    # Y ahora el aparato. Se lo busca en el bus, como haria el agente.
+    ok, d = ask_verb(174, "describe", {"what": ["pcie"]})
+    if not ok or not d["pcie"]:
+        print("  la maquina no informa PCIe")
+        return 0
+    ok, cfg = ask_verb(175, "mem.claim", {"at": d["pcie"]["base"], "bytes": 1 << 20})
+    if not ok:
+        print(f"  no se pudo mirar el bus: {cfg}")
+        return 1
+    slot = None
+    for dev in range(32):
+        off = dev << 15
+        ok, x = ask_verb(176, "mem.read", {"handle": cfg["handle"], "off": off, "len": 4})
+        if ok and int.from_bytes(x["bytes"], "little") == EDU_ID:
+            slot = off
+            break
+    if slot is None:
+        print("  no hay un aparato con MSI en este bus")
+        return 0
+
+    # Su registro de MSI. En el aparato `edu` la capacidad arranca en 0x40:
+    # control en 0x42, direccion en 0x44, dato en 0x4c.
+    ask_verb(177, "mem.write", {"handle": cfg["handle"], "off": slot + 0x44,
+                                "bytes": (msi_addr & 0xFFFFFFFF).to_bytes(4, "little")})
+    ask_verb(178, "mem.write", {"handle": cfg["handle"], "off": slot + 0x48,
+                                "bytes": (msi_addr >> 32).to_bytes(4, "little")})
+    ask_verb(179, "mem.write", {"handle": cfg["handle"], "off": slot + 0x4C,
+                                "bytes": (msi_data & 0xFFFF).to_bytes(2, "little")})
+    # Y habilitarla: bit 0 del control, mas ser maestro del bus.
+    ask_verb(180, "mem.write", {"handle": cfg["handle"], "off": slot + 0x42,
+                                "bytes": (1).to_bytes(2, "little")})
+    ask_verb(181, "mem.write", {"handle": cfg["handle"], "off": slot + 4,
+                                "bytes": bytes([0x06, 0x00])})
+    print("  el aparato quedo configurado para disparar esa interrupcion")
+
+    # El aparato interrumpe cuando termina un DMA. Se le pide uno.
+    ok, r = ask_verb(182, "mem.read", {"handle": cfg["handle"], "off": slot + 0x10, "len": 4})
+    bar = int.from_bytes(r["bytes"], "little") & ~0xF
+    ok, buf = ask_verb(183, "mem.claim", {"bytes": 4096, "align": 4096})
+    ask_verb(184, "dma.allow", {"device": (slot >> 15) << 3, "handle": buf["handle"]})
+    code = emit_writes(arch, [
+        (bar + EDU_DMA_SRC, EDU_INTERNAL, 8),
+        (bar + EDU_DMA_DST, buf["start"], 8),
+        (bar + EDU_DMA_COUNT, 8, 8),
+        # Bit 2: que avise con una interrupcion al terminar.
+        (bar + EDU_DMA_CMD, EDU_DMA_START | EDU_DMA_TO_RAM | 0x4, 8),
+    ])
+    # **En ARM la escritura del MSI tambien es un acceso del aparato**, asi que
+    # el IOMMU la bloquea igual que bloquearia un DMA a memoria no declarada
+    # (D8). Hay que declararla, y el sintoma de no hacerlo no se parece a la
+    # causa: el aparato queda configurado, el DMA llega, y la interrupcion
+    # simplemente no aparece nunca.
+    ok, frame = ask_verb(191, "mem.claim", {"at": msi_addr & ~0xFFF, "bytes": 4096})
+    if ok:
+        ok2, _ = ask_verb(192, "dma.allow",
+                          {"device": (slot >> 15) << 3, "handle": frame["handle"]})
+        print(f"  y se le declara al aparato la pagina por donde interrumpe: {ok2}")
+
+    ok, prog = ask_verb(185, "mem.claim", {"bytes": 4096, "align": 4096})
+    ask_verb(186, "mem.write", {"handle": prog["handle"], "bytes": code})
+    core = core_for_raw(ask_verb, 187)
+    if core is None:
+        print("  no hay un nucleo donde tocar el aparato")
+        return 0
+    ok, r = ask_verb(188, "exec", {"handle": prog["handle"], "mode": "raw", "core": core})
+    if not ok or r.get("faulted"):
+        failures.append(f"el codigo que toca el aparato fallo: {r}")
+
+    # Y darle tiempo a que el aparato hable.
+    for _ in range(30):
+        ask_verb(189, "describe", {})
+    ok, m = ask_verb(190, "mem.read", {"handle": h, "off": 2048, "len": 1})
+    got = m["bytes"][0] if ok else 0
+    print(f"  la marca que deja el handler del agente: {got:#x}")
+    if got != 0x2A:
+        failures.append("el aparato no disparo la interrupcion, o el handler no corrio")
+
+    # Y se devuelve todo lo reclamado. Las pruebas comparten un solo arranque,
+    # asi que una que se queda con el espacio de configuracion deja sin aparato
+    # a la que sigue — y el sintoma aparece en la otra prueba, no en esta.
+    for n, handle in enumerate([cfg["handle"], buf["handle"], prog["handle"], h]):
+        ask_verb(201 + n, "release", {"handle": handle})
+
+    print()
+    if failures:
+        for f in failures:
+            print(f"  FALLA: {f}")
+        return 1
+    print("  msi: ok")
+    return 0
+
+
 def test_deadline(proc, timeout, arch):
     """El agente declara cuanto puede tardar su codigo, y el kernel lo cumple.
 
@@ -1715,7 +1882,13 @@ def test_handler(proc, timeout, arch):
     if not ok or not d.get("handlers"):
         failures.append("el handler no aparece en describe")
         return 1
-    hh = d["handlers"][0]
+    # El de esta prueba, buscado por su numero: puede no ser el unico instalado.
+    # Tomar "el primero de la lista" andaba solo mientras esta fuera la unica
+    # prueba que instala handlers, y dejo de andar apenas hubo otra.
+    hh = next((x for x in d["handlers"] if x["interrupt"] == INT), None)
+    if hh is None:
+        failures.append("el handler no aparece en describe")
+        return 1
     before = hh["served"]
     print(f"  atendida {before} veces hasta ahora")
 
@@ -1741,7 +1914,7 @@ def test_handler(proc, timeout, arch):
         failures.append(f"el codigo que la hace sonar fallo: {r}")
 
     ok, d = ask_verb(60, "describe", {"what": ["handlers"]})
-    after = d["handlers"][0]["served"] if ok and d.get("handlers") else -1
+    after = next((x["served"] for x in d.get("handlers") or [] if x["interrupt"] == INT), -1)
     print(f"  y ahora {after} veces")
     if after <= before:
         failures.append("el kernel nunca llamo al handler del agente")
@@ -1866,6 +2039,8 @@ def main():
                     help="arranca sin ACPI, para que la maquina se describa por device tree")
     ap.add_argument("--write-blob", metavar="RUTA",
                     help="escribe un blob.bin de prueba para esta arquitectura y sale")
+    ap.add_argument("--msi", action="store_true",
+                    help="un aparato dispara su interrupcion escribiendo en memoria")
     ap.add_argument("--deadline", action="store_true",
                     help="el agente declara cuanto puede tardar su codigo")
     ap.add_argument("--recover", action="store_true",
@@ -1949,6 +2124,9 @@ def main():
         # El lazo de memoria va en el mismo arranque: cada booteo de QEMU son
         # quince segundos, y el porton hace esto por arquitectura.
         rc = 0
+        if args.msi:
+            print("\n== un aparato dispara su interrupcion por escritura ==")
+            rc |= test_msi(proc, args.timeout, args.arch)
         if args.deadline:
             print("\n== el agente declara cuanto tarda su codigo ==")
             rc |= test_deadline(proc, args.timeout, args.arch)

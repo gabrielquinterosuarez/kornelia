@@ -88,6 +88,15 @@ impl Platform for Fake {
 
     unsafe fn set_deadline(&mut self, _at: Option<u64>) {}
 
+    unsafe fn install_msi(
+        &mut self,
+        _hw: &acpi::Hardware,
+        _slot: usize,
+        _raw: bool,
+    ) -> Result<(u32, crate::channel::Doorbell), crate::handlers::Error> {
+        Err(crate::handlers::Error::NoSuchInterrupt)
+    }
+
     unsafe fn install_deadline(&mut self) -> Result<(), &'static str> {
         Err("la plataforma de prueba no tiene reloj")
     }

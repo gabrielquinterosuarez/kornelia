@@ -488,6 +488,32 @@ pub trait Platform {
     /// no va a llegar es peor que no ofrecerlo (P4).
     fn deadline_ready(&self) -> bool;
 
+    /// Instala un handler para una interrupcion que el aparato dispara
+    /// **escribiendo en memoria** (MSI), en vez de por un cable.
+    ///
+    /// Los aparatos PCIe de hoy no tienen cable de interrupción: escriben un
+    /// dato en una dirección y el silicio lo convierte en interrupción. Para el
+    /// agente eso es lo que importa, porque saber qué cable le tocaría a su
+    /// aparato requiere interpretar AML — un lenguaje entero adentro de ACPI,
+    /// que este kernel no tiene ni va a tener por esto.
+    ///
+    /// **El número lo elige el kernel**, no el agente: es un recurso de la
+    /// máquina y el agente no tiene cómo saber cuál está libre. Devuelve cuál
+    /// tocó y, sobre todo, **la escritura que lo dispara** — que es lo que el
+    /// agente le va a poner al aparato en su registro de MSI. La misma
+    /// información sirve para las dos cosas: configurarlo y hacerlo sonar a
+    /// mano para probar el handler antes de que el aparato hable.
+    ///
+    /// # Safety
+    ///
+    /// La entrada del handler tiene que estar en un reclamo vigente.
+    unsafe fn install_msi(
+        &mut self,
+        hw: &Hardware,
+        slot: usize,
+        raw: bool,
+    ) -> Result<(u32, Doorbell), handlers::Error>;
+
     /// Instala el aviso de plazo. Va en el arranque, con los otros timbres.
     ///
     /// # Safety

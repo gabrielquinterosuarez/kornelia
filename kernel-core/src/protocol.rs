@@ -335,7 +335,7 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
             match hw.interrupts {
                 None => w.null(),
                 Some(i) => {
-                    w.map(6);
+                    w.map(7);
                     w.text("kind");
                     w.text(i.kind);
                     w.text("address");
@@ -359,6 +359,23 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
                     }
                     // Donde esta el puerto serie y por que interrupcion avisa,
                     // si la maquina lo dice (P4).
+                    // Por donde un aparato dispara una interrupcion
+                    // escribiendo en memoria. En x86_64 no hace falta un
+                    // aparato en el medio, asi que va en nulo.
+                    w.text("msi");
+                    match hw.msi {
+                        None => w.null(),
+                        Some(m) => {
+                            w.map(3);
+                            w.text("base");
+                            w.uint(m.base);
+                            w.text("spi_base");
+                            w.uint(m.spi_base as u64);
+                            w.text("spi_count");
+                            w.uint(m.spi_count as u64);
+                        }
+                    }
+
                     w.text("serial");
                     match hw.serial {
                         None => w.null(),
@@ -861,6 +878,9 @@ struct Args<'a> {
     /// y en el nucleo del protocolo eso deja la maquina escuchando sin
     /// contestar.
     deadline_ms: Option<u64>,
+    /// Que la interrupcion la dispare el aparato **escribiendo en memoria** en
+    /// vez de por un cable, para `irq.install`. El numero lo elige el kernel.
+    msi: Option<bool>,
     /// Si `exec {core}` espera la respuesta o vuelve enseguida (deuda 13).
     ///
     /// Este **si** tiene valor por omision, a diferencia de `mode`, y la
@@ -897,6 +917,7 @@ fn read_args<'a>(r: &mut Reader<'a>) -> Option<Args<'a>> {
         regs: None,
         width: None,
         deadline_ms: None,
+        msi: None,
         wait: None,
         device: None,
         data: None,
@@ -929,6 +950,7 @@ fn read_args<'a>(r: &mut Reader<'a>) -> Option<Args<'a>> {
             "regs" => a.regs = Some(r.raw()?),
             "width" => a.width = Some(r.uint()?),
             "deadline_ms" => a.deadline_ms = Some(r.uint()?),
+            "msi" => a.msi = Some(r.bool()?),
             "wait" => a.wait = Some(r.bool()?),
             "device" => a.device = Some(r.uint()?),
             _ => r.skip()?,
@@ -1885,9 +1907,16 @@ fn irq_install<P: Platform>(
     let Some(a) = read_args(r) else {
         return reply_error(p, id, "malformed arguments");
     };
-    let (Some(handle), Some(interrupt)) = (a.handle, a.interrupt) else {
-        return reply_error(p, id, "irq.install needs handle and interrupt");
+    let Some(handle) = a.handle else {
+        return reply_error(p, id, "irq.install needs handle");
     };
+    // Con `msi`, el numero **lo elige el kernel**: es un recurso de la maquina y
+    // el agente no tiene como saber cual esta libre. Sin `msi`, el agente dice
+    // cual quiere, que es como se pide una interrupcion por cable.
+    let by_write = a.msi.unwrap_or(false);
+    if !by_write && a.interrupt.is_none() {
+        return reply_error(p, id, "irq.install needs interrupt, or msi to let the kernel pick");
+    }
     let off = a.off.unwrap_or(0);
 
     // La entrada tiene que estar adentro de un reclamo vigente. Un byte alcanza:
@@ -1897,33 +1926,58 @@ fn irq_install<P: Platform>(
         Ok(addr) => addr,
     };
 
-    let slot = match handlers::reserve(interrupt as u32, entry, raw) {
+    // Con MSI todavia no se sabe el numero —lo devuelve la arquitectura— asi
+    // que la ranura se toma con cero y se corrige apenas se sepa.
+    let asked = a.interrupt.unwrap_or(0) as u32;
+    let slot = match handlers::reserve(asked, entry, raw) {
         Err(e) => return reply_error(p, id, e.code()),
         Ok(s) => s,
     };
 
     // SAFETY: la entrada esta dentro de un reclamo y el identity map cubre todo.
-    match unsafe { p.install_irq(hw, interrupt as u32, slot, raw) } {
+    let installed = if by_write {
+        unsafe { p.install_msi(hw, slot, raw) }
+    } else {
+        unsafe { p.install_irq(hw, asked, slot, raw) }.map(|d| (asked, d))
+    };
+    match installed {
         Err(e) => {
             // Si la arquitectura no pudo, la ranura se suelta: dejarla tomada
             // haria que el proximo intento diga "ya instalado" por nada.
             handlers::release_slot(slot);
             reply_error(p, id, e.code())
         }
-        Ok(trigger) => {
+        Ok((interrupt, trigger)) => {
+            // Con MSI el numero lo puso la arquitectura, asi que la ranura se
+            // corrige ahora: el reparto la busca por ese numero.
+            handlers::set_interrupt(slot, interrupt);
             handlers::set_trigger(slot, trigger);
+            let interrupt = interrupt as u64;
             let out = unsafe { &mut *core::ptr::addr_of_mut!(OUTBOX) };
             let mut w = Writer::new(out);
             w.array(3);
             w.uint(id);
             w.bool(true);
-            w.map(3);
+            w.map(4);
             w.text("interrupt");
             w.uint(interrupt);
             w.text("entry");
             w.uint(entry);
             w.text("raw");
             w.bool(raw);
+            // Y la escritura que la dispara, aca mismo. Con MSI es lo que el
+            // agente necesita **para configurar su aparato**, asi que hacerlo ir
+            // a buscarla a `describe` seria un viaje de ida y vuelta por un dato
+            // que este pedido acaba de decidir.
+            w.text("trigger");
+            let t = handlers::at(slot).map(|h| h.trigger).unwrap_or_else(channel::Doorbell::blank);
+            w.array(t.count);
+            for (addr, value, width) in &t.writes[..t.count] {
+                w.array(3);
+                w.uint(*addr);
+                w.uint(*value);
+                w.uint(*width as u64);
+            }
             finish_reply(p, id, w);
         }
     }

@@ -725,6 +725,50 @@ extern "sysv64" fn irq_agent_rust(slot: u64) {
 /// # Safety
 ///
 /// `install` tiene que haber corrido antes.
+/// La direccion donde escriben los aparatos para disparar una interrupcion.
+///
+/// En x86_64 no hay un aparato en el medio: se le escribe al APIC local, y cual
+/// es lo dicen los doce bits de arriba mas el numero del nucleo. Por eso aca la
+/// MADT no hace falta para esto — la direccion se arma, no se lee de una tabla.
+const MSI_BASE: u64 = 0xFEE0_0000;
+
+/// Instala un handler para una interrupcion disparada por escritura (MSI).
+///
+/// # Safety
+///
+/// La entrada del handler tiene que estar en un reclamo vigente.
+pub unsafe fn install_msi(
+    slot: usize,
+    raw: bool,
+) -> Result<(u32, kernel_core::channel::Doorbell), kernel_core::handlers::Error> {
+    use kernel_core::handlers::Error;
+
+    if APIC == 0 {
+        return Err(Error::NoSuchInterrupt);
+    }
+    // El mismo vector que usaria por cable: lo que cambia es como llega, no
+    // quien lo atiende.
+    let vector = AGENT_VECTOR + slot as u8;
+    let target = if raw {
+        kernel_core::handlers::at(slot).map(|h| h.entry).ok_or(Error::NoSuchInterrupt)?
+    } else {
+        AGENT_STUBS[slot]
+    };
+    crate::idt::set_gate(vector as usize, target).map_err(|_| Error::NoSuchInterrupt)?;
+
+    // Y **no se toca el IOAPIC**: no hay cable que rutear. El aparato va a
+    // escribir directo, que es todo el punto de MSI.
+    let address = MSI_BASE | ((crate::smp::this_core() as u64) << 12);
+    Ok((
+        vector as u32,
+        kernel_core::channel::Doorbell {
+            writes: [(address, vector as u64, 4), (0, 0, 0)],
+            count: 1,
+            id: vector as u32,
+        },
+    ))
+}
+
 pub unsafe fn install_agent(
     hw: &Hardware,
     interrupt: u32,
