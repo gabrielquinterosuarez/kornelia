@@ -167,4 +167,11 @@ pub struct Outcome {
     pub regs: &'static [u64],
     /// Que paso, si fue un fault.
     pub fault: Option<Fault>,
+    /// Si no termino solo ni por un fault, sino porque **se lo interrumpio**.
+    ///
+    /// Es como se recupera un nucleo cuyo codigo no vuelve: se le manda una
+    /// interrupcion y el handler lo desvia al mismo punto de recuperacion que
+    /// usa un fault. Se distingue del fault a proposito — el codigo no hizo nada
+    /// mal, se lo cortaron, y eso es informacion distinta para el que depura.
+    pub cancelled: bool,
 }

@@ -111,7 +111,7 @@ impl Platform for Fake {
         _supervised: bool,
         _initial: &[Option<u64>],
     ) -> crate::fault::Outcome {
-        crate::fault::Outcome { faulted: false, regs: &[], fault: None }
+        crate::fault::Outcome { faulted: false, cancelled: false, regs: &[], fault: None }
     }
 
     const EXEC_INITIAL: &'static [&'static str] = &["r0", "r1"];

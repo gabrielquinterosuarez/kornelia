@@ -46,6 +46,9 @@ pub enum State {
     Idle,
     /// Se le pidio que arranque y nunca llego.
     Failed,
+    /// Estaba corriendo codigo que no volvio y no se dejo cortar. No se le manda
+    /// mas trabajo: el nucleo esta ahi pero no es usable.
+    Lost,
 }
 
 impl State {
@@ -55,6 +58,7 @@ impl State {
             State::Starting => "starting",
             State::Idle => "idle",
             State::Failed => "failed",
+            State::Lost => "lost",
         }
     }
 }
@@ -93,6 +97,9 @@ pub enum Error {
     NoMechanism,
     /// Tiene trabajo en curso. No se suelta con codigo de alguien adentro.
     Working,
+    /// Se le pidio que corte y no contesto. Queda perdido: su codigo enmascaro
+    /// las interrupciones, y desde afuera no hay como sacarlo de ahi.
+    DidNotStop,
 }
 
 impl Error {
@@ -107,6 +114,7 @@ impl Error {
             Error::NotSupported => "not-supported",
             Error::NoMechanism => "no-start-mechanism",
             Error::Working => "core-working",
+            Error::DidNotStop => "core-did-not-stop",
         }
     }
 }

@@ -1142,6 +1142,20 @@ fn release<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, hw: &Hardware) {
     // eso se lo puede volver a reclamar sin arrancarlo de nuevo. Lo que se
     // devuelve es el derecho a mandarle trabajo.
     if let Some(slot) = cores::slot_of(handle) {
+        // Si tiene trabajo en curso se le pide que corte. Es el unico camino
+        // que hay para recuperar un nucleo cuyo codigo no vuelve: se le manda
+        // una interrupcion y el handler lo desvia al punto de recuperacion de
+        // `exec`, igual que un fault.
+        //
+        // Si no contesta, el `release` **falla y lo dice**. Decir que se
+        // recupero un nucleo que sigue corriendo codigo de otro seria lo peor
+        // de los dos mundos: el agente lo reclamaria de nuevo creyendo que esta
+        // limpio.
+        // SAFETY: la ranura es de un nucleo vivo — tiene un handle vigente.
+        if work::is_busy(slot) && !unsafe { work::cancel(p, slot) } {
+            cores::settle(slot, cores::State::Lost);
+            return reply_core_failure(p, id, cores::Error::DidNotStop);
+        }
         return match cores::release(handle) {
             Err(e) => reply_core_failure(p, id, e),
             Ok(_) => {
@@ -1438,7 +1452,7 @@ fn reply_exec<P: Platform>(
     // del pedido — es su resultado, y va adentro.
     w.bool(true);
 
-    w.map(6);
+    w.map(7);
 
     // Con que privilegio corrio de verdad, y donde. Se devuelven aunque el
     // agente los acabe de mandar: la respuesta tiene que poder leerse sola.
@@ -1458,6 +1472,8 @@ fn reply_exec<P: Platform>(
         None => {
             w.text("faulted");
             w.null();
+            w.text("cancelled");
+            w.null();
             w.text("registers");
             w.null();
             w.text("fault");
@@ -1469,12 +1485,18 @@ fn reply_exec<P: Platform>(
     finish_reply(p, id, w);
 }
 
-/// Lo que dejo un `exec`: si fallo, los registros y el fault.
+/// Lo que dejo un `exec`: si fallo o lo cortaron, los registros y el fault.
 ///
-/// Escribe **tres pares** en el mapa que ya empezo quien llama.
+/// Escribe **cuatro pares** en el mapa que ya empezo quien llama.
 fn write_outcome<P: Platform>(w: &mut Writer<'_>, outcome: &Outcome) {
     w.text("faulted");
     w.bool(outcome.faulted);
+
+    // Si no termino solo ni por un fault, sino porque se lo interrumpio. Va
+    // aparte de `faulted` a proposito: el codigo no hizo nada mal, se lo
+    // cortaron, y para el que depura eso es informacion distinta.
+    w.text("cancelled");
+    w.bool(outcome.cancelled);
 
     // Los registros con los nombres de ESTA maquina (D3).
     w.text("registers");
@@ -1681,7 +1703,7 @@ fn write_core<P: Platform>(w: &mut Writer<'_>, c: &cores::Core) {
             w.text("running");
         }
         Some(work::Progress::Done(o)) => {
-            w.map(4);
+            w.map(5);
             w.text("state");
             w.text("done");
             write_outcome::<P>(w, &o);

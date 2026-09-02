@@ -42,6 +42,54 @@ const ANSWERED: u64 = 3;
 
 static STATE: [AtomicU64; cores::MAX] = [const { AtomicU64::new(EMPTY) }; cores::MAX];
 
+/// Si hay que interrumpir el codigo que corre en esa ranura.
+///
+/// Tres estados y no dos, y el tercero es el que hace que se pueda contar: nadie
+/// pidio nada, se pidio y todavia no se aplico, y **se aplico** — que es lo que
+/// permite distinguir un `exec` cortado de uno que fallo, cuando el handler ya
+/// desvio y quien armo la respuesta pregunta que paso.
+const CANCEL_NONE: u64 = 0;
+const CANCEL_ASKED: u64 = 1;
+const CANCEL_DONE: u64 = 2;
+
+static CANCEL: [AtomicU64; cores::MAX] = [const { AtomicU64::new(CANCEL_NONE) }; cores::MAX];
+
+/// Pide que se interrumpa lo que corre en esa ranura.
+///
+/// Solo deja la marca. Quien la hace efectiva es el handler de la interrupcion
+/// **en el nucleo objetivo**: desde afuera no se puede desviar la ejecucion de
+/// otro nucleo, solo pedirle que se desvie solo.
+pub fn ask_cancel(slot: usize) {
+    if slot < cores::MAX {
+        CANCEL[slot].store(CANCEL_ASKED, Ordering::Release);
+    }
+}
+
+/// Lo llama el handler, en el nucleo objetivo: si habia que cortar, lo anota
+/// como hecho y contesta `true` para que el handler desvie.
+pub fn take_cancel(slot: usize) -> bool {
+    slot < cores::MAX
+        && CANCEL[slot]
+            .compare_exchange(CANCEL_ASKED, CANCEL_DONE, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+}
+
+/// Si el ultimo `exec` de esa ranura termino porque se lo cortaron. Lo consume:
+/// la respuesta se arma una sola vez.
+pub fn was_cancelled(slot: usize) -> bool {
+    slot < cores::MAX
+        && CANCEL[slot]
+            .compare_exchange(CANCEL_DONE, CANCEL_NONE, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+}
+
+/// Deja la ranura sin pedidos de corte pendientes.
+pub fn clear_cancel(slot: usize) {
+    if slot < cores::MAX {
+        CANCEL[slot].store(CANCEL_NONE, Ordering::Release);
+    }
+}
+
 /// Lo que hay que correr. Es lo mismo que recibe `Platform::exec`.
 #[derive(Clone, Copy)]
 pub struct Job {
@@ -61,6 +109,7 @@ pub struct Job {
 #[derive(Clone, Copy)]
 struct Answer {
     faulted: bool,
+    cancelled: bool,
     /// Apuntan a los arreglos por nucleo del que corrio: son `'static` y solo
     /// los escribe el, asi que se pueden leer de este lado despues de la
     /// sincronizacion.
@@ -72,7 +121,7 @@ static mut JOBS: [Job; cores::MAX] =
     [const { Job { entry: 0, region: (0, 0), supervised: false,
         initial: [None; crate::protocol::MAX_REGISTERS] } }; cores::MAX];
 static mut ANSWERS: [Answer; cores::MAX] =
-    [const { Answer { faulted: false, regs: &[], fault: None } }; cores::MAX];
+    [const { Answer { faulted: false, cancelled: false, regs: &[], fault: None } }; cores::MAX];
 
 /// Por que no se pudo mandar trabajo.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -187,7 +236,7 @@ pub enum Progress {
 /// escrita entera — lo garantiza el `Release` del que la escribio.
 fn answer_of(slot: usize) -> Outcome {
     let a = unsafe { (*core::ptr::addr_of!(ANSWERS))[slot] };
-    Outcome { faulted: a.faulted, regs: a.regs, fault: a.fault }
+    Outcome { faulted: a.faulted, regs: a.regs, fault: a.fault, cancelled: a.cancelled }
 }
 
 /// Le manda trabajo a un nucleo reclamado y **espera** la respuesta.
@@ -245,7 +294,12 @@ pub unsafe fn serve<P: Platform>(p: &mut P, slot: usize) -> ! {
             let outcome = p.exec(job.entry, job.region, job.supervised, &job.initial);
 
             (*core::ptr::addr_of_mut!(ANSWERS))[slot] =
-                Answer { faulted: outcome.faulted, regs: outcome.regs, fault: outcome.fault };
+                Answer {
+                    faulted: outcome.faulted,
+                    cancelled: outcome.cancelled,
+                    regs: outcome.regs,
+                    fault: outcome.fault,
+                };
             // `Release`: la respuesta entera tiene que estar escrita antes de
             // que el otro nucleo pueda verla contestada.
             STATE[slot].store(ANSWERED, Ordering::Release);
@@ -254,6 +308,48 @@ pub unsafe fn serve<P: Platform>(p: &mut P, slot: usize) -> ! {
 
         p.sleep();
     }
+}
+
+/// Cuanto se espera a que un nucleo se deje cortar, en milisegundos.
+///
+/// Es el mismo criterio que usa Linux para lo mismo —un segundo para el IPI
+/// normal, diez milisegundos para el que no se puede enmascarar— pero mas corto:
+/// aca el que espera es el nucleo que sostiene el cordon umbilical, y hacerlo
+/// esperar un segundo es dejar al agente sin respuesta todo ese rato.
+pub const CANCEL_MS: u64 = 50;
+
+/// Le pide a un nucleo que corte lo que esta corriendo, y espera.
+///
+/// Devuelve `true` si el nucleo se detuvo. `false` si no contesto — y eso no es
+/// un fallo del kernel: si el codigo del agente enmascaro las interrupciones,
+/// **no hay nada que se pueda hacer desde afuera**, y D29 dice que en su nucleo
+/// eso lo decide el. El precio de haber declarado `raw` es suyo.
+///
+/// # Safety
+///
+/// El nucleo de esa ranura tiene que estar vivo.
+pub unsafe fn cancel<P: Platform>(p: &mut P, slot: usize) -> bool {
+    if !is_busy(slot) {
+        return true;
+    }
+    ask_cancel(slot);
+    p.wake_core(cores::id_of(slot).unwrap_or(0));
+
+    // Con reloj se espera un tiempo; sin reloj, vueltas. Igual que la ventana
+    // del blob: un plazo que no se sabe cuanto dura no es un plazo.
+    let clock = p.clock();
+    let deadline = clock.map(|c| p.ticks().wrapping_add(c.ticks_for_ms(CANCEL_MS)));
+    let mut rounds = 0u64;
+    while is_busy(slot) {
+        match deadline {
+            Some(until) if p.ticks() >= until => return false,
+            None if rounds > 20_000_000 => return false,
+            _ => {}
+        }
+        rounds += 1;
+        core::hint::spin_loop();
+    }
+    true
 }
 
 /// Vacia el buzon de una ranura.

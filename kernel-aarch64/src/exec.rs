@@ -319,22 +319,35 @@ pub unsafe fn run(
         core::ptr::addr_of!(AGENT_STACKS) as u64 + ((slot + 1) * AGENT_STACK_SIZE) as u64
     };
 
-    let had_fault = exec_trampoline(entry, supervised as u64) != 0;
+    // Un pedido de corte que quedo de antes no vale para este trabajo: se
+    // limpia al empezar, o el primer `exec` nuevo se cortaria solo.
+    kernel_core::work::clear_cancel(slot);
 
-    if had_fault {
+    let diverted = exec_trampoline(entry, supervised as u64) != 0;
+
+    let regs = core::slice::from_raw_parts(
+        core::ptr::addr_of!((*block).regs) as *const u64,
+        34,
+    );
+
+    // El desvio es el mismo camino para las dos cosas —un fault y un corte
+    // aterrizan en el mismo punto de recuperacion— asi que hay que preguntar
+    // cual fue. Se pregunta primero por el corte porque es el que tiene una
+    // marca propia: un fault no la deja.
+    if diverted && kernel_core::work::was_cancelled(slot) {
+        Outcome { faulted: false, cancelled: true, regs, fault: None }
+    } else if diverted {
         // El handler ya dejo anotado el fault, con los registros del momento
         // exacto en que fallo — que son mas utiles que los de ahora.
         let f = crate::vectors::last();
-        Outcome { faulted: true, regs: f.map(|f| f.regs).unwrap_or(&[]), fault: f }
-    } else {
         Outcome {
-            faulted: false,
-            regs: core::slice::from_raw_parts(
-                core::ptr::addr_of!((*block).regs) as *const u64,
-                34,
-            ),
-            fault: None,
+            faulted: true,
+            cancelled: false,
+            regs: f.map(|f| f.regs).unwrap_or(&[]),
+            fault: f,
         }
+    } else {
+        Outcome { faulted: false, cancelled: false, regs, fault: None }
     }
 }
 

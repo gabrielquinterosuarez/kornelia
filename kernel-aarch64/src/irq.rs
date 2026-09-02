@@ -160,6 +160,12 @@ pub unsafe fn dispatch() {
         if id == SGI_WAKE {
                 // Despertar es no hacer nada: el trabajo ya estaba en el buzon
                 // antes de que sonara, y quien duerme lo mira al despertarse.
+                //
+                // Pero el mismo timbre sirve para lo contrario: cortar lo que
+                // corre aca. Es el unico momento en que se puede, porque desde
+                // otro nucleo no se puede desviar la ejecucion de este — solo
+                // pedirle que se desvie solo.
+            cancel_if_asked();
         } else if id == SGI_MAILBOX {
                 // Solo despierta. El trabajo lo hace el bucle.
             kernel_core::channel::rang();
@@ -235,6 +241,38 @@ pub unsafe fn prepare_worker() -> Result<(), &'static str> {
 /// 23-16, no un numero. En la placa `virt` de QEMU el numero de cada nucleo es
 /// su posicion, asi que el bit que le toca es `1 << id`; en una maquina con
 /// varios grupos de nucleos el MPIDR se parte en niveles y esto no alcanzaria.
+/// Desvia el `eret` al punto de recuperacion, si alguien pidio cortar.
+///
+/// En aarch64 no hace falta el marco de la excepcion: a donde vuelve lo dicen
+/// `ELR_EL1` y `SPSR_EL1`, que son registros del sistema y se escriben directo.
+/// Es el mismo desvio que hace el handler de faults, y por el mismo motivo — con
+/// eso, un bucle del que el codigo del agente no sale se convierte en una
+/// respuesta (P5).
+fn cancel_if_asked() {
+    let slot = crate::percpu::slot();
+    // Sin `exec` en curso no hay a donde volver, y desviar seria saltar a
+    // basura.
+    if crate::percpu::armed() == 0 || !kernel_core::work::take_cancel(slot) {
+        return;
+    }
+    let target = crate::percpu::return_point();
+    unsafe {
+        let mut spsr: u64;
+        core::arch::asm!("mrs {}, spsr_el1", out(reg) spsr, options(nomem, nostack));
+        // Los cuatro bits de abajo son el modo al que vuelve. Se lleva a
+        // 0b0101 —EL1 con SP_EL1, la pila del kernel— venga de EL0 (el agente
+        // supervisado) o de EL1 sobre SP_EL0, que es como corre el codigo `raw`.
+        spsr = (spsr & !0xF) | 0b0101;
+        core::arch::asm!(
+            "msr spsr_el1, {s}",
+            "msr elr_el1, {t}",
+            s = in(reg) spsr,
+            t = in(reg) target,
+            options(nomem, nostack),
+        );
+    }
+}
+
 pub fn wake(id: u64) {
     // SAFETY: el GIC lo dejo `install`, y el identity map cubre su MMIO.
     unsafe {

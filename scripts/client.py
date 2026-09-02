@@ -576,6 +576,124 @@ def emit_writes(arch, writes, con_ret=True):
     return code + ((0xD65F03C0).to_bytes(4, "little") if con_ret else b"")  # ret
 
 
+def test_recover(proc, timeout, arch):
+    """Un nucleo cuyo codigo no vuelve se puede recuperar (D13, D29).
+
+    Es el caso que dejaba un recurso perdido para siempre: el agente manda un
+    bucle infinito, el nucleo queda ocupado, y `describe` lo muestra corriendo
+    sin cambiar nunca. La prueba no es que el kernel lo diga — es que despues de
+    recuperarlo **el nucleo vuelva a correr codigo**.
+
+    El corte va por el mismo timbre que despierta a los nucleos: desde afuera no
+    se puede desviar la ejecucion de otro nucleo, solo pedirle que se desvie
+    solo. El handler de la interrupcion lo manda al mismo punto de recuperacion
+    que usa un fault.
+    """
+    failures = []
+
+    def ask_verb(n, verb, args):
+        resp, _ = ask(proc, [n, verb, args], timeout)
+        _, ok, load = resp
+        return ok, load
+
+    core = core_for_raw(ask_verb, 140)
+    if core is None:
+        print("  no hay un nucleo donde correr con privilegio")
+        return 0
+
+    ok, c = ask_verb(141, "mem.claim", {"bytes": 4096, "align": 4096})
+    if not ok:
+        print(f"  no se pudo reclamar memoria: {c}")
+        return 1
+    h = c["handle"]
+    ask_verb(142, "mem.write", {"handle": h, "bytes": FOREVER[arch]})
+
+    # Sin esperar: si se esperara, el que se cuelga es el pedido.
+    ok, r = ask_verb(143, "exec",
+                     {"handle": h, "mode": "raw", "core": core, "wait": False})
+    if not ok:
+        print(f"  no se pudo mandar el trabajo: {r}")
+        return 1
+    print(f"  mandado un bucle infinito al nucleo: state={r['state']}")
+
+    ok, d = ask_verb(144, "describe", {"what": ["cores"]})
+    w = next((c2["work"] for c2 in d["cores"] if c2["handle"] == core), None) if ok else None
+    if not w or w["state"] != "running":
+        failures.append(f"el kernel no lo ve corriendo: {w}")
+    else:
+        print("  y describe lo ve corriendo, como tiene que ser")
+
+    # Y ahora recuperarlo. `release` le pide que corte y espera.
+    ok, r = ask_verb(145, "release", {"handle": core})
+    if not ok:
+        # Que falle es un resultado legitimo: si el codigo hubiera enmascarado
+        # las interrupciones no habria forma de sacarlo (D29). Pero este bucle
+        # no enmascara nada, asi que tiene que dejarse cortar.
+        failures.append(f"no se pudo cortar un bucle que no enmascara nada: {r}")
+    else:
+        print(f"  recuperado: {r}")
+        # La prueba de verdad: el nucleo tiene que volver a servir.
+        ok, again = ask_verb(146, "core.claim", {"id": core_id_of(ask_verb, core)})
+        if not ok:
+            failures.append(f"no se pudo reclamar de nuevo: {again}")
+        else:
+            code, register = WHICH_CORE[arch]
+            ask_verb(147, "mem.write", {"handle": h, "bytes": code})
+            ok, r = ask_verb(148, "exec",
+                             {"handle": h, "mode": "raw", "core": again["handle"]})
+            if not ok or r.get("faulted"):
+                failures.append(f"el nucleo recuperado no corre: {r}")
+            else:
+                mask = 0x00FFFFFF if arch == "aarch64" else 0xFFFFFFFF
+                print(f"  y vuelve a correr codigo: {register}="
+                      f"{r['registers'][register] & mask}")
+
+    # Y la otra mitad, que es la que hace que la primera se pueda creer: un
+    # codigo que **si** enmascara no se deja cortar, y ahi el kernel tiene que
+    # fallar y decirlo. Prometer que se recupero un nucleo que sigue corriendo
+    # codigo de otro seria lo peor de los dos mundos.
+    core2 = core_for_raw(ask_verb, 151)
+    if core2 is not None:
+        ask_verb(152, "mem.write", {"handle": h, "bytes": DEAF_FOREVER[arch]})
+        ok, r = ask_verb(153, "exec",
+                         {"handle": h, "mode": "raw", "core": core2, "wait": False})
+        if ok:
+            print("  y ahora uno que se tapa los oidos antes de colgarse")
+            ok, r = ask_verb(154, "release", {"handle": core2})
+            if ok:
+                failures.append("dijo haber recuperado un nucleo que enmascaro")
+            else:
+                print(f"  el kernel no lo pudo cortar, y lo dice: {r}")
+                if r.get("error") != "core-did-not-stop":
+                    failures.append(f"el motivo no es el que corresponde: {r}")
+                # Y queda marcado, para que no se le mande mas trabajo.
+                ok, d = ask_verb(155, "describe", {"what": ["cores"]})
+                st = next((c2["state"] for c2 in d["cores"] if c2["handle"] == core2), "?")
+                print(f"  y queda marcado como: {st}")
+                if st != "lost":
+                    failures.append(f"un nucleo perdido no quedo marcado: {st}")
+
+    ask_verb(149, "release", {"handle": h})
+
+    print()
+    if failures:
+        for f in failures:
+            print(f"  FALLA: {f}")
+        return 1
+    print("  recuperar un nucleo: ok")
+    return 0
+
+
+def core_id_of(ask_verb, handle):
+    """Con que numero nombra la maquina al nucleo de ese handle."""
+    ok, d = ask_verb(150, "describe", {"what": ["cores"]})
+    if ok:
+        for c in d.get("cores") or []:
+            if c["handle"] == handle:
+                return c["id"]
+    return 1
+
+
 def test_clock(proc, timeout):
     """El reloj de la maquina mide tiempo, no vueltas (deuda 17).
 
@@ -943,6 +1061,25 @@ def test_supervised(proc, timeout, arch):
 # Un programa que devuelve el numero con el que la maquina nombra al nucleo en
 # el que esta corriendo. Es lo que convierte "corrio en otro nucleo" de una
 # afirmacion del kernel en algo comprobable desde afuera.
+
+# Un bucle del que no se sale. Es el caso que deja un nucleo perdido: no falla
+# —un fault volveria como dato— sino que **no vuelve**, que es lo que el kernel
+# no puede distinguir de un trabajo largo.
+FOREVER = {
+    "x86_64": bytes([0xEB, 0xFE]),                      # jmp -2
+    "aarch64": (0x14000000).to_bytes(4, "little"),       # b .
+}
+
+# Lo mismo, pero tapandose los oidos primero. Es el caso que **no** se puede
+# recuperar: enmascarar es privilegiado y D29 dice que en su nucleo eso lo decide
+# el agente, incluido no ser molestado. El kernel no puede prometer sacarlo de
+# ahi, y lo que corresponde es decirlo en vez de mentir.
+DEAF_FOREVER = {
+    # cli ; jmp -2
+    "x86_64": bytes([0xFA, 0xEB, 0xFE]),
+    # msr daifset, #0xf ; b .
+    "aarch64": (0xD50342DF).to_bytes(4, "little") + (0x14000000).to_bytes(4, "little"),
+}
 WHICH_CORE = {
     # mov eax, 1 ; cpuid ; shr ebx, 24 ; mov eax, ebx ; ret
     # Hoja 1 de CPUID: los 8 bits de arriba de EBX son el APIC ID, que es el
@@ -1639,6 +1776,8 @@ def main():
                     help="arranca sin ACPI, para que la maquina se describa por device tree")
     ap.add_argument("--write-blob", metavar="RUTA",
                     help="escribe un blob.bin de prueba para esta arquitectura y sale")
+    ap.add_argument("--recover", action="store_true",
+                    help="recupera un nucleo cuyo codigo no vuelve")
     ap.add_argument("--clock", action="store_true",
                     help="comprueba que el reloj de la maquina mida tiempo (deuda 17)")
     ap.add_argument("--cancel-blob", action="store_true",
@@ -1718,6 +1857,9 @@ def main():
         # El lazo de memoria va en el mismo arranque: cada booteo de QEMU son
         # quince segundos, y el porton hace esto por arquitectura.
         rc = 0
+        if args.recover:
+            print("\n== recuperar un nucleo cuyo codigo no vuelve ==")
+            rc |= test_recover(proc, args.timeout, args.arch)
         if args.clock:
             print("\n== el reloj de la maquina mide tiempo (deuda 17) ==")
             rc |= test_clock(proc, args.timeout)

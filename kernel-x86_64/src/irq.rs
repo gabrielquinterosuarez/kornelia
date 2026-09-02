@@ -122,6 +122,11 @@ irq_wake_stub:
     push r11
     push rbx
 
+    // El marco que armo el procesador esta **arriba** de los diez registros que
+    // acabamos de guardar: son 80 bytes. Se le pasa el puntero al handler para
+    // que pueda cambiar a donde vuelve el `iretq` — es la unica forma de sacar a
+    // este nucleo de un bucle del que no sale solo.
+    lea rdi, [rsp + 80]
     mov rbx, rsp
     and rsp, -16
     call irq_wake_rust
@@ -180,16 +185,61 @@ extern "sysv64" {
     fn irq_wake_stub();
 }
 
-/// Avisa que atendio, y nada mas: el despertador no trae informacion, la trae
-/// el buzon de trabajo.
+/// El marco que el procesador apila al entrar a una interrupcion.
+///
+/// Es el mismo que mira el handler de faults. Cambiarlo cambia a donde vuelve
+/// el `iretq`, y eso es lo que permite desviar la ejecucion.
+#[repr(C)]
+struct Frame {
+    rip: u64,
+    cs: u64,
+    rflags: u64,
+    rsp: u64,
+    ss: u64,
+}
+
+/// Atiende el despertador, y **corta el trabajo si se pidio**.
+///
+/// Despertar no trae informacion —la trae el buzon— asi que normalmente esto
+/// solo avisa que atendio. Pero el mismo timbre sirve para lo contrario: si
+/// alguien pidio cortar lo que corre aca, este es el unico momento en que se
+/// puede hacer, porque **desde otro nucleo no se puede desviar la ejecucion de
+/// este**: solo pedirle que se desvie solo.
+///
+/// El desvio es el mismo que usa un fault: se le cambia el destino al `iretq`
+/// para que aterrice en el punto de recuperacion de `exec` en vez de volver al
+/// codigo. Con eso, un bucle del que el codigo del agente no sale se convierte
+/// en una respuesta (P5).
 #[no_mangle]
-extern "sysv64" fn irq_wake_rust() {
+extern "sysv64" fn irq_wake_rust(frame: *mut Frame) {
     // SAFETY: cada nucleo tiene su APIC local en la misma direccion, que el
     // identity map cubre.
     unsafe {
         let apic = APIC;
         if apic != 0 {
             core::ptr::write_volatile((apic + EOI) as *mut u32, 0);
+        }
+    }
+
+    let slot = crate::percpu::slot();
+    // Solo se desvia si hay un `exec` en curso: sin punto de recuperacion no
+    // hay a donde volver, y desviar seria saltar a basura.
+    if crate::percpu::armed() == 0 || !kernel_core::work::take_cancel(slot) {
+        return;
+    }
+
+    // SAFETY: el stub paso el marco que el procesador apilo, que esta en la
+    // pila de este nucleo.
+    unsafe {
+        let m = &mut *frame;
+        m.rip = crate::percpu::return_point();
+        // Si el codigo venia de anillo 3, volver ahi con una direccion del
+        // kernel fallaria: hay que volver tambien de anillo. Es lo mismo que
+        // hace el handler de faults, y por el mismo motivo.
+        if m.cs & 3 != 0 {
+            m.cs = crate::gdt::CODE as u64;
+            m.ss = crate::gdt::DATA as u64;
+            m.rsp = crate::percpu::kernel_stack();
         }
     }
 }

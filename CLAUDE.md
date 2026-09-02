@@ -196,10 +196,11 @@ otra, ni ninguna deuda abierta** (§7 de `docs/DISENO.md` está entera en resuel
 Las preguntas abiertas siguen en §8. Lo que sigue son cosas que ninguna deuda
 cubría todavía:
 
-1. **Un núcleo cuyo código se colgó queda ocupado para siempre** (lo que dejó abierto la deuda
-   13): el agente lo ve —`work` dice `running` y no cambia más— pero no lo puede recuperar.
-   Un bucle infinito no es un fault, y el kernel no tiene cómo distinguirlo de un trabajo largo
-   — que es exactamente la razón por la que `exec` dejó de esperar.
+1. **Falta el segundo escalón para recuperar un núcleo.** Hoy se le manda el timbre normal, y
+   eso alcanza para todo lo que no enmascaró — que es casi todo. Falta lo que hace Linux
+   después: **NMI** en x86_64 (una interrupción que `cli` no puede tapar) y **FIQ** en aarch64
+   (la segunda línea, que `msr daifset, #2` no tapa). Con eso quedaría afuera solo quien
+   enmascare *todo*, y ahí en ARM no hay nada — Linux tampoco puede.
 2. **De la MADT solo se sacan núcleos y el controlador** (lo que quedó de la deuda 3): las rutas
    de interrupción de los aparatos todavía no, y `irq.install` las va a necesitar para algo más
    que las interrupciones que ya conoce.
