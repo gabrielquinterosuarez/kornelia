@@ -928,14 +928,27 @@ fn mem_read<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
             // y se reparte en bytes, porque volver a leer el mismo registro para
             // sacarle el byte siguiente serian varios accesos — y hay registros
             // que cambian de valor con solo mirarlos.
+            //
+            // Y **con red**: la maquina puede rechazar el acceso, y ahi el
+            // fault vuelve como respuesta en vez de dejar el cordon sin nadie
+            // del otro lado (P5, deuda 16).
+            let mut refused = false;
             let mut word = 0u64;
-            w.bytes_by(len as usize, |i| unsafe {
+            w.bytes_by(len as usize, |i| {
                 let inside = i as u64 % width;
-                if inside == 0 {
-                    word = read_word(addr + i as u64, width);
+                if inside == 0 && !refused {
+                    // SAFETY: la direccion salio de un reclamo vigente y el
+                    // ancho ya se comprobo contra la alineacion.
+                    match unsafe { p.guarded_read(addr + i as u64, width) } {
+                        Some(v) => word = v,
+                        None => refused = true,
+                    }
                 }
                 (word >> (8 * inside)) as u8
             });
+            if refused {
+                return reply_refused(p, id, addr);
+            }
             finish_reply(p, id, w);
         }
     }
@@ -961,32 +974,44 @@ fn check_width(width: u64, addr: u64, len: u64) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// Una palabra del ancho pedido, leida de una sola vez.
+/// La maquina rechazo el acceso. Se contesta con el fault que lo dice.
 ///
-/// # Safety
-///
-/// `addr` tiene que estar mapeada y alineada a `width`.
-unsafe fn read_word(addr: u64, width: u64) -> u64 {
-    match width {
-        2 => core::ptr::read_volatile(addr as *const u16) as u64,
-        4 => core::ptr::read_volatile(addr as *const u32) as u64,
-        8 => core::ptr::read_volatile(addr as *const u64),
-        _ => core::ptr::read_volatile(addr as *const u8) as u64,
+/// No es un error del pedido —el rango era legitimo y el ancho valido—: es lo
+/// que contesto el silicio, y por eso viaja con la misma forma que cualquier
+/// otro fault. Antes de esto, este camino no contestaba nada: en aarch64 se
+/// llevaba puesto el cordon (deuda 16).
+fn reply_refused<P: Platform>(p: &mut P, id: u64, addr: u64) {
+    let fault = p.last_fault();
+    let out = unsafe { &mut *core::ptr::addr_of_mut!(OUTBOX) };
+    let mut w = Writer::new(out);
+    w.array(3);
+    w.uint(id);
+    w.bool(false);
+    w.map(5);
+    w.text("error");
+    w.text("access-refused");
+    // Que direccion fue: con una lectura larga, la que corto no es la primera.
+    w.text("address");
+    w.uint(addr);
+    w.text("cause");
+    match fault {
+        None => w.null(),
+        Some(f) => w.text(f.cause.code()),
     }
-}
-
-/// Escribe una palabra del ancho pedido, de una sola vez.
-///
-/// # Safety
-///
-/// Lo mismo que `read_word`.
-unsafe fn write_word(addr: u64, width: u64, value: u64) {
-    match width {
-        2 => core::ptr::write_volatile(addr as *mut u16, value as u16),
-        4 => core::ptr::write_volatile(addr as *mut u32, value as u32),
-        8 => core::ptr::write_volatile(addr as *mut u64, value),
-        _ => core::ptr::write_volatile(addr as *mut u8, value as u8),
+    // Y los numeros crudos con los que la maquina lo dijo, sin traducir. La
+    // causa normalizada no alcanza para distinguir un rango que no existe de un
+    // aparato que rechazo el ancho: eso vive en el detalle (P4).
+    w.text("raw");
+    match fault {
+        None => w.null(),
+        Some(f) => w.uint(f.raw),
     }
+    w.text("detail");
+    match fault {
+        None => w.null(),
+        Some(f) => w.uint(f.detail),
+    }
+    finish_reply(p, id, w);
 }
 
 fn mem_write<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
@@ -1014,7 +1039,11 @@ fn mem_write<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
                 for k in 0..width as usize {
                     word |= (data[i + k] as u64) << (8 * k);
                 }
-                unsafe { write_word(addr + i as u64, width, word) };
+                // SAFETY: la direccion salio de un reclamo vigente y el ancho ya
+                // se comprobo contra la alineacion.
+                if !unsafe { p.guarded_write(addr + i as u64, width, word) } {
+                    return reply_refused(p, id, addr + i as u64);
+                }
                 i += width as usize;
             }
             let out = unsafe { &mut *core::ptr::addr_of_mut!(OUTBOX) };

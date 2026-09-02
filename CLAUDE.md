@@ -151,7 +151,14 @@ de que la máquina nunca dijo qué hay ahí (P4). Y `mem.read`/`mem.write` toman
 `width`, porque un registro de dispositivo no es RAM: muchos solo aceptan
 accesos de su ancho exacto y descartan los más angostos sin avisar.
 
-El portón es `./scripts/check.sh`: frontera + idioma + 89 tests + compila las
+**Y un acceso que la máquina rechaza ya no mata al kernel** (P5). `mem.read` y
+`mem.write` corren en el camino del protocolo, donde no había punto de
+recuperación: en aarch64, leer con el ancho equivocado dejaba la máquina muda.
+Ahora los dos verbos van con el mismo punto que usa `exec`, armado alrededor de
+**una sola instrucción**, y el rechazo vuelve como `access-refused` con la
+dirección que cortó y los números crudos de la máquina.
+
+El portón es `./scripts/check.sh`: frontera + idioma + 94 tests + compila las
 dos + las bootea en QEMU y les habla el protocolo con `scripts/client.py`.
 Corrélo antes de commitear; CI corre exactamente ese script.
 
@@ -159,15 +166,9 @@ Corrélo antes de commitear; CI corre exactamente ese script.
 
 **No queda ningún verbo sin hacer, ni nada que ande en una arquitectura y no en la
 otra.** Lo que queda es pagar deudas. Las preguntas abiertas están en
-`docs/DISENO.md` §8; las deudas, en §7 — abiertas la 2, 3, 6, 10, 11 y 16.
+`docs/DISENO.md` §8; las deudas, en §7 — abiertas la 2, 3, 6, 10 y 11.
 
-1. **Un acceso de ancho inválido a MMIO mata el kernel en aarch64** (deuda 16, nueva): en
-   x86_64 devuelve ceros y sigue; en ARM el bus lo rechaza y la máquina queda muda. `mem.read` y
-   `mem.write` corren en el camino del protocolo, donde **no hay punto de recuperación** como el
-   que tiene `exec`. Con lo cual el agente puede quedarse sin cordón con un pedido legítimo, que
-   es lo que D5 y D17 dicen que no puede pasar. La maquinaria para arreglarlo ya existe: es la
-   del fault de `exec`, usada fuera de `exec`.
-2. **`exec` no recibe estado inicial de registros** (deuda 6), aunque la sección 4 lo especifica.
+1. **`exec` no recibe estado inicial de registros** (deuda 6), aunque la sección 4 lo especifica.
 3. **Un núcleo cuyo código se colgó queda ocupado para siempre** (lo que dejó abierto la deuda
    13): el agente lo ve —`work` dice `running` y no cambia más— pero no lo puede recuperar.
 
@@ -210,8 +211,11 @@ Están acá para no volver a pagarlos:
 - **El ancho de un acceso a MMIO no es un detalle, y las dos máquinas no fallan
   igual.** Un registro que solo acepta lecturas de 4 bytes, leído de a uno,
   devuelve ceros en x86_64 —silencioso, se ve como si el aparato no estuviera— y
-  en aarch64 lo rechaza el bus con un abort externo que **deja la máquina muda**.
-  El mismo pedido: en una arquitectura miente, en la otra mata.
+  en aarch64 lo rechaza el bus con un abort externo que **dejaba la máquina
+  muda**. El mismo pedido: en una arquitectura miente, en la otra mata. Se
+  arregló con el punto de recuperación de `exec` usado afuera de `exec`
+  (`guarded.rs`), pero la moraleja queda: **el kernel también toca memoria que
+  puede fallar**, y ahí P5 no se cumple solo por existir el mecanismo de `exec`.
 - **Un camino que ninguna prueba recorre no está andando: está sin probar.**
   Mientras esperaba a un núcleo reclamado, el núcleo del protocolo esperaba
   **con los timbres cerrados**, así que un handler del agente no corría y el

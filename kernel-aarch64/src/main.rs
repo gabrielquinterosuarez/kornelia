@@ -4,6 +4,7 @@
 #![no_main]
 
 mod exec;
+mod guarded;
 mod irq;
 mod vectors;
 mod paging;
@@ -56,6 +57,14 @@ impl Platform for AArch64 {
 
     fn trigger_breakpoint(&mut self) {
         vectors::breakpoint();
+    }
+
+    unsafe fn guarded_read(&mut self, addr: u64, width: u64) -> Option<u64> {
+        guarded::read(addr, width)
+    }
+
+    unsafe fn guarded_write(&mut self, addr: u64, width: u64, value: u64) -> bool {
+        guarded::write(addr, width, value)
     }
 
     fn last_fault(&self) -> Option<Fault> {

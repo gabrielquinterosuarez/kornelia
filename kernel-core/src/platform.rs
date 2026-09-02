@@ -76,6 +76,35 @@ pub trait Platform {
     /// El último fault capturado, si hubo alguno.
     fn last_fault(&self) -> Option<Fault>;
 
+    /// Lee memoria que la máquina **puede rechazar**, sin morirse si lo hace.
+    ///
+    /// `mem.read` puede apuntar al registro de un dispositivo, y un dispositivo
+    /// rechaza lo que no sabe atender: un registro que solo acepta accesos de
+    /// cuatro bytes, leído de a uno, es un acceso inválido. Y las dos
+    /// arquitecturas no fallan igual — en x86_64 eso devuelve ceros y sigue, en
+    /// aarch64 el bus lo rechaza con un abort externo.
+    ///
+    /// Ese acceso lo hace el kernel, en el camino del protocolo, donde no hay
+    /// un `exec` que lo cubra. Así que se arma el mismo punto de recuperación
+    /// que usa `exec`, alrededor de una sola instrucción: el fault vuelve como
+    /// dato (P5) en vez de dejar al agente sin cordón por un pedido legítimo,
+    /// que es lo que D5 y D17 dicen que no puede pasar.
+    ///
+    /// `None` si la máquina lo rechazó; el detalle queda en `last_fault`.
+    ///
+    /// # Safety
+    ///
+    /// `addr` tiene que estar mapeada y alineada a `width`, que vale 1, 2, 4
+    /// u 8. Que el aparato acepte el acceso no hace falta: de eso se trata.
+    unsafe fn guarded_read(&mut self, addr: u64, width: u64) -> Option<u64>;
+
+    /// Escribe memoria que la máquina puede rechazar. `false` si la rechazó.
+    ///
+    /// # Safety
+    ///
+    /// Lo mismo que `guarded_read`.
+    unsafe fn guarded_write(&mut self, addr: u64, width: u64, value: u64) -> bool;
+
     /// Salta a código máquina y vuelve con lo que haya pasado (P3, P5).
     ///
     /// El agente no es un participante en tiempo de ejecución: es un compilador

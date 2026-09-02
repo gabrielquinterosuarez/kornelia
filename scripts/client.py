@@ -1057,20 +1057,29 @@ def test_dma(proc, timeout, arch):
         if got != EDU_VERSION:
             failures.append(f"el registro del aparato dio {got:#x} y no {EDU_VERSION:#x}")
 
-        # Que el ancho no sea decorativo se comprueba leyendo mal a proposito, y
-        # **solo en x86_64**. Las dos maquinas no fallan igual y esa diferencia
-        # es justo el motivo de D22: en x86 el acceso angosto se descarta y
-        # devuelve ceros; en aarch64 el bus lo rechaza con un abort externo que
-        # **mata el kernel**, porque `mem.read` corre en el camino del protocolo
-        # y ahi no hay punto de recuperacion como el de `exec`. Queda anotado
-        # como deuda: hoy el agente puede dejar la maquina muda con un pedido
-        # legitimo.
-        if arch == "x86_64":
-            ok, r = ask_verb(122, "mem.read", {"handle": win["handle"], "off": 0, "len": 4})
-            narrow = int.from_bytes(r["bytes"], "little") if ok else 0
+        # Y leerlo mal a proposito, que es lo que hace que el ancho no sea
+        # decorativo. **Las dos maquinas no fallan igual, y las dos tienen que
+        # sobrevivir** (P5): en x86_64 el acceso angosto se descarta y devuelve
+        # ceros; en aarch64 el bus lo rechaza con un abort externo que antes
+        # dejaba la maquina muda, porque `mem.read` corre en el camino del
+        # protocolo. Ahora vuelve como respuesta.
+        ok, r = ask_verb(122, "mem.read", {"handle": win["handle"], "off": 0, "len": 4})
+        if not ok:
+            print(f"  y de a un byte, la maquina lo rechaza y lo dice: {r}")
+            if r.get("error") != "access-refused":
+                failures.append(f"el acceso rechazado no se informa como tal: {r}")
+        else:
+            narrow = int.from_bytes(r["bytes"], "little")
             print(f"  y de a un byte, el mismo registro da: {narrow:#x}")
             if narrow == got:
                 failures.append("el ancho no cambio nada: la prueba no prueba nada")
+
+        # Lo que no admite interpretacion: despues de eso la maquina contesta.
+        ok, _ = ask_verb(123, "describe", {})
+        if not ok:
+            failures.append("la maquina dejo de contestar despues del acceso rechazado")
+        else:
+            print("  y despues de eso la maquina sigue contestando")
         ask_verb(121, "release", {"handle": win["handle"]})
 
     # La memoria donde el aparato va a intentar escribir, con un patron puesto

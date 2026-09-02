@@ -58,6 +58,16 @@ impl Platform for Fake {
         None
     }
 
+    /// La plataforma de prueba no toca memoria de verdad: contestar un valor
+    /// inventado seria peor que decir que no se puede.
+    unsafe fn guarded_read(&mut self, _addr: u64, _width: u64) -> Option<u64> {
+        None
+    }
+
+    unsafe fn guarded_write(&mut self, _addr: u64, _width: u64, _value: u64) -> bool {
+        false
+    }
+
     fn wake_core(&mut self, _id: u64) {}
 
     unsafe fn enable_iommu(

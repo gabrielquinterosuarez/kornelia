@@ -23,6 +23,7 @@ Lo verifica `./scripts/check-boundary.sh`, dentro del portón.
 | Memoria del agente | `kernel-core/src/claims.rs` + `paging.rs` de cada arquitectura. |
 | Correr código del agente | `exec.rs` de cada arquitectura. El de x86 tiene el `iretq` a anillo 3. |
 | Faults | `kernel-core/src/fault.rs` (formato) + `idt.rs` / `vectors.rs` (captura). |
+| Tocar memoria que puede rechazar el acceso | `guarded.rs` de cada arquitectura. Es el punto de recuperación de `exec`, usado afuera de `exec`. |
 | Otros núcleos | `kernel-core/src/work.rs` (buzón) + `smp.rs` de cada arquitectura. |
 | Interrupciones | `irq.rs` de cada arquitectura + `kernel-core/src/handlers.rs`. |
 | IOMMU | `kernel-x86_64/src/iommu.rs` (VT-d) y `kernel-aarch64/src/smmu.rs` (SMMUv3). Hacen lo mismo y no se parecen en nada: empezar por el de x86, que es el más simple. |

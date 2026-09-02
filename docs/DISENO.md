@@ -151,7 +151,7 @@ Lo que sí existe:
 | **Permiso de memoria** (D27) | Andando en las dos. `mem.claim {user: true}` entrega memoria alcanzable sin privilegio, y **lo hace cumplir el hardware**: SMEP en x86_64, el modelo de permisos en aarch64. |
 | **Transición de privilegio** (D27) | Andando en las dos. `exec {mode}` entra a anillo 3 / EL0 y vuelve por una ventanilla —`int 0x80` con `DPL=3`, `svc #0`— cuyos bytes publica `describe`. La pila sale del final del reclamo del agente. **Comprobado por lo que el hardware niega:** apagar las interrupciones desde `supervised` vuelve como fault en vez de dejar la máquina muda. |
 | **Dónde vale cada privilegio** (D29) | Andando en las dos. En el núcleo del protocolo `exec` **solo** admite `supervised`: ahí manda el kernel, y para que eso sea verdad el agente no puede *poder* enmascarar. `raw` exige un núcleo reclamado, donde la prioridad la decide él. El acuerdo se publica (`describe {what:["exec"]}` trae `this_core`) en vez de dejar que se descubra chocándose (P4). |
-| **`mem.claim` · `mem.read` · `mem.write` · `release`** | Andando. Reclamos por tamaño o por dirección exacta (así se pide MMIO), con alineación y tope. Los handles son de la máquina y no se reusan (D14). Un rango que cae en un **hueco** del mapa se entrega con la clase `unreported` —ahí viven los BARs que el firmware no listó— y `width` permite tocarlo con el ancho que el aparato exige. |
+| **`mem.claim` · `mem.read` · `mem.write` · `release`** | Andando. Reclamos por tamaño o por dirección exacta (así se pide MMIO), con alineación y tope. Los handles son de la máquina y no se reusan (D14). Un rango que cae en un **hueco** del mapa se entrega con la clase `unreported` —ahí viven los BARs que el firmware no listó— y `width` permite tocarlo con el ancho que el aparato exige. **Un acceso que la máquina rechaza vuelve como respuesta**, no como muerte: los dos verbos van con el mismo punto de recuperación que usa `exec` (P5). |
 | **`irq.install`** | Andando en las dos. El agente pone su código a atender un aparato, y el kernel publica además **cómo hacer sonar esa interrupción a propósito** para que pueda probar su handler sin esperar al aparato. `irq.install_raw` solo en x86_64. |
 | **Timbre del buzón** | Andando en las dos. El agente lo toca con código máquina propio: un IPI por el APIC en x86_64, un SGI por el GIC en aarch64. **Con prioridad más baja que el cable**, así que por más que el agente inunde de llamadas el cordón pasa primero (D17, P6). El kernel cuenta cuántas veces sonó, que es lo que permite comprobarlo. |
 | **`listen`** | Andando en las dos. El kernel escucha por el cable y por el buzón, y contesta por donde le llegó (D17). El acuerdo lo publica `describe`. |
@@ -334,20 +334,29 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
    lado (D4); por omisión sigue siendo uno. Se lee una vez por palabra y se reparte en bytes,
    porque hay registros que cambian de valor con solo mirarlos.
 
-16. **Un acceso de ancho inválido a MMIO mata el kernel en aarch64.** Salió de la prueba de
-   arriba, y es una asimetría que solo aparece con las dos arquitecturas (D22): leer un registro
-   de 4 bytes de a uno en x86_64 devuelve ceros y sigue, mientras que en aarch64 el bus lo
-   rechaza con un abort externo y **la máquina queda muda**.
+16. **~~Un acceso de ancho inválido a MMIO mata el kernel en aarch64.~~ RESUELTO.** Salió de la
+   prueba de la deuda 15, y era una asimetría que solo aparece con las dos arquitecturas (D22):
+   leer un registro de 4 bytes de a uno en x86_64 devuelve ceros y sigue, mientras que en
+   aarch64 el bus lo rechaza con un abort externo y **la máquina quedaba muda**.
 
-   El agujero es de P5: `mem.read` y `mem.write` corren en el camino del protocolo, donde **no
-   hay punto de recuperación**. Durante un `exec` un fault vuelve como dato porque el handler
-   desvía el regreso; acá el acceso lo hace el propio kernel y no hay a dónde desviarlo. Con lo
-   cual el agente puede dejar la máquina sin cordón con un pedido perfectamente legítimo, y eso
-   es exactamente lo que D5 y D17 dicen que no puede pasar.
+   El agujero era de P5: `mem.read` y `mem.write` corren en el camino del protocolo, donde no
+   había punto de recuperación. Durante un `exec` un fault vuelve como dato porque el handler
+   desvía el regreso; ahí el acceso lo hace el propio kernel y no había a dónde desviarlo. Con
+   lo cual el agente podía dejar la máquina sin cordón con un pedido perfectamente legítimo, que
+   es lo que D5 y D17 dicen que no puede pasar.
 
-   Lo que falta es envolver esos dos accesos con el mismo mecanismo que ya usa `exec`: un punto
-   al que el handler pueda volver, para contestar "ese acceso lo rechazó la máquina" en vez de
-   morirse. La maquinaria existe; lo que no existe es la forma de usarla fuera de `exec`.
+   Se arregló con **la misma maquinaria de `exec`, usada afuera de `exec`**: `guarded.rs` en
+   cada arquitectura arma el punto de recuperación en el bloque del núcleo, hace **un** acceso, y
+   lo desarma. La ventana armada es de una sola instrucción a propósito — cuanto más corta,
+   menos chance de capturar un fault que no era el que se esperaba. El handler no necesitó
+   cambios: ya desviaba con solo ver `armed`.
+
+   El pedido rechazado vuelve como `access-refused`, con la dirección exacta que cortó, la causa
+   normalizada y **los números crudos** con los que la máquina lo dijo: la causa sola no alcanza
+   para distinguir un rango que no existe de un aparato que rechazó el ancho (P4).
+
+   Y la prueba, que es la que vale, ahora corre en las dos: se lee mal a propósito, se comprueba
+   que el kernel lo informe, y después **se le vuelve a hablar a la máquina**.
 
 11. **Los atributos de cacheabilidad que informa UEFI se descartan.** D12 anda igual porque la
    cacheabilidad se deduce de la *clase* de cada región, pero UEFI informa además atributos por
