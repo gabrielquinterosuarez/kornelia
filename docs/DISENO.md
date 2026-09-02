@@ -143,11 +143,12 @@ Lo que sí existe:
 | `ExitBootServices` (D25) | Andando. El kernel toma la máquina en el arranque, con reintento si el mapa se movió. |
 | **Mapa de memoria físico real** | Andando en las dos arquitecturas. Se captura de UEFI y se normaliza al vocabulario de `kernel-core` (D24). |
 | El trait `Platform` | Cinco miembros: `ARCH`, `uart_write_byte`, `uart_read_byte`, `park`, `machine`. |
-| `scripts/check.sh` | El portón: frontera + 15 tests + compila las dos + **las bootea en QEMU** y verifica lo que dicen. Probado que falla cuando debe. |
+| `scripts/check.sh` | El portón: frontera + idioma + 99 tests + compila las dos + **las bootea en QEMU** y les habla el protocolo, más una corrida extra de aarch64 **sin ACPI** para ejercitar el device tree. Probado que falla cuando debe. |
 | CI (`.github/workflows/ci.yml`) | Llama al mismo portón, para que no haya chequeos que solo existan en una de las dos partes. |
 | **El protocolo CBOR** (D6) | Andando. Escrito a mano, sin dependencias; verificado contra los vectores canónicos del RFC 8949. |
 | **`describe`** | Andando: sirve `memory`, `tables`, `claims`, `cpus`, `interrupts` y `pcie`. Sin argumentos devuelve el índice, no un volcado (D16). |
 | **Lectura de ACPI** | Andando en las dos. MADT (núcleos y controlador de interrupciones) y MCFG (PCIe), con el checksum verificado tabla por tabla. |
+| **Lectura del device tree** | Andando. El otro dialecto en el que una máquina se describe, para las placas que no traen ACPI: núcleos, controlador de interrupciones con su versión, puerto serie con su interrupción, PCIe e IOMMU. Cuál usar no lo elige el kernel — es cuál dejó el firmware. Se comprueba con un blob armado a mano en los tests y booteando con `acpi=off`, donde el portón exige que ande el IOMMU contra un aparato de verdad. |
 | **Permiso de memoria** (D27) | Andando en las dos. `mem.claim {user: true}` entrega memoria alcanzable sin privilegio, y **lo hace cumplir el hardware**: SMEP en x86_64, el modelo de permisos en aarch64. |
 | **Transición de privilegio** (D27) | Andando en las dos. `exec {mode}` entra a anillo 3 / EL0 y vuelve por una ventanilla —`int 0x80` con `DPL=3`, `svc #0`— cuyos bytes publica `describe`. La pila sale del final del reclamo del agente. **Comprobado por lo que el hardware niega:** apagar las interrupciones desde `supervised` vuelve como fault en vez de dejar la máquina muda. |
 | **Dónde vale cada privilegio** (D29) | Andando en las dos. En el núcleo del protocolo `exec` **solo** admite `supervised`: ahí manda el kernel, y para que eso sea verdad el agente no puede *poder* enmascarar. `raw` exige un núcleo reclamado, donde la prioridad la decide él. El acuerdo se publica (`describe {what:["exec"]}` trae `this_core`) en vez de dejar que se descubra chocándose (P4). |
@@ -206,9 +207,29 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
    tablas que este kernel no interpreta se informan igual por su firma: que exista algo que no
    sabemos leer es más útil que callarlo (P4).
 
-   Lo que falta encima: el device tree sigue sin leerse, así que una placa embebida —que no
-   tiene ACPI— no reporta nada de esto. Y de la MADT solo se sacan núcleos y el controlador;
-   las rutas de interrupción (`irq.install` las va a necesitar) todavía no.
+   **Y el device tree también se lee** (`kernel-core/src/fdt.rs`), que era lo que faltaba
+   encima. Una máquina sin ACPI ya no es una máquina sobre la que el kernel no sabe nada: de ahí
+   salen los núcleos, el controlador de interrupciones con su versión, dónde está el puerto
+   serie y por qué interrupción avisa, dónde se configura PCIe y dónde está el IOMMU. Con eso el
+   kernel deja de estar atado a una máquina con ACPI, que era lo que más se alejaba de P4.
+
+   Los dos formatos dicen lo mismo y no se parecen: ACPI son tablas con firma y checksum, el
+   device tree es **un árbol** de nodos con nombres de texto y todo en big-endian, aunque la
+   máquina no lo sea. Lo delicado no es el recorrido: es que **cuánto mide una dirección lo dice
+   el nodo padre** (`#address-cells`), así que dar por sentado que son dos celdas de 32 bits
+   anda en QEMU y falla en media placa real. Cuál de los dos usar no lo elige el kernel: es cuál
+   dejó el firmware, y la decisión vive en un solo lugar (`tables::describe`) porque se toma en
+   dos momentos muy separados —al armar el mapa de memoria y al describir el hardware— y
+   tenerla escrita dos veces es tenerla escrita mal una vez.
+
+   Se comprueba de las dos maneras. Con un blob armado a mano byte por byte en los tests, que
+   permite preguntarle cosas que QEMU no ofrece; y **booteando la misma máquina con `acpi=off`**,
+   donde el firmware pasa un device tree en lugar de las tablas y el portón exige que ande el
+   IOMMU contra un aparato de verdad — que es la prueba que usa todo lo que sale de la
+   descripción junto. Si algo saliera mal del árbol, esa no cierra.
+
+   Lo que sigue faltando: de la MADT solo se sacan núcleos y el controlador; las rutas de
+   interrupción (`irq.install` las va a necesitar) todavía no.
 4. **~~Seguimos sobre las tablas de páginas del firmware.~~ RESUELTO (D12).** El kernel arma
    las suyas y las carga: identity map con páginas de 1 GiB, tablas en arreglos estáticos —
    o sea dentro de la imagen, en memoria `Kind::Kernel`. El registro raíz (`CR3` / `TTBR0_EL1`)
@@ -502,9 +523,9 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
    dirección. Sumarlo es fácil; la pregunta es qué nombres se aceptan, y ahí manda D3 — tendrían
    que ser los que informa `describe`, no una lista horneada.
 
-4. **Leer el device tree.** Hoy se sabe encontrarlo pero no se lee, así que una placa embebida
-   —que no tiene ACPI— no reporta ni núcleos ni buses. Es también lo que haría falta para sacar
-   la dirección del PL011 de su fuente legítima en vez de tenerla horneada (deuda 2).
+4. **~~Leer el device tree.~~ HECHO** (deuda 3). Una placa sin ACPI reporta sus núcleos, sus
+   buses y dónde está su propio cable. Y de paso cerró la otra mitad de la deuda 2: la dirección
+   del PL011 sale de su fuente legítima en los dos dialectos, y el kernel se muda ahí.
 
 3. **~~Qué del System Table cruza la frontera.~~ CERRADA por D24.** El mapa de memoria *normalizado* es portable;
    cómo se obtiene (UEFI vs device tree vs ROM de arranque) no lo es. Se decide con `describe`.

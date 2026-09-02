@@ -7,7 +7,7 @@
 
 | Crate | Qué es | Regla |
 |---|---|---|
-| `kernel-core/` | Todo lo portable: protocolo, reclamos, faults, mapa de memoria, ACPI. | **Cero `asm!`, cero `target_arch`, y no puede nombrar a `boot-uefi`** (D23/D24). |
+| `kernel-core/` | Todo lo portable: protocolo, reclamos, faults, mapa de memoria, ACPI y device tree. | **Cero `asm!`, cero `target_arch`, y no puede nombrar a `boot-uefi`** (D23/D24). |
 | `boot-uefi/` | Cómo se le pide la máquina al firmware. Compartido por las dos arquitecturas. | Sin `asm!`: UEFI no varía por arquitectura. |
 | `kernel-x86_64/` | Lo que solo existe en x86: GDT, IDT, APIC, VT-d, trampolín de arranque. | |
 | `kernel-aarch64/` | Lo mismo del otro lado: tabla de vectores, GIC, PSCI, SMMUv3. | |
@@ -28,19 +28,22 @@ Lo verifica `./scripts/check-boundary.sh`, dentro del portón.
 | Interrupciones | `irq.rs` de cada arquitectura + `kernel-core/src/handlers.rs`. |
 | IOMMU | `kernel-x86_64/src/iommu.rs` (VT-d) y `kernel-aarch64/src/smmu.rs` (SMMUv3). Hacen lo mismo y no se parecen en nada: empezar por el de x86, que es el más simple. |
 | El segundo canal | `kernel-core/src/channel.rs`. |
-| Lo que el agente ve de la máquina | `kernel-core/src/acpi.rs` (leer) + `protocol.rs::describe` (publicar). |
+| Lo que el agente ve de la máquina | `kernel-core/src/acpi.rs` y `fdt.rs` (los dos dialectos en que una máquina se describe) + `tables.rs::describe` (elegir cuál) + `protocol.rs::describe` (publicar). |
 
 ## El portón
 
-`./scripts/check.sh` es todo lo que CI corre. Cinco pasos, en orden:
+`./scripts/check.sh` es todo lo que CI corre. Seis pasos, en orden:
 
 1. **Frontera** (`check-boundary.sh`) — que los crates portables no filtren arquitectura.
 2. **Idioma** (`check-language.py`) — identificadores en inglés. Es una lista de
    palabras: cuando se cuela una que no está, se **agrega a `FORBIDDEN`** en vez
    de solo corregir el identificador.
-3. **89 tests** de `kernel-core`.
+3. **99 tests** de `kernel-core`.
 4. **Compilan las dos.**
 5. **Arrancan las dos en QEMU y contestan el protocolo**, con `scripts/client.py`.
+6. **Y aarch64 arranca una vez más sin ACPI**, para que se describa por device
+   tree. Ahí se le exige el IOMMU contra un aparato de verdad, que es la prueba
+   que usa todo lo que sale de la descripción junto.
 
 El paso 5 es el que atrapa lo que importa: que compile no prueba nada. Cada
 prueba del cliente está escrita para **no poder pasar por accidente** — si el
@@ -50,6 +53,7 @@ kernel no hiciera lo que dice, la prueba se cuelga o la máquina se queda muda.
 ./scripts/check.sh                   # el portón entero (varios minutos)
 SKIP_QEMU=1 ./scripts/check.sh       # sin bootear, para iterar rápido
 ./scripts/client.py --arch aarch64 --smp 4 --dma --on-core --supervised
+./scripts/client.py --arch aarch64 --no-acpi --dma   # el otro dialecto
 ```
 
 `cargo` no está en el PATH: `export PATH="$HOME/.cargo/bin:$PATH"`.

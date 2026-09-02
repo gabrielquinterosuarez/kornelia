@@ -103,3 +103,30 @@ pub unsafe fn read_device_tree(addr: u64) -> Option<DeviceTree> {
 
     Some(DeviceTree { bytes, version })
 }
+
+/// Lo que la maquina dice de si misma, venga en el dialecto que venga (P4).
+///
+/// Hay dos formatos y no se parecen: ACPI son tablas con firma y checksum, el
+/// device tree es un arbol con nombres de texto. **Cual usar no es una eleccion
+/// del kernel**: es cual dejo el firmware. Se prefiere ACPI cuando estan los
+/// dos, porque es el que este kernel lee mas completo.
+///
+/// Vive aca, y no en cada lugar que lo necesita, porque esa decision se toma en
+/// dos momentos muy separados —al armar el mapa de memoria y al describir el
+/// hardware— y tenerla escrita dos veces es tenerla escrita mal una vez.
+///
+/// # Safety
+///
+/// Las direcciones tienen que ser las que dio el firmware, y su memoria estar
+/// mapeada.
+pub unsafe fn describe(t: &crate::machine::Tables) -> crate::acpi::Hardware {
+    if let Some(addr) = t.acpi {
+        if let Some(rsdp) = read_acpi(addr) {
+            return crate::acpi::read(&rsdp);
+        }
+    }
+    if let Some(blob) = t.device_tree {
+        return crate::fdt::read(blob);
+    }
+    crate::acpi::Hardware::blank()
+}

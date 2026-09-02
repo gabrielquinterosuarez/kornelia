@@ -64,7 +64,7 @@ else
         # Lo que tiene que haber dicho en el banner de texto.
         for expected in "arquitectura: $arch" "memoria:" "tablas:" \
                         "en memoria del kernel" "identity-mapeados" \
-                        "faults: capturados. autotest ok" "acpi:" \
+                        "faults: capturados. autotest ok" "maquina: acpi" \
                         "el nucleo duerme entre pedidos" "-- CBOR --"; do
             grep -qFe "$expected" <<<"$output" || bad "$arch no dijo: $expected"
         done
@@ -180,6 +180,31 @@ else
             printf '%s\n' "$output" | tail -5
         else
             echo "  $n regiones por el protocolo"
+        fi
+    done
+
+    # --- 6. Y la misma maquina, describiendose por el OTRO dialecto ---------
+    #
+    # Sin ACPI el firmware pasa un device tree, que es lo que traen las placas
+    # ARM embebidas. Es un formato completamente distinto —un arbol de nodos con
+    # nombres de texto, en vez de tablas con firma y checksum— y el kernel tiene
+    # que poder averiguar lo mismo por los dos (P4, deuda 3).
+    #
+    # Se corre el IOMMU a proposito: es la prueba que usa **todo** lo que sale
+    # de la descripcion junto —los nucleos, el controlador de interrupciones,
+    # donde se configura PCIe y donde esta el IOMMU— y encima contra un aparato
+    # de verdad. Si algo de eso saliera mal del arbol, esto no cierra.
+    step "aarch64 se describe por device tree"
+    output=$(NO_ACPI=1 timeout 240 ./scripts/client.py --arch aarch64 --no-acpi \
+        --what cpus --memory --cores --dma 2>&1 || true)
+    if ! grep -qFe "maquina: device tree" <<<"$output"; then
+        bad "aarch64 sin ACPI no lee el device tree"
+        printf '%s\n' "$output" | grep -E "maquina:|FALLA:" | head -5
+    fi
+    for expected in "lazo de memoria completo: ok" "nucleos: ok" "dma: ok"; do
+        if ! grep -qFe "$expected" <<<"$output"; then
+            bad "aarch64 por device tree no cierra: $expected"
+            printf '%s\n' "$output" | grep -E "FALLA:|maquina:" | head -8
         fi
     done
 fi

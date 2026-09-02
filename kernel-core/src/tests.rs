@@ -1656,3 +1656,189 @@ fn fine_grain_drags_along_what_is_next_to_it() {
     let block = crate::paging::BLOCK;
     assert!(crate::paging::touches_kernel(&m, 0, block));
 }
+
+// ---------------------------------------------------------------------------
+// El device tree (deuda 3)
+// ---------------------------------------------------------------------------
+
+/// Arma un device tree aplanado a mano, para probar el parser sin bootear.
+///
+/// Se construye byte por byte a proposito: el formato es big-endian y con
+/// desplazamientos a un bloque de cadenas aparte, que es exactamente donde un
+/// parser se equivoca sin que se note. Un blob armado a mano permite preguntarle
+/// cosas que QEMU no ofrece — por ejemplo un `#address-cells` distinto del
+/// habitual.
+struct Blob {
+    strings: Vec<u8>,
+    structure: Vec<u8>,
+}
+
+impl Blob {
+    fn new() -> Self {
+        Self { strings: Vec::new(), structure: Vec::new() }
+    }
+
+    /// Mete un nombre en el bloque de cadenas y devuelve su desplazamiento.
+    fn name(&mut self, s: &str) -> u32 {
+        let at = self.strings.len() as u32;
+        self.strings.extend_from_slice(s.as_bytes());
+        self.strings.push(0);
+        at
+    }
+
+    fn word(&mut self, v: u32) {
+        self.structure.extend_from_slice(&v.to_be_bytes());
+    }
+
+    fn begin(&mut self, node: &str) {
+        self.word(1);
+        self.structure.extend_from_slice(node.as_bytes());
+        self.structure.push(0);
+        while self.structure.len() % 4 != 0 {
+            self.structure.push(0);
+        }
+    }
+
+    fn end(&mut self) {
+        self.word(2);
+    }
+
+    fn prop(&mut self, name: &str, value: &[u8]) {
+        let off = self.name(name);
+        self.word(3);
+        self.word(value.len() as u32);
+        self.word(off);
+        self.structure.extend_from_slice(value);
+        while self.structure.len() % 4 != 0 {
+            self.structure.push(0);
+        }
+    }
+
+    /// Una propiedad de celdas de 32 bits, que es como el arbol guarda las
+    /// direcciones.
+    fn cells(&mut self, name: &str, values: &[u32]) {
+        let mut bytes = Vec::new();
+        for v in values {
+            bytes.extend_from_slice(&v.to_be_bytes());
+        }
+        self.prop(name, &bytes);
+    }
+
+    /// Cierra el arbol y devuelve el blob entero, con su encabezado.
+    fn finish(mut self) -> Vec<u8> {
+        self.word(9); // FDT_END
+        let header = 40usize;
+        let struct_len = self.structure.len();
+        let mut out = Vec::new();
+        out.extend_from_slice(&0xd00d_feedu32.to_be_bytes());
+        let total = header + struct_len + self.strings.len();
+        out.extend_from_slice(&(total as u32).to_be_bytes());
+        out.extend_from_slice(&(header as u32).to_be_bytes());
+        out.extend_from_slice(&((header + struct_len) as u32).to_be_bytes());
+        out.extend_from_slice(&(header as u32).to_be_bytes()); // rsvmap, vacio
+        out.extend_from_slice(&17u32.to_be_bytes());
+        out.extend_from_slice(&16u32.to_be_bytes());
+        out.extend_from_slice(&0u32.to_be_bytes()); // boot cpu
+        out.extend_from_slice(&(self.strings.len() as u32).to_be_bytes());
+        out.extend_from_slice(&(struct_len as u32).to_be_bytes());
+        out.extend_from_slice(&self.structure);
+        out.extend_from_slice(&self.strings);
+        out
+    }
+}
+
+/// Un arbol parecido al de una placa ARM: nucleos, GIC, serie y PCIe.
+fn sample_tree() -> Vec<u8> {
+    let mut b = Blob::new();
+    b.begin("");
+    b.cells("#address-cells", &[2]);
+    b.cells("#size-cells", &[2]);
+
+    b.begin("cpus");
+    for id in 0..3u32 {
+        b.begin("cpu@0");
+        b.cells("reg", &[0, id]);
+        b.end();
+    }
+    b.end();
+
+    b.begin("intc@8000000");
+    b.prop("compatible", b"arm,gic-v3\0");
+    b.cells("reg", &[0, 0x0800_0000, 0, 0x1_0000, 0, 0x080a_0000, 0, 0xf6_0000]);
+    b.end();
+
+    b.begin("pl011@9000000");
+    // Dos clases pegadas: la placa dice que es esto y ademas aquello. Quedarse
+    // con la primera seria no mirar.
+    b.prop("compatible", b"arm,pl011\0arm,primecell\0");
+    b.cells("reg", &[0, 0x0900_0000, 0, 0x1000]);
+    // Tres celdas: compartida (0), numero 1, como se dispara.
+    b.cells("interrupts", &[0, 1, 4]);
+    b.end();
+
+    b.begin("pcie@10000000");
+    b.prop("compatible", b"pci-host-ecam-generic\0");
+    b.cells("reg", &[0x40, 0x1000_0000, 0, 0x1000_0000]);
+    b.end();
+
+    b.end();
+    b.finish()
+}
+
+#[test]
+fn a_blob_without_the_magic_is_not_read() {
+    let mut bad = sample_tree();
+    bad[0] = 0;
+    // No se inventa nada: lo que no se pudo leer viene ausente, no en cero.
+    let hw = unsafe { crate::fdt::read(bad.as_ptr() as u64) };
+    assert!(hw.cpus.is_empty());
+    assert!(hw.interrupts.is_none());
+    assert!(hw.serial.is_none());
+}
+
+#[test]
+fn the_cores_come_out_of_the_tree() {
+    let blob = sample_tree();
+    let hw = unsafe { crate::fdt::read(blob.as_ptr() as u64) };
+    assert_eq!(hw.cpus.len(), 3);
+    assert_eq!(hw.usable_cpus(), 3);
+    // El `reg` de un nucleo es el numero con el que la maquina lo nombra, y son
+    // dos celdas porque el padre dijo dos.
+    assert_eq!(hw.cpus.iter().map(|c| c.id).collect::<Vec<_>>(), vec![0, 1, 2]);
+}
+
+#[test]
+fn the_interrupt_controller_comes_out_of_the_tree() {
+    let blob = sample_tree();
+    let hw = unsafe { crate::fdt::read(blob.as_ptr() as u64) };
+    let i = hw.interrupts.expect("el arbol lo declara");
+    assert_eq!(i.kind, "gic");
+    assert_eq!(i.address, 0x0800_0000);
+    // La version importa: el codigo que lo programa no es el mismo.
+    assert_eq!(i.version, 3);
+    // El segundo rango del `reg`, que en GICv3 es el redistribuidor.
+    assert_eq!(i.cpu_interface, 0x080a_0000);
+}
+
+#[test]
+fn the_serial_port_comes_out_of_the_tree() {
+    let blob = sample_tree();
+    let hw = unsafe { crate::fdt::read(blob.as_ptr() as u64) };
+    let s = hw.serial.expect("el arbol lo declara");
+    assert_eq!(s.address, 0x0900_0000);
+    // Una interrupcion compartida arranca en 32: el arbol las cuenta desde
+    // cero y los 32 de abajo se los reserva la arquitectura.
+    assert_eq!(s.gsi, 33);
+}
+
+#[test]
+fn where_pcie_is_comes_out_of_the_tree() {
+    let blob = sample_tree();
+    let hw = unsafe { crate::fdt::read(blob.as_ptr() as u64) };
+    let p = hw.pcie.expect("el arbol lo declara");
+    // Una direccion de dos celdas: la de arriba tambien cuenta.
+    assert_eq!(p.base, 0x40_1000_0000);
+    // 256 MiB de ventana son 256 buses, uno por MiB. Y el ultimo es el 255:
+    // recortarlo a un byte antes de restarle uno daba cero.
+    assert_eq!(p.bus_end, 255);
+}

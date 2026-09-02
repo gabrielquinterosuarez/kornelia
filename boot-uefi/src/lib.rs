@@ -347,7 +347,7 @@ pub unsafe fn take_machine(image: *mut c_void, systab: *mut SystemTable) -> Mach
     // Desde aca no se puede llamar a ningun Boot Service. El buffer es memoria
     // nuestra, asi que interpretarlo ahora es seguro.
     let mut count = normalize(buffer, used_size, descriptor_size);
-    count += add_pcie_window(tables.acpi, count);
+    count += add_pcie_window(&tables, count);
 
     Machine {
         regions: core::slice::from_raw_parts(&raw const REGIONS as *const Region, count),
@@ -374,13 +374,11 @@ pub unsafe fn take_machine(image: *mut c_void, systab: *mut SystemTable) -> Mach
 ///
 /// `rsdp` tiene que apuntar a un RSDP de verdad, y la memoria que describe estar
 /// mapeada. Lo esta: el identity map del firmware sigue vigente.
-unsafe fn add_pcie_window(rsdp: Option<u64>, count: usize) -> usize {
+unsafe fn add_pcie_window(tables: &kernel_core::Tables, count: usize) -> usize {
     if count >= MAX_REGIONS {
         return 0;
     }
-    let Some(addr) = rsdp else { return 0 };
-    let Some(rsdp) = kernel_core::tables::read_acpi(addr) else { return 0 };
-    let Some(pcie) = kernel_core::acpi::read(&rsdp).pcie else { return 0 };
+    let Some(pcie) = kernel_core::tables::describe(tables).pcie else { return 0 };
 
     // Cada bus ocupa 1 MiB de espacio de configuracion: 32 dispositivos por 8
     // funciones por 4 KiB.

@@ -25,6 +25,15 @@ cp target/aarch64-unknown-uefi/release/kernel.efi target/esp-aarch64/EFI/BOOT/BO
 
 cp -f "$AAVMF_VARS" target/AAVMF_VARS-aarch64.fd
 
+# NO_ACPI=1 arranca la maquina **sin tablas de ACPI**, y entonces el firmware le
+# pasa al kernel un device tree en su lugar. Es la unica forma de ejercitar el
+# otro dialecto con el que una maquina se describe (deuda 3): las placas ARM
+# embebidas no traen ACPI, y ahi el kernel tiene que poder averiguar lo mismo.
+MACHINE=virt,iommu=smmuv3
+if [ "${NO_ACPI:-0}" = "1" ]; then
+    MACHINE=$MACHINE,acpi=off
+fi
+
 # OJO: `-serial stdio` va SIN el prefijo `mon:`, y no es un olvido.
 #
 # Con `mon:` QEMU multiplexa su monitor sobre la misma terminal, y ese
@@ -38,7 +47,7 @@ exec qemu-system-aarch64 \
     `# D8: el IOMMU va encendido por defecto. Y el aparato 'edu' es un motor de` \
     `# DMA que se maneja con cuatro escrituras: es lo que permite comprobar que` \
     `# el IOMMU bloquea de verdad, en vez de creerle al kernel.` \
-    -machine virt,iommu=smmuv3 -cpu cortex-a57 -m 512 \
+    -machine "$MACHINE" -cpu cortex-a57 -m 512 \
     `# dma_mask: sin esto el aparato recorta la direccion de DMA a 28 bits, en` \
     `# silencio. Como aca la RAM arranca en 1 GiB, ningun destino podia llegar` \
     `# nunca — y un DMA que no ocurre se ve igual que uno que el IOMMU bloqueo.` \

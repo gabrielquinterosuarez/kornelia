@@ -17,6 +17,7 @@ pub mod claims;
 pub mod cores;
 pub mod dma;
 pub mod fault;
+pub mod fdt;
 pub mod handlers;
 pub mod machine;
 pub mod memory;
@@ -373,25 +374,25 @@ fn read_hardware<P: Platform>(p: &mut P, m: &Machine) -> acpi::Hardware {
     // Se pide antes de tomar el cordón: `Umbilical` toma prestado `p`.
     let p_uart = p.uart_address();
 
-    let hw = match m.tables.acpi {
-        None => acpi::Hardware::blank(),
-        // SAFETY: el RSDP ya se verificó por firma y checksum, y el identity map
-        // de D12 cubre toda la memoria de la máquina.
-        Some(addr) => match unsafe { tables::read_acpi(addr) } {
-            None => acpi::Hardware::blank(),
-            Some(rsdp) => unsafe { acpi::read(&rsdp) },
-        },
-    };
+    // SAFETY: las direcciones las dio el firmware en su tabla de configuracion,
+    // y el identity map de D12 cubre toda la memoria de la máquina.
+    let hw = unsafe { tables::describe(&m.tables) };
+
+    // De cuál de los dos dialectos salió lo de abajo. Se dice porque son dos
+    // formatos distintos y la diferencia importa para quien depura: el mismo
+    // dato faltante significa cosas distintas en cada uno.
+    let dialect = if m.tables.acpi.is_some() { "acpi" } else { "device tree" };
 
     let mut u = Umbilical::new(p);
     if hw.signatures.is_empty() {
-        u.line("acpi: sin tablas");
+        let _ = write!(u, "maquina: no se describe (ni acpi ni device tree)\r\n");
         return hw;
     }
 
     let _ = write!(
         u,
-        "acpi: {} tablas, {} nucleos ({} usables)\r\n",
+        "maquina: {} {} nodos, {} nucleos ({} usables)\r\n",
+        dialect,
         hw.signatures.len(),
         hw.cpus.len(),
         hw.usable_cpus()

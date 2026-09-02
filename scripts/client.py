@@ -1516,6 +1516,8 @@ def main():
     ap.add_argument("--timeout", type=float, default=90.0)
     ap.add_argument("--smp", type=int, default=4,
                     help="cuantos nucleos darle a QEMU")
+    ap.add_argument("--no-acpi", action="store_true",
+                    help="arranca sin ACPI, para que la maquina se describa por device tree")
     ap.add_argument("--exec", action="store_true", dest="run_exec",
                     help="sube codigo maquina de verdad y lo corre")
     ap.add_argument("--permission", action="store_true",
@@ -1549,8 +1551,12 @@ def main():
     if args.smp > 1:
         # Los scripts le pasan a QEMU cualquier argumento extra.
         cmd += ["-smp", str(args.smp)]
+    # Sin ACPI el firmware le pasa al kernel un device tree en su lugar: es el
+    # otro dialecto en el que una maquina se describe, y el kernel tiene que
+    # poder averiguar lo mismo por los dos (P4).
+    env = dict(os.environ, NO_ACPI="1") if args.no_acpi else None
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=subprocess.DEVNULL, cwd=ROOT, bufsize=0)
+                            stderr=subprocess.DEVNULL, cwd=ROOT, bufsize=0, env=env)
     try:
         print(f"arrancando {args.arch} en QEMU...")
         read_until_marker(proc, args.timeout, show=True)

@@ -119,8 +119,15 @@ entero reclama un núcleo, donde la prioridad la decide él. El kernel lo public
 (`describe exec` trae `this_core`) en vez de dejar que se descubra chocándose.
 
 `describe` sirve mapa de memoria, tablas, reclamos, núcleos, controlador de
-interrupciones y PCIe, leídos de ACPI — más el acuerdo de `exec`: qué modos hay
-y con qué bytes se vuelve de `supervised`.
+interrupciones y PCIe — más el acuerdo de `exec`: qué modos hay y con qué bytes
+se vuelve de `supervised`.
+
+**Y eso lo averigua por los dos dialectos en que una máquina se describe:** ACPI
+donde hay ACPI, y **device tree** donde no —las placas ARM y RISC-V embebidas—,
+que es un árbol de nodos en big-endian y no se parece en nada. Cuál usar no lo
+elige el kernel: es cuál dejó el firmware. Se comprueba booteando la misma
+máquina con `acpi=off`, donde el portón exige que ande hasta el IOMMU contra un
+aparato de verdad.
 
 `core.claim` arranca los otros núcleos: PSCI en aarch64, INIT/SIPI más un
 trampolín de 16→32→64 bits en x86_64. **Y ahora reciben trabajo:** `exec {core}`
@@ -161,23 +168,24 @@ Ahora los dos verbos van con el mismo punto que usa `exec`, armado alrededor de
 **una sola instrucción**, y el rechazo vuelve como `access-refused` con la
 dirección que cortó y los números crudos de la máquina.
 
-El portón es `./scripts/check.sh`: frontera + idioma + 94 tests + compila las
-dos + las bootea en QEMU y les habla el protocolo con `scripts/client.py`.
+El portón es `./scripts/check.sh`: frontera + idioma + 99 tests + compila las
+dos + las bootea en QEMU y les habla el protocolo con `scripts/client.py`, **y
+bootea aarch64 una vez más sin ACPI** para que el device tree no sea una
+intención.
 Corrélo antes de commitear; CI corre exactamente ese script.
 
 ## Lo que sigue
 
 **No queda ningún verbo sin hacer, ni nada que ande en una arquitectura y no en la
 otra.** Lo que queda es pagar deudas. Las preguntas abiertas están en
-`docs/DISENO.md` §8; las deudas, en §7 — abiertas la 3, 10 y 11, y ninguna rompe
+`docs/DISENO.md` §8; las deudas, en §7 — abiertas la 10 y 11, y ninguna rompe
 nada hoy.
 
-1. **El device tree no se lee** (deuda 3): una placa embebida sin ACPI no reporta nada de sí
-   misma — ni núcleos, ni controlador de interrupciones, ni dónde está su propio cable. Es lo
-   que más se aleja de P4 y lo único que todavía ata el kernel a una máquina con ACPI. Es un
-   parser nuevo, y hay que arrancar QEMU con `acpi=off` para poder probarlo de verdad.
-2. **Un núcleo cuyo código se colgó queda ocupado para siempre** (lo que dejó abierto la deuda
+1. **Un núcleo cuyo código se colgó queda ocupado para siempre** (lo que dejó abierto la deuda
    13): el agente lo ve —`work` dice `running` y no cambia más— pero no lo puede recuperar.
+2. **De la MADT solo se sacan núcleos y el controlador** (lo que quedó de la deuda 3): las rutas
+   de interrupción de los aparatos todavía no, y `irq.install` las va a necesitar para algo más
+   que las interrupciones que ya conoce.
 3. **Se descartan los atributos de cacheabilidad que informa UEFI** (deuda 11), que son más
    precisos que deducirlos de la clase de cada región.
 4. **Un test falló una vez y no reprodujo** (deuda 10). No está diagnosticado; queda anotado
