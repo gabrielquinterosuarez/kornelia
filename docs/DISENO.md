@@ -148,6 +148,7 @@ Lo que sí existe:
 | **El protocolo CBOR** (D6) | Andando. Escrito a mano, sin dependencias; verificado contra los vectores canónicos del RFC 8949. |
 | **`describe`** | Andando: sirve `memory`, `tables`, `claims`, `cpus`, `interrupts` y `pcie`. Sin argumentos devuelve el índice, no un volcado (D16). |
 | **Lectura de ACPI** | Andando en las dos. MADT (núcleos y controlador de interrupciones) y MCFG (PCIe), con el checksum verificado tabla por tabla. |
+| **El reloj de la máquina** | Andando en las dos. `CNTPCT_EL0` en aarch64, donde la máquina informa la frecuencia; `TSC` en x86_64, donde puede no informarla y entonces **se mide** contra el contador de frecuencia fija de la FADT. Se publica en `describe {what:["clock"]}`, y si la máquina no dice el ritmo se dice eso en vez de inventar un número (P4). |
 | **El blob de arranque** (D18, D19, D20) | Andando en las dos. El firmware trae `blob.bin` de la misma partición de la que salió el kernel —**lo único que sabe leer FAT32 es él** (D25), así que se carga dentro de la ventana y antes de pedir el mapa— y el kernel lo corre con la maquinaria de `exec`: si falla, el fault vuelve como dato y el arranque sigue hasta el protocolo. Antes de saltar avisa por el cable y espera: **cualquier byte lo cancela**, que es lo que hace que un blob roto no deje la máquina inútil en cada arranque. |
 | **Lectura del device tree** | Andando. El otro dialecto en el que una máquina se describe, para las placas que no traen ACPI: núcleos, controlador de interrupciones con su versión, puerto serie con su interrupción, PCIe e IOMMU. Cuál usar no lo elige el kernel — es cuál dejó el firmware. Se comprueba con un blob armado a mano en los tests y booteando con `acpi=off`, donde el portón exige que ande el IOMMU contra un aparato de verdad. |
 | **Permiso de memoria** (D27) | Andando en las dos. `mem.claim {user: true}` entrega memoria alcanzable sin privilegio, y **lo hace cumplir el hardware**: SMEP en x86_64, el modelo de permisos en aarch64. |
@@ -401,15 +402,35 @@ con lo que se le pidió a QEMU en las dos arquitecturas.
    lado (D4); por omisión sigue siendo uno. Se lee una vez por palabra y se reparte en bytes,
    porque hay registros que cambian de valor con solo mirarlos.
 
-17. **La ventana de rescate del blob se cuenta en vueltas, no en tiempo.** El kernel no lee
-   ningún reloj, así que la espera de D18 son iteraciones — y las mismas iteraciones son
-   segundos en QEMU y milisegundos en silicio real. Para un humano que tiene que llegar a
-   apretar una tecla, esa diferencia es si el rescate existe o no.
+17. **~~La ventana de rescate del blob se cuenta en vueltas, no en tiempo.~~ RESUELTO.** El
+   kernel lee un reloj, así que la ventana de D18 dura **dos segundos** y lo dice: el aviso sale
+   en milisegundos y no en "vueltas, que duran lo que duren". Comprobado midiendo desde afuera:
+   2029 ms contra 2000 prometidos.
 
-   Es el mismo problema que ya tienen `core.claim` y `exec {core}`, que también esperan en
-   vueltas, pero ahí el número solo cambia cuánto se tarda en dar algo por perdido. Acá cambia
-   si se puede rescatar la máquina. Lo que falta es leer un reloj: `TSC` en x86_64, `CNTPCT_EL0`
-   en aarch64 — los dos se leen con una instrucción y ninguno necesita driver.
+   No es un driver ni le pide nada al firmware. En las dos arquitecturas el contador ya viene
+   andando desde antes que el kernel y se lee con una instrucción — `rdtsc`, `mrs cntpct_el0`.
+   Lo que hace falta averiguar es **a qué ritmo sube**, y ahí las dos no se parecen:
+
+   - **aarch64 lo dice**, en `CNTFRQ_EL0`. Una instrucción y listo.
+   - **x86_64 puede no decirlo.** El TSC cuenta ciclos y la frecuencia sale de CPUID, en dos
+     hojas distintas y ninguna obligatoria — QEMU no informa ninguna de las dos. Así que cuando
+     el CPU no habla, **se mide**: contra el contador que informa la FADT, que sube siempre a
+     3.579545 MHz en cualquier máquina. Se cuentan los ciclos del TSC que caben en un pedazo
+     conocido de ese otro contador.
+
+   Un cero es la forma en que la máquina dice "no lo sé", y ahí el reloj vuelve a ser `None`:
+   **un tiempo mal calculado es peor que no tener tiempo** (P4). El contador se puede leer igual
+   y sirve para comparar dos lecturas, pero quien necesite un plazo vuelve a contar vueltas — y
+   el kernel lo avisa en vez de prometer segundos que no puede cumplir.
+
+   Y se publica en `describe {what:["clock"]}`, porque el agente lo necesita por lo mismo que lo
+   necesita el kernel. La prueba no es que informe un número: es que **dos lecturas separadas
+   por medio segundo den medio segundo**. Da 0.502 en aarch64 y 0.509 en x86_64.
+
+   **Lo que salió al hacerlo**, y es de las que valen: el tope de vueltas seguía cortando la
+   ventana a los 1200 ms mientras el kernel anunciaba 2000. Estaba pensado como red por si el
+   reloj no avanza, pero se disparaba **antes** que lo que protegía. Una red que se activa antes
+   que la cosa que cuida no es una red: es un límite disfrazado.
 
 16. **~~Un acceso de ancho inválido a MMIO mata el kernel en aarch64.~~ RESUELTO.** Salió de la
    prueba de la deuda 15, y era una asimetría que solo aparece con las dos arquitecturas (D22):

@@ -157,6 +157,18 @@ impl Platform for Fake {
 
     fn sleep(&mut self) {}
 
+    fn clock(&self) -> Option<crate::platform::Clock> {
+        // La plataforma de prueba no tiene reloj: es justo el caso que hay que
+        // poder manejar sin inventar un tiempo.
+        None
+    }
+
+    fn ticks(&self) -> u64 {
+        0
+    }
+
+    unsafe fn calibrate_clock(&mut self, _hw: &acpi::Hardware) {}
+
     fn uart_address(&self) -> Option<u64> {
         None
     }

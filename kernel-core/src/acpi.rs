@@ -140,6 +140,20 @@ pub struct Iommu {
     pub address_width: u8,
 }
 
+/// El contador de frecuencia fija que informa ACPI, para calibrar el otro.
+#[derive(Clone, Copy)]
+pub struct Timer {
+    /// El puerto de E/S donde se lee. No es memoria: en x86_64 los puertos son
+    /// otro espacio de direcciones.
+    pub port: u32,
+    /// Si el contador es de 32 bits. Si no, es de 24 y da la vuelta antes.
+    pub wide: bool,
+}
+
+/// A que ritmo sube, por especificacion de ACPI. No se lee de ninguna tabla
+/// porque **es fijo**: es lo que lo hace util para calibrar.
+pub const TIMER_HZ: u64 = 3_579_545;
+
 /// Lo que se pudo leer de ACPI.
 #[derive(Clone, Copy)]
 pub struct Hardware {
@@ -156,6 +170,15 @@ pub struct Hardware {
     pub serial: Option<Serial>,
     /// El IOMMU, si la maquina tiene uno (D8).
     pub iommu: Option<Iommu>,
+    /// Un contador de frecuencia **fija y conocida**, para calibrar el de la
+    /// arquitectura (deuda 17).
+    ///
+    /// Existe porque el TSC de x86_64 cuenta ciclos y el CPU puede no decir a
+    /// que ritmo: entonces hace falta otro reloj contra el cual medirlo. Este
+    /// sube siempre a 3.579545 MHz, sea la maquina que sea — es un numero que
+    /// viene de la frecuencia de color de la television NTSC, por el cristal que
+    /// las PC de los ochenta ya tenian adentro.
+    pub timer: Option<Timer>,
     /// Las firmas de todas las tablas que hay, se interpreten o no. Informar
     /// que existe algo que este kernel todavia no lee es mas util que callarlo
     /// (P4).
@@ -173,6 +196,7 @@ impl Hardware {
             overrides: &[],
             serial: None,
             iommu: None,
+            timer: None,
             signatures: &[],
         }
     }
@@ -307,7 +331,10 @@ pub unsafe fn read(rsdp: &Rsdp) -> Hardware {
             b"MCFG" => hw.pcie = read_mcfg(table, length),
             b"DMAR" => hw.iommu = read_dmar(table, length),
             b"IORT" => hw.iommu = read_iort(table, length),
-            b"FACP" => hw.psci = read_fadt(table, length),
+            b"FACP" => {
+                hw.psci = read_fadt(table, length);
+                hw.timer = read_fadt_timer(table, length);
+            }
             _ => {}
         }
     }
@@ -456,6 +483,28 @@ unsafe fn read_madt(
 /// # Safety
 ///
 /// `tabla` tiene que apuntar a una FADT ya verificada.
+/// El contador de frecuencia fija que informa la FADT.
+///
+/// Vive en la misma tabla que PSCI y se lee aparte porque son datos de
+/// arquitecturas distintas: PSCI solo existe en ARM, el contador solo en x86.
+///
+/// # Safety
+///
+/// `table` tiene que apuntar a una FADT ya verificada.
+unsafe fn read_fadt_timer(table: u64, length: usize) -> Option<Timer> {
+    // `PM_TMR_BLK` esta en el byte 76 y son 4 bytes; el ancho lo dice el bit 8
+    // de las banderas, en el 112.
+    if length < 116 {
+        return None;
+    }
+    let port = u32_at(table, 76);
+    if port == 0 {
+        // La maquina no tiene: no se inventa un puerto.
+        return None;
+    }
+    Some(Timer { port, wide: u32_at(table, 112) & (1 << 8) != 0 })
+}
+
 unsafe fn read_fadt(table: u64, length: usize) -> Option<Psci> {
     // Las FADT viejas son mas cortas y no llegan a tener este campo.
     if length < 131 {

@@ -12,6 +12,31 @@ use crate::machine::Machine;
 use crate::paging::Mapping;
 use core::fmt::{self, Write};
 
+/// El reloj que la máquina ya trae andando (deuda 17).
+///
+/// No se programa nada: el contador existe desde antes que el kernel y se lee
+/// con una instrucción. Lo que hace falta saber es **a qué ritmo sube**, y eso
+/// lo dice la máquina: en aarch64 hay un registro que lo informa
+/// (`CNTFRQ_EL0`); en x86_64 el TSC cuenta ciclos y la frecuencia sale de
+/// preguntarle al CPU por su cristal.
+#[derive(Clone, Copy)]
+pub struct Clock {
+    /// Cómo lo llama la máquina, sin traducir (P4).
+    pub kind: &'static str,
+    /// Cuántas veces sube el contador por segundo.
+    pub hz: u64,
+}
+
+impl Clock {
+    /// Cuántos pasos del contador son esos milisegundos.
+    ///
+    /// Se multiplica antes de dividir para no perder los milisegundos cortos con
+    /// un reloj lento: con `hz` de 62500, dividir primero daría cero.
+    pub fn ticks_for_ms(&self, ms: u64) -> u64 {
+        self.hz.saturating_mul(ms) / 1000
+    }
+}
+
 pub trait Platform {
     /// Nombre de la arquitectura. El agente lo recibe en `describe`; el
     /// protocolo nunca lleva nombres de registros horneados (D3).
@@ -276,6 +301,43 @@ pub trait Platform {
     /// En x86_64 el UART no está en memoria sino en puertos de E/S, que son otro
     /// espacio de direcciones: ahí devuelve `None`.
     fn uart_address(&self) -> Option<u64>;
+
+    /// A qué ritmo sube el contador de la máquina, si la máquina lo dice
+    /// (deuda 17).
+    ///
+    /// Sin esto el kernel puede contar vueltas pero no tiempo, y no son lo
+    /// mismo: las mismas vueltas son segundos en un emulador y milisegundos en
+    /// silicio. Donde eso importa de verdad es la ventana de rescate del blob
+    /// (D18) — si dura milisegundos, no hay rescate.
+    ///
+    /// No es un driver ni le pide nada al firmware: en las dos arquitecturas es
+    /// **una instrucción** —`rdtsc`, `mrs cntpct_el0`— y el contador ya viene
+    /// andando desde antes de que el kernel exista.
+    ///
+    /// `None` cuando la máquina no dice a qué ritmo sube. El contador se puede
+    /// leer igual y sirve para comparar dos lecturas, pero no para saber cuánto
+    /// pasó: **decir un tiempo que no se sabe es peor que no decirlo** (P4), así
+    /// que ahí quien lo necesite vuelve a contar vueltas.
+    fn clock(&self) -> Option<Clock>;
+
+    /// Averigua a qué ritmo sube el contador, una sola vez, en el arranque.
+    ///
+    /// En aarch64 no hace nada: la máquina lo informa en un registro. En x86_64
+    /// el TSC cuenta ciclos y el CPU **puede no decir** a qué ritmo, así que hay
+    /// que medirlo contra otro reloj de frecuencia conocida — el que informa la
+    /// FADT, que sube siempre al mismo ritmo en cualquier máquina.
+    ///
+    /// Va aparte de `clock` porque medir cuesta tiempo real: calibrar en cada
+    /// consulta haría que `describe` tardara milisegundos.
+    ///
+    /// # Safety
+    ///
+    /// Solo después de `ExitBootServices`, y una sola vez.
+    unsafe fn calibrate_clock(&mut self, hw: &Hardware);
+
+    /// El contador ahora. Sube y no vuelve para atrás; entre dos lecturas, la
+    /// diferencia es lo que pasó.
+    fn ticks(&self) -> u64;
 
     /// Se muda al puerto serie que informó la máquina, si puede.
     ///

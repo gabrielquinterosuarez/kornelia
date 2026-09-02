@@ -28,6 +28,7 @@ Lo verifica `./scripts/check-boundary.sh`, dentro del portón.
 | Interrupciones | `irq.rs` de cada arquitectura + `kernel-core/src/handlers.rs`. |
 | IOMMU | `kernel-x86_64/src/iommu.rs` (VT-d) y `kernel-aarch64/src/smmu.rs` (SMMUv3). Hacen lo mismo y no se parecen en nada: empezar por el de x86, que es el más simple. |
 | El segundo canal | `kernel-core/src/channel.rs`. |
+| El reloj | `clock` en el `main.rs` de cada arquitectura. En x86 incluye la calibración contra el contador de ACPI. |
 | El blob de arranque | `boot-uefi/src/lib.rs::load_blob` (traerlo del disco) + `kernel-core/src/lib.rs::run_blob` (ventana de rescate y ejecución). |
 | Lo que el agente ve de la máquina | `kernel-core/src/acpi.rs` y `fdt.rs` (los dos dialectos en que una máquina se describe) + `tables.rs::describe` (elegir cuál) + `protocol.rs::describe` (publicar). |
 

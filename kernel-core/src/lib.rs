@@ -59,6 +59,13 @@ pub fn main<P: Platform>(p: &mut P) -> ! {
     // memoria física por todos lados.
     let hw = read_hardware(p, &machine);
 
+    // Y a qué ritmo sube el contador de esta máquina (deuda 17). Va acá porque
+    // en x86_64 hay que medirlo contra un reloj que informa ACPI, así que
+    // necesita la descripción ya leída — y antes de la ventana de rescate del
+    // blob, que es quien lo usa.
+    // SAFETY: el firmware ya soltó la máquina, y esto se llama una sola vez.
+    unsafe { p.calibrate_clock(&hw) };
+
     // Y con eso, mudarse al puerto serie que la máquina dijo que tiene. Va acá
     // y no más tarde porque de acá en adelante todo lo que se cuenta sale por
     // el cable: si la mudanza sale mal, conviene que sea con la menor cantidad
@@ -163,11 +170,25 @@ fn move_to_reported_serial<P: Platform>(p: &mut P, m: &Machine, hw: &acpi::Hardw
 /// no se puede expresar en tiempo, que es lo que un humano necesita para saber
 /// si va a llegar a apretar una tecla.
 ///
-/// **Y contar vueltas no es contar tiempo**, que es el límite de fondo: las
-/// mismas vueltas son segundos en QEMU y milisegundos en silicio real, así que
-/// la ventana no dura lo mismo en las dos. Queda anotado como deuda — para que
-/// dure un tiempo hace falta un reloj, y el kernel todavía no lee ninguno.
+/// Es lo único que queda cuando la máquina **no dice** a qué ritmo sube su
+/// contador: ahí la ventana dura lo que duren, y eso se avisa.
 const RESCUE_ROUNDS: u64 = 3_000_000;
+
+/// El tope de vueltas cuando **sí** hay reloj, como red por si el reloj no
+/// avanza.
+///
+/// Tiene que estar **muy** por encima de lo que tarda `RESCUE_MS`, o la red se
+/// dispara antes que lo que protege y la ventana dura menos de lo prometido. Ya
+/// pasó: con el mismo tope que el caso sin reloj, el kernel avisaba dos segundos
+/// y cortaba a los mil doscientos milisegundos.
+const RESCUE_ROUNDS_WITH_CLOCK: u64 = 200_000_000;
+
+/// Cuánto dura la ventana de rescate cuando hay reloj.
+///
+/// Dos segundos: alcanzan para que un cliente conectado mande un byte y para que
+/// alguien que está mirando la terminal llegue a apretar una tecla, y no son
+/// tantos como para que moleste en cada arranque.
+const RESCUE_MS: u64 = 2000;
 
 /// Cada cuántas vueltas se mira el cable.
 ///
@@ -208,13 +229,28 @@ fn run_blob<P: Platform>(p: &mut P, m: &Machine, with_doorbell: bool) {
         machine::Blob::Loaded(bytes) => bytes,
     };
 
+    let clock = p.clock();
     {
         let mut u = Umbilical::new(p);
         let _ = write!(u, "blob: {} bytes cargados de blob.bin\r\n", bytes.len());
-        u.line("  mandar cualquier byte para NO ejecutarlo");
+        match clock {
+            Some(_) => {
+                let _ = write!(
+                    u,
+                    "  mandar cualquier byte en {} ms para NO ejecutarlo\r\n",
+                    RESCUE_MS
+                );
+            }
+            // Sin reloj no se puede prometer un tiempo, asi que se dice lo que
+            // hay: una ventana en vueltas, que dura lo que dure.
+            None => u.line("  mandar cualquier byte para NO ejecutarlo (sin reloj: sin plazo)"),
+        }
     }
 
-    // La ventana.
+    // La ventana. Con reloj se mide en tiempo; sin reloj, en vueltas — y en ese
+    // caso se dice, porque una ventana que no se sabe cuánto dura es lo que hace
+    // la diferencia entre poder rescatar la máquina y no (deuda 17).
+    let deadline = clock.map(|c| p.ticks().wrapping_add(c.ticks_for_ms(RESCUE_MS)));
     //
     // **Hay que mirar los dos lugares donde puede caer el byte**, y esto costó
     // encontrarlo: en este punto el timbre del cable ya está instalado, así que
@@ -225,8 +261,17 @@ fn run_blob<P: Platform>(p: &mut P, m: &Machine, with_doorbell: bool) {
     // Si el byte llegó **antes** de que el timbre estuviera puesto, en cambio,
     // sigue en la cola del UART. Los dos casos son reales, así que se miran los
     // dos.
-    for round in 0..RESCUE_ROUNDS {
+    let rounds = if clock.is_some() { RESCUE_ROUNDS_WITH_CLOCK } else { RESCUE_ROUNDS };
+    for round in 0..rounds {
         if round % RESCUE_POLL == 0 {
+            // Con reloj, lo que termina la ventana es el tiempo y no las
+            // vueltas: el tope de vueltas queda como red para que un reloj que
+            // no avanza no deje el arranque colgado para siempre.
+            if let Some(until) = deadline {
+                if p.ticks() >= until {
+                    break;
+                }
+            }
             // SAFETY: acá no corre nada más que pueda estar en el anillo.
             let from_ring = if with_doorbell { unsafe { serial::pop() } } else { None };
             if from_ring.is_some() || p.uart_read_byte().is_some() {

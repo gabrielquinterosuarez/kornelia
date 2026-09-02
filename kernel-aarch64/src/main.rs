@@ -118,6 +118,18 @@ impl Platform for AArch64 {
         irq::sleep();
     }
 
+    fn clock(&self) -> Option<kernel_core::platform::Clock> {
+        clock::describe()
+    }
+
+    fn ticks(&self) -> u64 {
+        clock::ticks()
+    }
+
+    unsafe fn calibrate_clock(&mut self, _hw: &kernel_core::acpi::Hardware) {
+        // Nada que medir: la maquina lo dice en `CNTFRQ_EL0`.
+    }
+
     fn uart_address(&self) -> Option<u64> {
         Some(uart::base())
     }
@@ -288,5 +300,36 @@ unsafe fn jump_to_own_stack() -> ! {
 fn panic(_info: &PanicInfo) -> ! {
     loop {
         unsafe { core::arch::asm!("msr daifset, #0xf; wfi", options(nomem, nostack)) }
+    }
+}
+
+/// El contador de la arquitectura y su frecuencia (deuda 17).
+///
+/// aarch64 tiene la parte facil: el contador generico ya viene andando y hay un
+/// registro que dice a que ritmo sube, asi que no hay nada que calibrar. Los dos
+/// se leen con una instruccion.
+mod clock {
+    use kernel_core::platform::Clock;
+
+    pub fn describe() -> Option<Clock> {
+        let hz: u64;
+        // `CNTFRQ_EL0` lo deja el firmware, y la arquitectura no garantiza que
+        // sea correcto — pero es lo unico que la maquina dice de si misma, y un
+        // cero es la forma en que dice "no lo se".
+        unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) hz, options(nomem, nostack)) };
+        if hz == 0 {
+            return None;
+        }
+        Some(Clock { kind: "cntpct", hz })
+    }
+
+    pub fn ticks() -> u64 {
+        let t: u64;
+        // `isb` antes de leer: sin eso el procesador puede adelantar la lectura
+        // y dos medidas seguidas dan la misma, o al reves.
+        unsafe {
+            core::arch::asm!("isb", "mrs {}, cntpct_el0", out(reg) t, options(nomem, nostack))
+        };
+        t
     }
 }

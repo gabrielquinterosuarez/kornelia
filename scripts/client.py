@@ -21,6 +21,7 @@ import os
 import select
 import subprocess
 import sys
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MARKER = b"-- CBOR --"
@@ -573,6 +574,58 @@ def emit_writes(arch, writes, con_ret=True):
             code += mov_imm(1, val & 0xFFFFFFFF, False)
             code += (0xB9000001).to_bytes(4, "little")   # str w1, [x0]
     return code + ((0xD65F03C0).to_bytes(4, "little") if con_ret else b"")  # ret
+
+
+def test_clock(proc, timeout):
+    """El reloj de la maquina mide tiempo, no vueltas (deuda 17).
+
+    La prueba no es que el kernel informe un numero: es que **dos lecturas
+    separadas por un tiempo conocido den ese tiempo**. Un reloj que no avanza, o
+    uno cuya frecuencia esta mal por un factor grande, no pasa esto.
+
+    El margen es amplio a proposito: el reloj del emulador no avanza al mismo
+    ritmo que el del host, asi que lo que se comprueba es el orden de magnitud —
+    que es justamente lo que la ventana de rescate del blob necesita.
+    """
+    failures = []
+
+    def ask_verb(n, verb, args):
+        resp, _ = ask(proc, [n, verb, args], timeout)
+        _, ok, load = resp
+        return ok, load
+
+    ok, d = ask_verb(130, "describe", {"what": ["clock"]})
+    if not ok or d["clock"] is None:
+        print("  esta maquina no dice a que ritmo sube su contador")
+        return 0
+    clock = d["clock"]
+    print(f"  reloj: {clock['kind']} a {clock['hz']} Hz")
+    if clock["hz"] < 1000:
+        failures.append(f"una frecuencia de {clock['hz']} Hz no sirve para medir")
+
+    first = clock["ticks"]
+    delay = 0.5
+    time.sleep(delay)
+    ok, d = ask_verb(131, "describe", {"what": ["clock"]})
+    second = d["clock"]["ticks"] if ok else first
+
+    if second <= first:
+        failures.append("el contador no avanzo: no es un reloj")
+    else:
+        medido = (second - first) / clock["hz"]
+        print(f"  esperando {delay}s el reloj marco {medido:.3f}s")
+        # Orden de magnitud: descarta una frecuencia equivocada por mucho, que es
+        # lo que haria inutil la ventana de rescate.
+        if not (delay * 0.1 <= medido <= delay * 4):
+            failures.append(f"marco {medido:.3f}s donde paso {delay}s")
+
+    print()
+    if failures:
+        for f in failures:
+            print(f"  FALLA: {f}")
+        return 1
+    print("  reloj: ok")
+    return 0
 
 
 def core_for_raw(ask_verb, n=200):
@@ -1552,6 +1605,8 @@ def main():
                     help="arranca sin ACPI, para que la maquina se describa por device tree")
     ap.add_argument("--write-blob", metavar="RUTA",
                     help="escribe un blob.bin de prueba para esta arquitectura y sale")
+    ap.add_argument("--clock", action="store_true",
+                    help="comprueba que el reloj de la maquina mida tiempo (deuda 17)")
     ap.add_argument("--cancel-blob", action="store_true",
                     help="manda un byte al arrancar, para caer en la ventana de rescate (D18)")
     ap.add_argument("--exec", action="store_true", dest="run_exec",
@@ -1629,6 +1684,9 @@ def main():
         # El lazo de memoria va en el mismo arranque: cada booteo de QEMU son
         # quince segundos, y el porton hace esto por arquitectura.
         rc = 0
+        if args.clock:
+            print("\n== el reloj de la maquina mide tiempo (deuda 17) ==")
+            rc |= test_clock(proc, args.timeout)
         if args.memory:
             print()
             rc |= test_memory(proc, args.timeout)

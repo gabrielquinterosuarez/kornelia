@@ -220,6 +220,8 @@ struct Sections {
     exec: bool,
     /// El IOMMU: quien decide que memoria puede tocar un aparato (D8).
     iommu: bool,
+    /// El reloj de la maquina, si informa a que ritmo sube (deuda 17).
+    clock: bool,
     /// Si no vino la clave `what`, se devuelve el indice (D16).
     index: bool,
 }
@@ -259,6 +261,7 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
                     Some("handlers") => q.handlers = true,
                     Some("exec") => q.exec = true,
                     Some("iommu") => q.iommu = true,
+                    Some("clock") => q.clock = true,
                     // Contestar solo con lo que se reconocio, callado, seria
                     // mentir por omision.
                     Some(_) => return reply_error(p, id, "unknown section in what"),
@@ -271,12 +274,16 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
     let out = unsafe { &mut *core::ptr::addr_of_mut!(OUTBOX) };
     let mut w = Writer::new(out);
 
+    let clock = p.clock();
+
     w.array(3);
     w.uint(id);
     w.bool(true);
 
     if q.index {
-        write_index(&mut w, m, hw, P::ARCH);
+        // El reloj se lee antes de tomar el escritor: `Writer` no presta `p`,
+        // pero leerlo aca deja el indice armado de un solo tiro.
+        write_index(&mut w, m, hw, P::ARCH, clock);
     } else {
         let mut sections = 0;
         if q.memory {
@@ -289,7 +296,7 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
             sections += 1;
         }
         for extra in [q.cpus, q.interrupts, q.pcie, q.cores, q.channel, q.handlers,
-                      q.exec, q.iommu] {
+                      q.exec, q.iommu, q.clock] {
             if extra {
                 sections += 1;
             }
@@ -446,6 +453,31 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
                 }
             }
         }
+        if q.clock {
+            // El reloj de la maquina (deuda 17). Se publica porque el agente lo
+            // va a necesitar por lo mismo que lo necesita el kernel: sin saber a
+            // que ritmo sube el contador, dos lecturas son una diferencia y no
+            // un tiempo.
+            w.text("clock");
+            match p.clock() {
+                // Que no haya se dice: es lo que hace que el agente sepa que
+                // tiene que medir de otra forma, en vez de creer un numero mal
+                // calculado (P4).
+                None => w.null(),
+                Some(c) => {
+                    w.map(3);
+                    // Como lo llama la maquina, sin traducir (D3).
+                    w.text("kind");
+                    w.text(c.kind);
+                    w.text("hz");
+                    w.uint(c.hz);
+                    // Y una lectura, para que se pueda empezar a medir sin otro
+                    // viaje de ida y vuelta.
+                    w.text("ticks");
+                    w.uint(p.ticks());
+                }
+            }
+        }
         if q.pcie {
             w.text("pcie");
             match hw.pcie {
@@ -474,14 +506,20 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
 }
 
 /// El indice: que hay para pedir, y cuanto de cada cosa.
-fn write_index(w: &mut Writer<'_>, m: &Machine, hw: &Hardware, arch: &str) {
-    w.map(13);
+fn write_index(
+    w: &mut Writer<'_>,
+    m: &Machine,
+    hw: &Hardware,
+    arch: &str,
+    clock: Option<crate::platform::Clock>,
+) {
+    w.map(14);
 
     w.text("arch");
     w.text(arch);
 
     w.text("sections");
-    w.array(11);
+    w.array(12);
     w.text("memory");
     w.text("tables");
     w.text("claims");
@@ -493,6 +531,7 @@ fn write_index(w: &mut Writer<'_>, m: &Machine, hw: &Hardware, arch: &str) {
     w.text("handlers");
     w.text("exec");
     w.text("iommu");
+    w.text("clock");
 
     w.text("memory");
     w.map(2);
@@ -549,6 +588,13 @@ fn write_index(w: &mut Writer<'_>, m: &Machine, hw: &Hardware, arch: &str) {
     match hw.iommu {
         None => w.null(),
         Some(i) => w.text(i.kind),
+    }
+
+    // Y si dice a que ritmo sube su contador (deuda 17).
+    w.text("clock");
+    match clock {
+        None => w.null(),
+        Some(c) => w.uint(c.hz),
     }
 }
 

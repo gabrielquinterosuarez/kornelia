@@ -129,6 +129,18 @@ impl Platform for X86_64 {
         false
     }
 
+    fn clock(&self) -> Option<kernel_core::platform::Clock> {
+        clock::describe()
+    }
+
+    fn ticks(&self) -> u64 {
+        clock::ticks()
+    }
+
+    unsafe fn calibrate_clock(&mut self, hw: &kernel_core::acpi::Hardware) {
+        clock::calibrate(hw);
+    }
+
     fn uart_address(&self) -> Option<u64> {
         None
     }
@@ -294,5 +306,162 @@ fn panic(_info: &PanicInfo) -> ! {
     // por ahora el núcleo se detiene en silencio.
     loop {
         unsafe { core::arch::asm!("cli; hlt", options(nomem, nostack)) }
+    }
+}
+
+/// El contador de la arquitectura y su frecuencia (deuda 17).
+///
+/// Aca esta la mitad dificil. El TSC cuenta **ciclos**, no tiempo, asi que hace
+/// falta saber cuantos ciclos son un segundo — y eso el CPU lo informa en dos
+/// lugares distintos, ninguno obligatorio:
+///
+/// - la hoja 0x15 de CPUID da el cristal del que cuelga el TSC y la proporcion;
+/// - la 0x16 da la frecuencia base en MHz, que es menos exacta pero alcanza.
+///
+/// Si ninguna dice nada, se devuelve `None` en vez de inventar un numero: un
+/// tiempo mal calculado es peor que no tener tiempo (P4).
+mod clock {
+    use kernel_core::platform::Clock;
+
+    /// Le pregunta al CPU por una de sus hojas de informacion.
+    fn cpuid(leaf: u32) -> (u32, u32, u32, u32) {
+        let (mut a, mut b, mut c, mut d): (u32, u32, u32, u32);
+        unsafe {
+            core::arch::asm!(
+                // `rbx` lo pide el ABI de vuelta como estaba, asi que se guarda.
+                "xchg {b:e}, ebx",
+                "cpuid",
+                "xchg {b:e}, ebx",
+                b = out(reg) b,
+                inout("eax") leaf => a,
+                inout("ecx") 0u32 => c,
+                out("edx") d,
+                options(nostack, preserves_flags),
+            );
+        }
+        (a, b, c, d)
+    }
+
+    /// Cuantas hojas de CPUID tiene este CPU. Preguntar por una que no existe
+    /// devuelve basura de otra, asi que se comprueba primero.
+    fn max_leaf() -> u32 {
+        cpuid(0).0
+    }
+
+    /// Lo que dio la calibracion, si hubo que calibrar. Se mide una sola vez.
+    static mut MEASURED_HZ: u64 = 0;
+
+    /// Mide el TSC contra el contador de frecuencia fija que informa ACPI.
+    ///
+    /// El de ACPI sube siempre a 3.579545 MHz, en cualquier maquina, y eso es lo
+    /// que lo hace util: se cuentan los ciclos del TSC que caben en un pedazo
+    /// conocido de ese otro contador.
+    ///
+    /// # Safety
+    ///
+    /// El puerto tiene que ser el que informo la FADT.
+    pub unsafe fn calibrate(hw: &kernel_core::acpi::Hardware) {
+        // Si el CPU ya dice su frecuencia, no hay nada que medir.
+        if describe().is_some() {
+            return;
+        }
+        let Some(timer) = hw.timer else { return };
+
+        // El contador de ACPI puede ser de 24 bits, asi que se envuelve antes de
+        // lo que uno espera: se mide un pedazo corto y se comparan solo los bits
+        // que seguro existen.
+        let mask: u32 = if timer.wide { u32::MAX } else { 0x00FF_FFFF };
+        // Un cuarto de vuelta de un contador de 24 bits son ~4.7 ms. Alcanza
+        // para medir con precision de sobra y no demora el arranque.
+        let span = kernel_core::acpi::TIMER_HZ as u32 / 200;
+
+        let start_timer = read_port(timer.port) & mask;
+        let start_tsc = ticks();
+
+        // Se espera a que el contador de ACPI avance `span`. La cuenta va con
+        // resta enmascarada para que dar la vuelta no la rompa.
+        let mut rounds = 0u64;
+        loop {
+            let now = read_port(timer.port) & mask;
+            if now.wrapping_sub(start_timer) & mask >= span {
+                break;
+            }
+            rounds += 1;
+            // Red: si el contador no avanza —porque el puerto no era ese— esto
+            // no puede quedarse girando en el arranque.
+            if rounds > 200_000_000 {
+                return;
+            }
+            core::hint::spin_loop();
+        }
+
+        let elapsed_tsc = ticks().wrapping_sub(start_tsc);
+        let elapsed_timer = (read_port(timer.port) & mask).wrapping_sub(start_timer) & mask;
+        if elapsed_timer == 0 || elapsed_tsc == 0 {
+            return;
+        }
+        MEASURED_HZ =
+            elapsed_tsc * kernel_core::acpi::TIMER_HZ / elapsed_timer as u64;
+    }
+
+    /// Lee un puerto de E/S de 32 bits. Los puertos no son memoria: son otro
+    /// espacio de direcciones, con sus propias instrucciones.
+    unsafe fn read_port(port: u32) -> u32 {
+        let value: u32;
+        core::arch::asm!("in eax, dx", out("eax") value, in("dx") port as u16,
+                         options(nomem, nostack, preserves_flags));
+        value
+    }
+
+    pub fn describe() -> Option<Clock> {
+        // Lo medido gana: si hubo que calibrar es porque el CPU no lo dijo.
+        let measured = unsafe { MEASURED_HZ };
+        if measured != 0 {
+            return Some(Clock { kind: "tsc", hz: measured });
+        }
+        let top = max_leaf();
+
+        // Hoja 0x15: el cristal y la proporcion. `ecx` es el cristal en Hz,
+        // `ebx`/`eax` la proporcion entre el TSC y ese cristal. Es la exacta.
+        if top >= 0x15 {
+            let (denom, numer, crystal, _) = cpuid(0x15);
+            if denom != 0 && numer != 0 && crystal != 0 {
+                let hz = crystal as u64 * numer as u64 / denom as u64;
+                return Some(Clock { kind: "tsc", hz });
+            }
+        }
+
+        // Hoja 0x16: la frecuencia base en MHz. Redondeada, pero para una
+        // ventana de rescate la diferencia no cambia nada.
+        if top >= 0x16 {
+            let (base_mhz, _, _, _) = cpuid(0x16);
+            if base_mhz != 0 {
+                return Some(Clock { kind: "tsc", hz: base_mhz as u64 * 1_000_000 });
+            }
+        }
+
+        None
+    }
+
+    pub fn ticks() -> u64 {
+        let (low, high): (u32, u32);
+        unsafe {
+            // `lfence` antes de `rdtsc`: sin eso el procesador puede adelantar
+            // la lectura y dos medidas seguidas salen al reves.
+            //
+            // Y `lfence; rdtsc` en vez de `rdtscp`, que hace lo mismo en una
+            // instruccion: `rdtscp` es **opcional** y en un CPU que no lo tiene
+            // es un opcode invalido — o sea un fault en el arranque, antes de
+            // que haya con que contarlo. `lfence` viene con SSE2, que en x86_64
+            // es obligatorio.
+            core::arch::asm!(
+                "lfence",
+                "rdtsc",
+                out("eax") low,
+                out("edx") high,
+                options(nomem, nostack),
+            );
+        }
+        ((high as u64) << 32) | low as u64
     }
 }

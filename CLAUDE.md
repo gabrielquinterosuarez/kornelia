@@ -168,12 +168,20 @@ Ahora los dos verbos van con el mismo punto que usa `exec`, armado alrededor de
 **una sola instrucción**, y el rechazo vuelve como `access-refused` con la
 dirección que cortó y los números crudos de la máquina.
 
+**Y la máquina tiene reloj** (deuda 17): el contador que ya viene andando —`TSC`
+en x86_64, `CNTPCT_EL0` en aarch64—, leído con una instrucción y sin driver. Lo
+que cambia entre las dos es quién dice a qué ritmo sube: ARM lo informa en un
+registro, x86 puede no decirlo, y ahí **se mide** contra el contador de
+frecuencia fija que informa ACPI. Si nadie lo dice, el kernel dice que no lo
+sabe en vez de calcular un tiempo falso.
+
 **Y hay persistencia a través del reinicio** (D18): el firmware trae `blob.bin`
 de la partición —solo él sabe leer FAT32, así que se carga dentro de la ventana
 de D25— y el kernel lo corre antes de escuchar el cable, con la misma red que
 `exec`: un blob roto vuelve como fault y el arranque sigue. Antes de saltar
 **avisa y espera**, y cualquier byte lo cancela; sin eso, un blob malo dejaría la
-máquina inútil en cada arranque y habría que sacarle el disco.
+máquina inútil en cada arranque y habría que sacarle el disco. La ventana dura
+**dos segundos de verdad**, no un número de vueltas, porque ahora hay reloj.
 
 El portón es `./scripts/check.sh`: frontera + idioma + 102 tests + compila las
 dos + las bootea en QEMU y les habla el protocolo con `scripts/client.py`, **y
@@ -195,10 +203,9 @@ cubría todavía:
 2. **De la MADT solo se sacan núcleos y el controlador** (lo que quedó de la deuda 3): las rutas
    de interrupción de los aparatos todavía no, y `irq.install` las va a necesitar para algo más
    que las interrupciones que ya conoce.
-3. **La ventana de rescate del blob se cuenta en vueltas, no en tiempo** (deuda 17): el kernel
-   no lee ningún reloj, así que las mismas vueltas son segundos en QEMU y milisegundos en
-   silicio real. Ahí eso decide si el rescate existe. Falta leer un reloj — `TSC` o
-   `CNTPCT_EL0`, una instrucción cada uno, sin driver.
+3. **`core.claim` y `exec {core}` siguen esperando en vueltas**, ahora que hay reloj con qué
+   medir. Ahí el número solo cambia cuánto se tarda en dar un núcleo por perdido, así que no
+   rompe nada — pero un tope en vueltas es un tope que no se puede explicar.
 4. **El blob no le puede pedir nada al kernel.** Corre antes del protocolo, así que no tiene
    verbos: toca la máquina directo, que alcanza para un cargador (D19) pero no para algo que
    quiera reclamar memoria o instalar un handler.
