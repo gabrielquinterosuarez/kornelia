@@ -34,6 +34,18 @@ fi
 # Las variables UEFI tienen que ser escribibles: copia propia.
 cp -f "$OVMF_VARS" target/OVMF_VARS-x86_64.fd
 
+# El disco del que el cargador se trae el payload (D19). Se arma aca y no en el
+# repo: es estado de la maquina de prueba, no fuente.
+DISK=target/nvme-x86_64.img
+if [ ! -f "$DISK" ]; then
+    dd if=/dev/zero of="$DISK" bs=1M count=16 status=none
+fi
+# PAYLOAD=<archivo> lo escribe al principio del disco, que es donde el cargador
+# lo va a buscar.
+if [ -n "${PAYLOAD:-}" ]; then
+    dd if="$PAYLOAD" of="$DISK" bs=512 conv=notrunc status=none
+fi
+
 # El cordon umbilical, por donde sale y entra todo (D5).
 #
 # Con SOCKET=<ruta> el cable sale por un socket en vez de por esta terminal, y
@@ -76,6 +88,11 @@ exec qemu-system-x86_64 \
     `# ningun destino podia llegar nunca. Se pone en las dos: una prueba que` \
     `# pasa porque las direcciones son chicas pasa por casualidad.` \
     -device edu,dma_mask=0xffffffffffff \
+    `# Un disco NVMe, que es de donde D19 dice que el cargador se trae el resto:` \
+    `# el blob entra en 256 KiB y el payload no tiene por que. Va vacio salvo que` \
+    `# PAYLOAD= diga con que llenarlo, y se crea solo la primera vez.` \
+    -drive file="$DISK",if=none,id=payload,format=raw \
+    -device nvme,serial=kornelia,drive=payload \
     -drive if=pflash,format=raw,unit=0,readonly=on,file="$OVMF_CODE" \
     -drive if=pflash,format=raw,unit=1,file=target/OVMF_VARS-x86_64.fd \
     -drive format=raw,file=fat:rw:target/esp-x86_64 \

@@ -9,3 +9,5 @@
 # versionarlo metia basura binaria en cada commit que tocaba client.py.
 __pycache__/
 *.pyc
+# El disco de la maquina de prueba: lo arma el script de arranque.
+target/nvme-*.img

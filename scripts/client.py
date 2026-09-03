@@ -1606,6 +1606,97 @@ def test_on_core(proc, timeout, arch):
     return 0
 
 
+# Como se identifica un controlador NVMe en el bus: no por fabricante y modelo,
+# sino por lo que **hace**. Los tres bytes son clase, subclase y la interfaz de
+# programacion, y juntos quieren decir "almacenamiento / no volatil / NVMe".
+# Buscar asi es lo que hace que el cargador ande contra cualquier NVMe y no
+# contra el de QEMU (P4: la maquina se describe, no se la adivina).
+NVME_CLASS = (0x01, 0x08, 0x02)
+
+
+def pcie_scan(ask_verb, ident, ecam, buses=1):
+    """Recorre el bus y devuelve lo que hay: (bdf, offset, id, clase, bar0).
+
+    Es lo mismo que hara el cargador desde el blob, y por los mismos verbos: el
+    kernel publica **donde se configura** PCIe, no que hay conectado (D4).
+    """
+    ok, cfg = ask_verb(ident, "mem.claim", {"at": ecam, "bytes": buses << 20})
+    if not ok:
+        return None, []
+    found = []
+    for bus in range(buses):
+        for dev in range(32):
+            off = (bus << 20) | (dev << 15)
+            ok, r = ask_verb(ident, "mem.read", {"handle": cfg["handle"], "off": off, "len": 4})
+            if not ok:
+                continue
+            who = int.from_bytes(r["bytes"], "little")
+            # Un lugar vacio del bus se lee como todos unos: no hay nadie que
+            # conteste y el bus devuelve eso en vez de fallar.
+            if who in (0xFFFFFFFF, 0):
+                continue
+            ok, r = ask_verb(ident, "mem.read", {"handle": cfg["handle"], "off": off + 8, "len": 4})
+            klass = int.from_bytes(r["bytes"], "little")
+            ok, r = ask_verb(ident, "mem.read", {"handle": cfg["handle"], "off": off + 0x10, "len": 4})
+            bar0 = int.from_bytes(r["bytes"], "little")
+            # Un BAR de 64 bits ocupa DOS ranuras: los bits 2:1 en `10` dicen
+            # que la mitad de arriba esta en la siguiente. Leer solo la primera
+            # da una direccion truncada, que es peor que ninguna.
+            wide = (bar0 & 0x6) == 0x4
+            high = 0
+            if wide:
+                ok, r = ask_verb(ident, "mem.read",
+                                 {"handle": cfg["handle"], "off": off + 0x14, "len": 4})
+                high = int.from_bytes(r["bytes"], "little")
+            ok, r = ask_verb(ident, "mem.read", {"handle": cfg["handle"], "off": off + 4, "len": 4})
+            command = int.from_bytes(r["bytes"], "little") & 0xFFFF
+            found.append({
+                "bdf": (bus << 8) | (dev << 3),
+                "off": off,
+                "id": who,
+                "class": ((klass >> 24) & 0xFF, (klass >> 16) & 0xFF, (klass >> 8) & 0xFF),
+                "bar0": bar0,
+                "wide": wide,
+                "window": ((high << 32) | (bar0 & ~0xF)) if wide else (bar0 & ~0xF),
+                "command": command,
+            })
+    return cfg, found
+
+
+def test_lspci(proc, timeout):
+    """Lista lo que hay en el bus, que es el primer paso de cualquier driver."""
+    def ask_verb(n, verb, args):
+        resp, _ = ask(proc, [n, verb, args], timeout)
+        _, ok, load = resp
+        return ok, load
+
+    ok, d = ask_verb(300, "describe", {"what": ["pcie"]})
+    if not ok or not d["pcie"]:
+        print("  esta maquina no informa PCIe")
+        return 1
+    cfg, devices = pcie_scan(ask_verb, 301, d["pcie"]["base"])
+    if cfg is None:
+        print("  no se pudo reclamar la ventana de configuracion")
+        return 1
+
+    for dev in devices:
+        vendor, model = dev["id"] & 0xFFFF, dev["id"] >> 16
+        c, sub, prog = dev["class"]
+        mark = "  <- NVMe" if dev["class"] == NVME_CLASS else ""
+        # El bit 1 del comando es "responde a accesos de memoria" y el 2 es
+        # "puede ser maestro del bus", que es lo que hace falta para que inicie
+        # un DMA por su cuenta.
+        flags = ("mem " if dev["command"] & 2 else "---- ") + ("master" if dev["command"] & 4 else "------")
+        print(f"  {dev['bdf']:#06x}  {vendor:04x}:{model:04x}  "
+              f"clase {c:02x}.{sub:02x}.{prog:02x}  ventana={dev['window']:#012x}"
+              f"  [{flags}]{mark}")
+
+    ask_verb(302, "release", {"handle": cfg["handle"]})
+    nvme = [d for d in devices if d["class"] == NVME_CLASS]
+    print(f"\n  {len(devices)} aparatos, {len(nvme)} de ellos NVMe")
+    return 0 if nvme else 1
+
+
 # El aparato `edu` de QEMU: un motor de DMA que se maneja con cuatro escrituras.
 # Existe para ensenar, y por eso sirve justo para esto — cualquier otra placa
 # con DMA necesitaria un driver entero antes de poder probar nada.
@@ -2327,6 +2418,8 @@ def main():
                     help="arranca sin ACPI, para que la maquina se describa por device tree")
     ap.add_argument("--kvm", action="store_true",
                     help="que el codigo lo ejecute el silicio de verdad, no la emulacion")
+    ap.add_argument("--lspci", action="store_true",
+                    help="lista los aparatos del bus PCIe, que es el primer paso de un driver")
     ap.add_argument("--console", action="store_true",
                     help="una terminal para hablarle al kernel a mano")
     ap.add_argument("--connect", metavar="SOCKET", nargs="?", const=DEFAULT_SOCKET,
@@ -2483,6 +2576,9 @@ def main():
         if args.permission:
             print()
             rc |= test_permission(proc, args.timeout, args.arch)
+        if args.lspci:
+            print("\n== lo que hay en el bus PCIe ==")
+            rc |= test_lspci(proc, args.timeout)
         # La consola va ultima: se queda con la maquina hasta que la suelten, asi
         # que cualquier prueba pedida en la misma corrida ya paso por aca.
         if args.console:

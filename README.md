@@ -184,7 +184,7 @@ grep -ao '[a-z0-9-]*@[0-9a-f]*' virt.dtb | sort -u
 | `kernel-core/src/cores.rs` | Los núcleos que el agente tiene reclamados (D13). |
 | `kernel-core/src/paging.rs` | El **plan** de mapeo: qué va cacheable y qué no (D12). |
 | `kernel-core/src/stack.rs` | La pila propia del kernel, verificada contra el mapa real. |
-| `kernel-core/src/tests.rs` | 87 tests que corren en la máquina de desarrollo, sin bootear nada. |
+| `kernel-core/src/tests.rs` | 102 tests que corren en la máquina de desarrollo, sin bootear nada. |
 | `boot-uefi/` | El entorno de arranque UEFI, compartido por las dos arquitecturas. Sin `asm!`. |
 | `kernel-x86_64/` | Arranque UEFI + UART 16550 en puertos de E/S. |
 | `kernel-aarch64/` | Arranque UEFI + UART PL011 en MMIO. |
@@ -193,13 +193,34 @@ grep -ao '[a-z0-9-]*@[0-9a-f]*' virt.dtb | sort -u
 
 ## Lo que sigue
 
-1. Parsear las tablas de ACPI que ya sabemos encontrar, para que `describe`
-   devuelva núcleos, PCIe y el controlador de interrupciones.
-2. `mem.claim` y `mem.write`: reclamar memoria física y subirle bytes.
-3. `exec` y la captura de faults como datos (D7/D11). **Ese es el hito que
-   importa**: ahí el agente escribe código máquina, lo corre, y recibe el fault
-   como un valor de retorno en vez de un SIGSEGV.
+**Los once verbos andan en las dos arquitecturas y no queda ninguna deuda
+abierta** (`docs/DISENO.md` §7 está entera en resuelto). El kernel está
+terminado en el sentido que importa: el agente sube código máquina, lo corre con
+el privilegio que declara, y si falla recibe el fault como dato.
 
-Las deudas anotadas están en [`docs/DISENO.md`](docs/DISENO.md) §7 — la más
-importante es que la pila del kernel vive dentro de memoria que hoy se informa
-como libre.
+Lo que sigue no es el kernel: es **llenar el espacio que el kernel deja vacío**
+(P2). Hoy `blob.bin` tiene el mecanismo —se carga, se ejecuta, se puede cancelar,
+y le puede pedir cosas al kernel— pero no tiene contenido. Los drivers que
+nombran D19 y D20 son lo que *va* a ir ahí:
+
+1. Un **cargador NVMe** en el blob, para que el payload no tenga que entrar en
+   los 256 KiB del blob ni en un archivo FAT32.
+2. Un **driver de red**, que es lo que convierte al UART en lo que D5 dice que
+   es: un cordón umbilical y no el transporte.
+
+Lo que falta y **no se puede** está anotado igual, con el número que lo prueba:
+el segundo escalón para cortar un núcleo en aarch64 no existe porque este GIC no
+sabe reconocer una interrupción del Grupo 1, y el kernel lo publica en vez de
+prometerlo.
+
+## Licencia
+
+Doble MIT ([LICENSE-MIT](LICENSE-MIT)) o Apache-2.0
+([LICENSE-APACHE](LICENSE-APACHE)), a elección — que es la convención del
+ecosistema Rust.
+
+Nada de este código sale de Linux, y no por descuido: Linux es GPLv2, pero sobre
+todo sus drivers están tejidos con su propia infraestructura. Acá un driver
+tiene que hablar los once verbos —`mem.claim`, `dma.allow`, `irq.install`— y eso
+no lo hace ningún driver existente. Las especificaciones (NVMe, virtio) son
+públicas y es de ahí que sale lo que se escribe.
