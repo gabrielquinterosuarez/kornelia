@@ -1622,7 +1622,9 @@ def pcie_scan(ask_verb, ident, ecam, buses=1):
     """
     ok, cfg = ask_verb(ident, "mem.claim", {"at": ecam, "bytes": buses << 20})
     if not ok:
-        return None, []
+        # El motivo importa: "ya reclamado" quiere decir que otra prueba de esta
+        # misma sesion no lo solto, y eso no se parece en nada a "no hay bus".
+        return None, cfg
     found = []
     for bus in range(buses):
         for dev in range(32):
@@ -1676,7 +1678,7 @@ def test_lspci(proc, timeout):
         return 1
     cfg, devices = pcie_scan(ask_verb, 301, d["pcie"]["base"])
     if cfg is None:
-        print("  no se pudo reclamar la ventana de configuracion")
+        print(f"  no se pudo reclamar la ventana de configuracion: {devices}")
         return 1
 
     for dev in devices:
@@ -1695,6 +1697,327 @@ def test_lspci(proc, timeout):
     nvme = [d for d in devices if d["class"] == NVME_CLASS]
     print(f"\n  {len(devices)} aparatos, {len(nvme)} de ellos NVMe")
     return 0 if nvme else 1
+
+
+# --- El controlador NVMe ----------------------------------------------------
+#
+# Esto es un driver, y corre del lado del agente: el kernel no sabe que existe
+# (D4). Usa los once verbos y nada mas — `mem.claim` para las colas, `dma.allow`
+# para que el aparato las alcance, y lecturas y escrituras con el ancho exacto
+# que pide cada registro.
+#
+# Los numeros salen de la especificacion NVMe 1.4, que es publica. No hay codigo
+# copiado de ningun lado: los drivers que existen estan atados a la
+# infraestructura de su sistema, y aca lo unico que hay son los once verbos.
+
+# Registros del controlador, en su ventana de memoria.
+NVME_CAP = 0x00       # que sabe hacer (64 bits)
+NVME_VS = 0x08        # version
+NVME_CC = 0x14        # configuracion: aca se lo prende y se lo apaga
+NVME_CSTS = 0x1C      # estado: aca contesta si esta listo
+NVME_AQA = 0x24       # cuantas entradas tienen las colas de administracion
+NVME_ASQ = 0x28       # donde esta la cola de pedidos de administracion
+NVME_ACQ = 0x30       # y la de respuestas
+
+NVME_CC_ENABLE = 1 << 0
+
+# Cuantas entradas tienen las colas de administracion. Cuatro alcanzan: los
+# pedidos de administracion son un punado y se hacen de a uno.
+ADMIN_ENTRIES = 4
+# Una entrada de pedido son 64 bytes; una de respuesta, 16.
+SQ_ENTRY = 64
+CQ_ENTRY = 16
+
+
+class Nvme:
+    """Le habla a un controlador NVMe usando solo los verbos del kernel."""
+
+    def __init__(self, ask_verb, ident):
+        self.ask = ask_verb
+        self.n = ident
+        self.window = None      # el reclamo de su ventana de registros
+        self.sq_tail = 0        # hasta donde se dejaron pedidos
+        self.cq_head = 0        # hasta donde se leyeron respuestas
+        self.phase = 1          # el bit que distingue una respuesta nueva de una vieja
+        self.tag = 1            # con que se reconoce cada respuesta
+        self.stride = 4
+
+    def _id(self):
+        self.n += 1
+        return self.n
+
+    def reg_read(self, off, width=4):
+        ok, r = self.ask(self._id(), "mem.read",
+                         {"handle": self.window["handle"], "off": off,
+                          "len": width, "width": width})
+        if not ok:
+            return None
+        return int.from_bytes(r["bytes"], "little")
+
+    def reg_write(self, off, value, width=4):
+        ok, _ = self.ask(self._id(), "mem.write",
+                         {"handle": self.window["handle"], "off": off,
+                          "bytes": int(value).to_bytes(width, "little"), "width": width})
+        return ok
+
+    def find(self, ecam):
+        """Busca el controlador en el bus y reclama su ventana de registros."""
+        cfg, devices = pcie_scan(self.ask, self._id(), ecam)
+        if cfg is None:
+            return f"no se pudo mirar el bus: {devices}"
+        mine = [d for d in devices if d["class"] == NVME_CLASS]
+        if not mine:
+            self.ask(self._id(), "release", {"handle": cfg["handle"]})
+            return "no hay un controlador NVMe en este bus"
+        dev = mine[0]
+
+        # Que responda a accesos de memoria y que pueda ser maestro del bus: sin
+        # lo segundo no puede leer sus propias colas, que viven en RAM.
+        self.ask(self._id(), "mem.write",
+                 {"handle": cfg["handle"], "off": dev["off"] + 4,
+                  "bytes": bytes([0x06, 0x00])})
+        self.ask(self._id(), "release", {"handle": cfg["handle"]})
+
+        self.bdf = dev["bdf"]
+        # 16 KiB: los registros entran en la primera pagina, pero los timbres
+        # de las colas viven a partir de 0x1000 y hay uno por cola.
+        ok, win = self.ask(self._id(), "mem.claim",
+                           {"at": dev["window"], "bytes": 16384})
+        if not ok:
+            return f"no se pudo alcanzar su ventana: {win}"
+        self.window = win
+        return None
+
+    def describe(self):
+        """Lo que el controlador dice de si mismo, antes de tocarlo."""
+        cap = self.reg_read(NVME_CAP, 8)
+        vs = self.reg_read(NVME_VS)
+        return {
+            "version": f"{(vs >> 16) & 0xFFFF}.{(vs >> 8) & 0xFF}",
+            # Cuantas entradas soporta una cola, menos uno.
+            "max_entries": (cap & 0xFFFF) + 1,
+            # Cada cuanto esta el timbre de la cola siguiente.
+            "doorbell_stride": 4 << ((cap >> 32) & 0xF),
+            # Cuanto puede tardar en estar listo, en pasos de 500 ms.
+            "timeout_ms": ((cap >> 24) & 0xFF) * 500,
+            # La pagina mas chica que sabe usar.
+            "page_bytes": 1 << (12 + ((cap >> 48) & 0xF)),
+        }
+
+    def wait_ready(self, want, timeout_ms):
+        """Espera a que CSTS.RDY diga lo que se le pidio a CC.EN."""
+        # El plazo lo declara el propio controlador en CAP.TO: esperar un numero
+        # inventado seria decidir por el cuanto puede tardar.
+        deadline = time.time() + max(timeout_ms, 500) / 1000.0
+        while time.time() < deadline:
+            csts = self.reg_read(NVME_CSTS)
+            if csts is None:
+                return "el controlador dejo de contestar"
+            if csts & 1 == want:
+                return None
+            # Bit 1 de CSTS: se murio y hay que resetearlo entero.
+            if csts & 2:
+                return "el controlador informa una falla fatal"
+        return f"no llego a RDY={want} en {timeout_ms} ms"
+
+
+    def start(self, spec):
+        """Apaga el controlador, le da sus colas de administracion y lo prende.
+
+        Es la secuencia que manda la especificacion y no se puede acortar: hay
+        que verlo apagado antes de configurarlo, porque los registros de las
+        colas solo se leen cuando pasa de apagado a prendido.
+        """
+        # 1. Apagarlo y esperar a que lo confirme.
+        self.reg_write(NVME_CC, 0)
+        if (why := self.wait_ready(0, spec["timeout_ms"])):
+            return f"no se apago: {why}"
+
+        # 2. Memoria para las dos colas. Una pagina para cada una, que es de
+        #    sobra: cuatro entradas de 64 bytes son 256.
+        ok, sq = self.ask(self._id(), "mem.claim", {"bytes": 4096, "align": 4096})
+        if not ok:
+            return f"sin memoria para la cola de pedidos: {sq}"
+        ok, cq = self.ask(self._id(), "mem.claim", {"bytes": 4096, "align": 4096})
+        if not ok:
+            return f"sin memoria para la cola de respuestas: {cq}"
+        self.sq, self.cq = sq, cq
+
+        # 3. Dejarlas en cero. Una entrada de respuesta se reconoce por un bit
+        #    que alterna, asi que arrancar con basura seria leer respuestas que
+        #    nadie escribio.
+        self.ask(self._id(), "mem.write", {"handle": sq["handle"], "bytes": bytes(4096)})
+        self.ask(self._id(), "mem.write", {"handle": cq["handle"], "bytes": bytes(4096)})
+
+        # 4. **Declarar el DMA**: el controlador lee y escribe esas colas por su
+        #    cuenta, sin pasar por el CPU. Sin esto el IOMMU lo bloquea, que es
+        #    justo lo que D8 promete — y el sintoma seria que nunca contesta.
+        for claim in (sq, cq):
+            ok, e = self.ask(self._id(), "dma.allow",
+                             {"device": self.bdf, "handle": claim["handle"]})
+            if not ok:
+                return f"el IOMMU no dejo declarar la cola: {e}"
+
+        # 5. Decirle donde estan y de que tamano. AQA lleva las dos cantidades
+        #    menos uno, cada una en su mitad.
+        self.reg_write(NVME_AQA, ((ADMIN_ENTRIES - 1) << 16) | (ADMIN_ENTRIES - 1))
+        self.reg_write(NVME_ASQ, sq["start"], 8)
+        self.reg_write(NVME_ACQ, cq["start"], 8)
+
+        # 6. Prenderlo. Los ceros del medio son los tamanos de entrada por
+        #    omision (64 y 16 bytes) y el conjunto de comandos NVM.
+        self.reg_write(NVME_CC, NVME_CC_ENABLE | (6 << 16) | (4 << 20))
+        if (why := self.wait_ready(1, spec["timeout_ms"])):
+            return f"no se prendio: {why}"
+        # Cada cuanto esta el timbre siguiente lo dice el aparato, no la
+        # costumbre: con stride distinto de 4 los timbres caen en otro lado.
+        self.stride = spec["doorbell_stride"]
+        return None
+
+    def release(self):
+        """Suelta lo reclamado. Lo que el agente toma, el agente devuelve."""
+        for claim in (getattr(self, "sq", None), getattr(self, "cq", None), self.window):
+            if claim:
+                self.ask(self._id(), "release", {"handle": claim["handle"]})
+
+
+    def admin(self, opcode, nsid=0, prp1=0, cdw10=0, cdw11=0):
+        """Manda un comando de administracion y espera su respuesta.
+
+        Una cola NVMe son dos anillos en RAM: uno donde el que manda escribe
+        pedidos, otro donde el aparato escribe respuestas. Nadie interrumpe a
+        nadie: se avisa tocando un timbre, que es una escritura en la ventana de
+        registros del aparato.
+        """
+        # El pedido: 64 bytes. Solo se llenan los campos que se usan; el resto
+        # va en cero, que para este comando significa "por omision".
+        cmd = bytearray(SQ_ENTRY)
+        cmd[0] = opcode
+        cmd[1] = 0                                     # sin banderas
+        cmd[2:4] = self.tag.to_bytes(2, "little")      # con que se reconoce la respuesta
+        cmd[4:8] = nsid.to_bytes(4, "little")
+        cmd[24:32] = prp1.to_bytes(8, "little")        # a donde escribe lo que devuelva
+        cmd[40:44] = cdw10.to_bytes(4, "little")
+        cmd[44:48] = cdw11.to_bytes(4, "little")
+
+        slot = self.sq_tail
+        ok, _ = self.ask(self._id(), "mem.write",
+                         {"handle": self.sq["handle"], "off": slot * SQ_ENTRY,
+                          "bytes": bytes(cmd)})
+        if not ok:
+            return None, "no se pudo dejar el pedido en la cola"
+
+        # Tocarle el timbre: "hay algo nuevo hasta aca". Los timbres viven a
+        # partir de 0x1000 y el de la cola de pedidos numero 0 es el primero.
+        self.sq_tail = (slot + 1) % ADMIN_ENTRIES
+        self.reg_write(0x1000, self.sq_tail)
+
+        # Y esperar la respuesta. Se reconoce por un bit que **alterna** en cada
+        # vuelta del anillo: no alcanza con mirar si hay algo escrito, porque lo
+        # de la vuelta anterior tambien esta escrito.
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            ok, r = self.ask(self._id(), "mem.read",
+                             {"handle": self.cq["handle"], "off": self.cq_head * CQ_ENTRY,
+                              "len": CQ_ENTRY})
+            if not ok:
+                return None, "no se pudo mirar la cola de respuestas"
+            entry = r["bytes"]
+            status = int.from_bytes(entry[14:16], "little")
+            if (status & 1) != self.phase:
+                continue
+            self.cq_head = (self.cq_head + 1) % ADMIN_ENTRIES
+            if self.cq_head == 0:
+                # Dio la vuelta: de aca en adelante el bit vale al reves.
+                self.phase ^= 1
+            # Y decirle hasta donde se leyo, o la cola se llena y se traba.
+            self.reg_write(0x1000 + self.stride, self.cq_head)
+            code = status >> 1
+            if code:
+                return None, f"el controlador rechazo el comando: estado {code:#x}"
+            self.tag += 1
+            return entry, None
+        return None, "el controlador no contesto en 5 s"
+
+    def identify(self):
+        """Le pregunta al controlador quien es. Es el primer comando de todos."""
+        ok, buf = self.ask(self._id(), "mem.claim", {"bytes": 4096, "align": 4096})
+        if not ok:
+            return None, f"sin memoria para la respuesta: {buf}"
+        self.ask(self._id(), "mem.write", {"handle": buf["handle"], "bytes": bytes(4096)})
+        # El aparato escribe ahi por su cuenta, asi que hay que declararlo.
+        ok, e = self.ask(self._id(), "dma.allow",
+                         {"device": self.bdf, "handle": buf["handle"]})
+        if not ok:
+            return None, f"el IOMMU no dejo declarar el buffer: {e}"
+
+        # Opcode 6 = Identify. cdw10 = 1 pide la ficha del controlador.
+        _, why = self.admin(0x06, prp1=buf["start"], cdw10=1)
+        if why:
+            self.ask(self._id(), "release", {"handle": buf["handle"]})
+            return None, why
+
+        ok, r = self.ask(self._id(), "mem.read",
+                         {"handle": buf["handle"], "off": 0, "len": 128})
+        self.ask(self._id(), "release", {"handle": buf["handle"]})
+        if not ok:
+            return None, "no se pudo leer lo que dejo"
+        data = r["bytes"]
+        return {
+            "vendor": int.from_bytes(data[0:2], "little"),
+            # Vienen rellenados con espacios a la derecha, no terminados en cero.
+            "serial": data[4:24].decode("ascii", "replace").strip(),
+            "model": data[24:64].decode("ascii", "replace").strip(),
+        }, None
+
+
+def test_nvme(proc, timeout):
+    """Le habla a un controlador NVMe de verdad, con los once verbos y nada mas.
+
+    Es la primera prueba de que la superficie del kernel alcanza para escribir
+    un driver: no hay un verbo `disco`, hay memoria, permiso de DMA y registros.
+    """
+    def ask_verb(n, verb, args):
+        resp, _ = ask(proc, [n, verb, args], timeout)
+        _, ok, load = resp
+        return ok, load
+
+    ok, d = ask_verb(400, "describe", {"what": ["pcie"]})
+    if not ok or not d["pcie"]:
+        print("  esta maquina no informa PCIe")
+        return 1
+
+    nvme = Nvme(ask_verb, 401)
+    if (why := nvme.find(d["pcie"]["base"])):
+        print(f"  {why}")
+        return 1
+    print(f"  controlador encontrado: el bus lo llama {nvme.bdf:#x}")
+
+    spec = nvme.describe()
+    print(f"  dice ser NVMe {spec['version']}, colas de hasta {spec['max_entries']}"
+          f" entradas, paginas de {spec['page_bytes']} bytes")
+    print(f"  y que puede tardar hasta {spec['timeout_ms']} ms en estar listo")
+
+    if (why := nvme.start(spec)):
+        print(f"  FALLA: {why}")
+        nvme.release()
+        return 1
+    print("  apagado, configurado y prendido: dice estar listo")
+
+    # Y ahora la prueba de que las colas andan: un comando de verdad, ida y
+    # vuelta. Que conteste prueba tres cosas de una — que leyo el pedido de la
+    # cola, que el IOMMU lo dejo, y que escribio la respuesta donde debia.
+    who, why = nvme.identify()
+    if why:
+        print(f"  FALLA: {why}")
+        nvme.release()
+        return 1
+    print(f"  y contesta quien es: modelo {who['model']!r}, "
+          f"serie {who['serial']!r}, fabricante {who['vendor']:#06x}")
+
+    nvme.release()
+    print("\n  nvme: ok")
+    return 0
 
 
 # El aparato `edu` de QEMU: un motor de DMA que se maneja con cuatro escrituras.
@@ -1907,6 +2230,12 @@ def test_dma(proc, timeout, arch):
         print(f"  y despues de soltarla:          {got.hex() if got else '?'}")
         if got != pattern:
             failures.append("al soltar el reclamo no se le saco el permiso al aparato")
+
+    # Soltar la ventana de configuracion. **No es prolijidad**: la siguiente
+    # prueba que quiera mirar el bus se encuentra con `already-claimed` y falla
+    # por un motivo que no tiene nada que ver con lo que prueba. Este proyecto ya
+    # pago esa moneda una vez.
+    ask_verb(122, "release", {"handle": cfg["handle"]})
 
     print()
     if failures:
@@ -2418,6 +2747,8 @@ def main():
                     help="arranca sin ACPI, para que la maquina se describa por device tree")
     ap.add_argument("--kvm", action="store_true",
                     help="que el codigo lo ejecute el silicio de verdad, no la emulacion")
+    ap.add_argument("--nvme", action="store_true",
+                    help="le habla al controlador NVMe con los once verbos")
     ap.add_argument("--lspci", action="store_true",
                     help="lista los aparatos del bus PCIe, que es el primer paso de un driver")
     ap.add_argument("--console", action="store_true",
@@ -2579,6 +2910,9 @@ def main():
         if args.lspci:
             print("\n== lo que hay en el bus PCIe ==")
             rc |= test_lspci(proc, args.timeout)
+        if args.nvme:
+            print("\n== un driver de NVMe, escrito con los once verbos ==")
+            rc |= test_nvme(proc, args.timeout)
         # La consola va ultima: se queda con la maquina hasta que la suelten, asi
         # que cualquier prueba pedida en la misma corrida ya paso por aca.
         if args.console:

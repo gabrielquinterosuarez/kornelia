@@ -59,7 +59,7 @@ elif ! command -v python3 >/dev/null; then
 else
     for arch in x86_64 aarch64; do
         step "arranca $arch y contesta el protocolo"
-        output=$(timeout 240 ./scripts/client.py --arch "$arch" --smp 4 --what memory,tables --clock --msi --deadline --recover --memory --exec --cores --mailbox --doorbell --handler --during --permission --supervised --on-core --dma 2>&1 || true)
+        output=$(timeout 240 ./scripts/client.py --arch "$arch" --smp 4 --what memory,tables --clock --msi --deadline --recover --memory --exec --cores --mailbox --doorbell --handler --during --permission --supervised --on-core --dma --nvme 2>&1 || true)
 
         # Lo que tiene que haber dicho en el banner de texto.
         for expected in "architecture: $arch" "memory:" "tables:" \
@@ -133,6 +133,19 @@ else
         fi
         grep -qFe "kernel/agent separation: the hardware enforces it" <<<"$output" \
             || bad "$arch no informa que el hardware haga cumplir la separacion"
+
+        # Y que se le pueda escribir un driver a un aparato de verdad usando
+        # **solo los once verbos**. Es la primera prueba de que la superficie
+        # alcanza: no hay un verbo `disco`, hay memoria, permiso de DMA y
+        # registros. Que el controlador conteste quien es prueba el camino
+        # entero — leyo el pedido de una cola en RAM por DMA, el IOMMU lo dejo,
+        # y escribio la respuesta donde se le dijo.
+        if ! grep -qFe "nvme: ok" <<<"$output"; then
+            bad "$arch no pudo manejar el controlador NVMe"
+            printf '%s\n' "$output" | grep -E "FALLA:|controlador|nvme" | head -10
+        fi
+        grep -qFe "serie 'kornelia'" <<<"$output" \
+            || bad "$arch no le hablo al disco que le pusimos"
 
         # Y que el puerto serie en uso sea el que dice la maquina, no el
         # horneado (deuda 2). La prueba no es que lo informe: es que **todo lo
