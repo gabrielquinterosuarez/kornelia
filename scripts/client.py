@@ -2128,6 +2128,8 @@ def main():
                     help="cuantos nucleos darle a QEMU")
     ap.add_argument("--no-acpi", action="store_true",
                     help="arranca sin ACPI, para que la maquina se describa por device tree")
+    ap.add_argument("--kvm", action="store_true",
+                    help="que el codigo lo ejecute el silicio de verdad, no la emulacion")
     ap.add_argument("--write-blob", metavar="RUTA",
                     help="escribe un blob.bin de prueba para esta arquitectura y sale")
     ap.add_argument("--msi", action="store_true",
@@ -2183,6 +2185,13 @@ def main():
     if args.smp > 1:
         # Los scripts le pasan a QEMU cualquier argumento extra.
         cmd += ["-smp", str(args.smp)]
+    # Con esto el codigo del kernel lo ejecuta el procesador de verdad en vez de
+    # la emulacion. Importa por la misma razon que importan las dos
+    # arquitecturas (D22): emulando, un modelo de memoria mas fuerte que el real
+    # esconde barreras que faltan, y ademas el reloj y los bits de direccion
+    # fisica dejan de ser los que invento QEMU y pasan a ser los del silicio.
+    if args.kvm:
+        cmd += ["-accel", "kvm"]
     # Sin ACPI el firmware le pasa al kernel un device tree en su lugar: es el
     # otro dialecto en el que una maquina se describe, y el kernel tiene que
     # poder averiguar lo mismo por los dos (P4).
