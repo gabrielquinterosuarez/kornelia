@@ -37,6 +37,35 @@ impl Clock {
     }
 }
 
+/// Espera a que algo pase, con un plazo **en tiempo** si la máquina tiene reloj
+/// y en vueltas si no.
+///
+/// Existe porque el kernel espera en varios lugares —que un núcleo arranque, que
+/// conteste, que suelte lo que está corriendo— y hasta que hubo reloj todos
+/// contaban iteraciones. Un tope en vueltas no se puede explicar: las mismas
+/// vueltas son milisegundos o minutos según la máquina, y el número no dice
+/// cuánto se está dispuesto a esperar.
+///
+/// Devuelve `true` si la condición se cumplió, `false` si se agotó el plazo.
+pub fn wait_until<P: Platform>(p: &mut P, ms: u64, rounds: u64, mut done: impl FnMut() -> bool) -> bool {
+    let deadline = p.clock().map(|c| p.ticks().wrapping_add(c.ticks_for_ms(ms)));
+    let mut spun = 0u64;
+    while !done() {
+        match deadline {
+            // Con reloj, lo que corta es el tiempo. El tope de vueltas sigue
+            // como red por si el reloj no avanza, y por eso tiene que estar muy
+            // por encima: una red que se dispara antes que lo que cuida no es
+            // una red.
+            Some(until) if p.ticks() >= until => return false,
+            None if spun >= rounds => return false,
+            _ => {}
+        }
+        spun += 1;
+        core::hint::spin_loop();
+    }
+    true
+}
+
 pub trait Platform {
     /// Nombre de la arquitectura. El agente lo recibe en `describe`; el
     /// protocolo nunca lleva nombres de registros horneados (D3).

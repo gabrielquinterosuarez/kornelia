@@ -940,6 +940,23 @@ def test_deadline(proc, timeout, arch):
     else:
         print("  y un plazo que no vence no corta nada")
 
+    # Y el mismo plazo, pero en **otro** nucleo. Ahi el corte no lo hace el reloj
+    # local sino el timbre, pero para el agente tiene que verse igual: declaro
+    # cuanto podia tardar y el kernel lo cumple.
+    core = core_for_raw(ask_verb, 168)
+    if core is not None:
+        ok, cr = ask_verb(169, "mem.claim", {"bytes": 4096, "align": 4096})
+        ask_verb(170, "mem.write", {"handle": cr["handle"], "bytes": FOREVER[arch]})
+        ok, r = ask_verb(171, "exec", {"handle": cr["handle"], "mode": "raw",
+                                       "core": core, "deadline_ms": 100})
+        if not ok:
+            failures.append(f"el plazo en otro nucleo no se cumplio: {r}")
+        elif not r.get("cancelled"):
+            failures.append(f"volvio sin decir que lo cortaron: {r}")
+        else:
+            print("  y en otro nucleo tambien: volvio cortado")
+        ask_verb(172, "release", {"handle": cr["handle"]})
+
     ask_verb(167, "release", {"handle": h})
 
     print()

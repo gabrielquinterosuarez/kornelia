@@ -1415,7 +1415,7 @@ fn exec<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
             // el codigo que dispara una interrupcion pasa a correr en el nucleo
             // reclamado, y del otro lado no habia quien la atendiera.
             p.set_interrupts(true);
-            let r = unsafe { work::run_on(p, handle, job) };
+            let r = unsafe { work::run_on(p, handle, job, a.deadline_ms) };
             p.set_interrupts(false);
             match r {
                 Err(e) => return reply_error(p, id, e.code()),
@@ -1651,11 +1651,14 @@ fn dma_allow<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, hw: &Hardware)
 // core.claim
 // ---------------------------------------------------------------------------
 
-/// Cuanto se espera a que un nucleo avise que llego, en vueltas de espera.
+/// Cuanto se espera a que un nucleo avise que llego.
 ///
-/// No hay reloj todavia, asi que se cuenta en iteraciones. El numero es
-/// generoso: arrancar un nucleo tarda microsegundos, y esperar de mas solo
-/// cuesta tiempo la unica vez que el nucleo no arranca.
+/// Arrancar un nucleo tarda microsegundos, asi que medio segundo es generoso de
+/// sobra — y esperar de mas solo cuesta tiempo la unica vez que no arranca.
+/// Antes esto eran doscientos millones de vueltas, un numero que no se podia
+/// explicar porque no decia cuanto se estaba dispuesto a esperar.
+const WAIT_MS: u64 = 500;
+/// Y el tope en vueltas, para la maquina que no diga a que ritmo sube su reloj.
 const WAIT_ROUNDS: u64 = 200_000_000;
 
 /// Arranca un nucleo y lo deja esperando trabajo (D13).
@@ -1715,11 +1718,7 @@ fn core_claim<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, hw: &Hardware
 
     // Que el pedido se haya hecho no significa que el nucleo este vivo: son dos
     // CPUs distintas y una no puede afirmar por la otra. Se espera a que avise.
-    let mut rounds = 0u64;
-    while !cores::has_arrived(slot) && rounds < WAIT_ROUNDS {
-        core::hint::spin_loop();
-        rounds += 1;
-    }
+    crate::platform::wait_until(p, WAIT_MS, WAIT_ROUNDS, || cores::has_arrived(slot));
 
     if !cores::has_arrived(slot) {
         cores::settle(slot, cores::State::Failed);

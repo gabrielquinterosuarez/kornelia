@@ -230,12 +230,10 @@ cubría todavía:
    el cordón. Mientras tanto el kernel **lo publica** (`describe exec` trae `cancel`) en vez de
    prometer un corte que no llega.
 
-3. **`core.claim` y `exec {core}` siguen esperando en vueltas**, ahora que hay reloj con qué
-   medir. Ahí el número solo cambia cuánto se tarda en dar un núcleo por perdido, así que no
-   rompe nada — pero un tope en vueltas es un tope que no se puede explicar.
-4. **El blob no le puede pedir nada al kernel.** Corre antes del protocolo, así que no tiene
+3. **El blob no le puede pedir nada al kernel.** Corre antes del protocolo, así que no tiene
    verbos: toca la máquina directo, que alcanza para un cargador (D19) pero no para algo que
    quiera reclamar memoria o instalar un handler.
+
 
 ## Cosas que ya costaron caras
 

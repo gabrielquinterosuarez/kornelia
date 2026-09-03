@@ -1251,7 +1251,7 @@ fn work_for_a_core_that_does_not_exist_is_refused() {
         let job = crate::work::Job { entry: 0x1000, region: (0x1000, 0x1000), supervised: false,
             initial: [None; crate::protocol::MAX_REGISTERS] };
         // SAFETY: no llega a correr nada — el handle no es de nadie.
-        let e = unsafe { crate::work::run_on(&mut Fake::new(), 999, job) };
+        let e = unsafe { crate::work::run_on(&mut Fake::new(), 999, job, None) };
         assert_eq!(e.err(), Some(crate::work::Error::NoSuchCore));
     })
 }
@@ -1266,7 +1266,7 @@ fn a_core_that_has_not_arrived_gets_no_work() {
         let job = crate::work::Job { entry: 0x1000, region: (0x1000, 0x1000), supervised: false,
             initial: [None; crate::protocol::MAX_REGISTERS] };
         // SAFETY: no llega a correr nada — el nucleo no llego.
-        let e = unsafe { crate::work::run_on(&mut Fake::new(), handle, job) };
+        let e = unsafe { crate::work::run_on(&mut Fake::new(), handle, job, None) };
         assert_eq!(e.err(), Some(crate::work::Error::NotReady));
     })
 }

@@ -174,16 +174,24 @@ impl Error {
     }
 }
 
-/// Cuantas vueltas se espera una respuesta antes de darla por perdida.
+/// El tope en vueltas, para la maquina que no diga a que ritmo sube su reloj.
 ///
-/// Mismo criterio que la espera de `core.claim`: no hay reloj todavia, asi que
-/// se cuenta en iteraciones. Es generoso a proposito — lo unico que cuesta
-/// esperar de mas es tiempo, y solo la vez que el nucleo no contesta.
-///
-/// Que exista un tope es lo que hace que un `exec` en otro nucleo no pueda
-/// colgar al que atiende el protocolo: el cordon umbilical nunca se pierde por
-/// algo que hizo el agente (D5, D17).
+/// Que exista **algun** tope es lo que hace que un `exec` en otro nucleo no
+/// pueda colgar al que atiende el protocolo: el cordon umbilical nunca se
+/// pierde por algo que hizo el agente (D5, D17). Con reloj el que corta es el
+/// tiempo, y esto queda de red.
 const WAIT_ROUNDS: u64 = 200_000_000;
+
+/// Cuanto se espera una respuesta cuando el agente **no declaro** un plazo.
+///
+/// Cinco segundos, y el numero se puede explicar: es lo que se esta dispuesto a
+/// dejar al agente sin respuesta antes de dar el nucleo por perdido. Antes eran
+/// doscientos millones de vueltas, que no dicen nada.
+///
+/// El que quiera mas no tiene que pedir que se suba este numero: declara su
+/// plazo con `deadline_ms`, o manda el trabajo con `wait:false` y pregunta
+/// despues. El tope de aca existe para el que **no** dijo nada.
+const DEFAULT_WAIT_MS: u64 = 5_000;
 
 /// Le deja el trabajo a un nucleo y **vuelve enseguida** (deuda 13).
 ///
@@ -270,20 +278,41 @@ fn answer_of(slot: usize) -> Outcome {
 /// # Safety
 ///
 /// Lo mismo que `submit`.
-pub unsafe fn run_on<P: Platform>(p: &mut P, handle: u64, job: Job) -> Result<Outcome, Error> {
+pub unsafe fn run_on<P: Platform>(
+    p: &mut P,
+    handle: u64,
+    job: Job,
+    deadline_ms: Option<u64>,
+) -> Result<Outcome, Error> {
     let slot = submit(p, handle, job)?;
 
-    let mut rounds = 0u64;
-    while STATE[slot].load(Ordering::Acquire) != ANSWERED {
-        rounds += 1;
-        if rounds > WAIT_ROUNDS {
-            // No se limpia el buzon: el nucleo podria despertarse tarde y
-            // escribir una respuesta encima. Queda marcado como perdido, y esa
-            // ranura no recibe mas trabajo.
-            cores::settle(slot, cores::State::Failed);
-            return Err(Error::NoAnswer);
+    // El plazo lo declara el agente; si no dijo nada, el del kernel. En los dos
+    // casos se mide en **tiempo** y no en vueltas: un tope en vueltas no se
+    // puede explicar, porque las mismas vueltas son milisegundos o minutos
+    // segun la maquina.
+    let ms = deadline_ms.unwrap_or(DEFAULT_WAIT_MS);
+    let answered = crate::platform::wait_until(p, ms, WAIT_ROUNDS, || {
+        STATE[slot].load(Ordering::Acquire) == ANSWERED
+    });
+    if !answered {
+        // Vencio el plazo. **Se corta**, no se abandona: el agente declaro
+        // cuanto podia tardar su codigo, y hacerlo cumplir es lo mismo que en el
+        // nucleo del protocolo — lo que cambia es que aca el corte viaja por el
+        // timbre en vez de por el reloj local.
+        if unsafe { cancel(p, slot) } {
+            // Se dejo cortar: la respuesta es un `exec` cortado, no un nucleo
+            // perdido. El nucleo sigue sirviendo.
+            mark_cancelled(slot);
+            STATE[slot].store(ANSWERED, Ordering::Release);
+            let mut a = answer_of(slot);
+            a.cancelled = true;
+            a.faulted = false;
+            return Ok(a);
         }
-        core::hint::spin_loop();
+        // No se dejo cortar. Ahi si esta perdido, y no se limpia el buzon: el
+        // nucleo podria despertarse tarde y escribir una respuesta encima.
+        cores::settle(slot, cores::State::Lost);
+        return Err(Error::NoAnswer);
     }
 
     // La ranura queda en `ANSWERED` y no se vacia: el resultado tiene que
@@ -382,18 +411,7 @@ pub unsafe fn cancel<P: Platform>(p: &mut P, slot: usize) -> bool {
 /// Con reloj se espera un tiempo; sin reloj, vueltas. Igual que la ventana del
 /// blob: un plazo que no se sabe cuanto dura no es un plazo.
 fn wait_until_quiet<P: Platform>(p: &mut P, slot: usize) -> bool {
-    let deadline = p.clock().map(|c| p.ticks().wrapping_add(c.ticks_for_ms(CANCEL_MS)));
-    let mut rounds = 0u64;
-    while is_busy(slot) {
-        match deadline {
-            Some(until) if p.ticks() >= until => return false,
-            None if rounds > 20_000_000 => return false,
-            _ => {}
-        }
-        rounds += 1;
-        core::hint::spin_loop();
-    }
-    true
+    crate::platform::wait_until(p, CANCEL_MS, 20_000_000, || !is_busy(slot))
 }
 
 /// Vacia el buzon de una ranura.
