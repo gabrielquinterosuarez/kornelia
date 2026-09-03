@@ -20,11 +20,16 @@ import argparse
 import json
 import os
 import select
+import socket
 import subprocess
 import sys
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Donde sale el cable cuando la maquina corre por su cuenta. Un default para que
+# levantarla y engancharse no pidan ponerse de acuerdo en una ruta.
+DEFAULT_SOCKET = "/tmp/kornelia.sock"
 MARKER = b"-- CBOR --"
 
 
@@ -2188,6 +2193,28 @@ protocolo manda el kernel, asi que ahi solo corre supervised (D29).
 """
 
 
+class Attached:
+    """Una maquina que ya estaba viva, alcanzada por su socket.
+
+    Presenta lo mismo que un QEMU lanzado por nosotros —`stdin`, `stdout`,
+    `kill`— para que el resto del cliente no tenga que saber cual de las dos es.
+    La diferencia esta en `kill`: aca solo se corta el cable. La maquina sigue
+    andando, que es de lo que se trata (D14).
+    """
+
+    def __init__(self, path):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.connect(path)
+        self.stdin = self.sock.makefile("wb", buffering=0)
+        self.stdout = self.sock.makefile("rb", buffering=0)
+
+    def kill(self):
+        self.sock.close()
+
+    def wait(self):
+        pass
+
+
 def console_value(token):
     """Traduce lo que escribio un humano al tipo que espera el protocolo."""
     low = token.lower()
@@ -2302,6 +2329,8 @@ def main():
                     help="que el codigo lo ejecute el silicio de verdad, no la emulacion")
     ap.add_argument("--console", action="store_true",
                     help="una terminal para hablarle al kernel a mano")
+    ap.add_argument("--connect", metavar="SOCKET", nargs="?", const=DEFAULT_SOCKET,
+                    help="hablarle a una maquina que ya esta viva, en vez de arrancar una")
     ap.add_argument("--write-blob", metavar="RUTA",
                     help="escribe un blob.bin de prueba para esta arquitectura y sale")
     ap.add_argument("--msi", action="store_true",
@@ -2368,11 +2397,24 @@ def main():
     # otro dialecto en el que una maquina se describe, y el kernel tiene que
     # poder averiguar lo mismo por los dos (P4).
     env = dict(os.environ, NO_ACPI="1") if args.no_acpi else None
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=subprocess.DEVNULL, cwd=ROOT, bufsize=0, env=env)
+    if args.connect:
+        # La maquina ya arranco y ya paso el marcador, asi que no hay banner que
+        # leer: se empieza hablando. Si del otro lado no hay nadie, el primer
+        # pedido lo dice.
+        try:
+            proc = Attached(args.connect)
+        except OSError as e:
+            print(f"no hay una maquina en {args.connect}: {e}")
+            print(f"  levantala con:  SOCKET={args.connect} ./scripts/run-{args.arch}.sh")
+            return 1
+        print(f"enganchado a la maquina en {args.connect}")
+    else:
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, cwd=ROOT, bufsize=0, env=env)
     try:
-        print(f"arrancando {args.arch} en QEMU...")
-        read_until_marker(proc, args.timeout, show=True, cancel_blob=args.cancel_blob)
+        if not args.connect:
+            print(f"arrancando {args.arch} en QEMU...")
+            read_until_marker(proc, args.timeout, show=True, cancel_blob=args.cancel_blob)
 
         argumentos = {}
         if args.what:

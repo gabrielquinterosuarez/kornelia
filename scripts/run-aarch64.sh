@@ -42,6 +42,17 @@ if [ "${NO_ACPI:-0}" = "1" ]; then
     MACHINE=$MACHINE,acpi=off
 fi
 
+# El cordon umbilical, por donde sale y entra todo (D5).
+#
+# Con SOCKET=<ruta> el cable sale por un socket en vez de por esta terminal, y
+# entonces **la maquina sobrevive a que el cliente se vaya**: se puede mandar
+# algo largo, cortar la conexion y volver a buscar el resultado, que es
+# justamente lo que D14 dice que el agente tiene que poder hacer. Sin esto el
+# cliente es dueno de QEMU y al salir se lo lleva puesto.
+#
+# `server=on,wait=off` = QEMU escucha pero arranca igual sin que nadie este del
+# otro lado; si no, la maquina no bootearia hasta que alguien se conecte.
+#
 # OJO: `-serial stdio` va SIN el prefijo `mon:`, y no es un olvido.
 #
 # Con `mon:` QEMU multiplexa su monitor sobre la misma terminal, y ese
@@ -51,6 +62,12 @@ fi
 # mensaje en silencio.
 #
 # El costo es que Ctrl-A X no sale. Se sale con Ctrl-C.
+if [ -n "${SOCKET:-}" ]; then
+    rm -f "$SOCKET"
+    SERIAL=(-chardev "socket,id=cord,path=$SOCKET,server=on,wait=off" -serial chardev:cord)
+else
+    SERIAL=(-serial stdio)
+fi
 exec qemu-system-aarch64 \
     `# D8: el IOMMU va encendido por defecto. Y el aparato 'edu' es un motor de` \
     `# DMA que se maneja con cuatro escrituras: es lo que permite comprobar que` \
@@ -63,4 +80,4 @@ exec qemu-system-aarch64 \
     -drive if=pflash,format=raw,unit=0,readonly=on,file="$AAVMF_CODE" \
     -drive if=pflash,format=raw,unit=1,file=target/AAVMF_VARS-aarch64.fd \
     -drive format=raw,file=fat:rw:target/esp-aarch64 \
-    -serial stdio -display none -no-reboot "$@"
+    "${SERIAL[@]}" -display none -no-reboot "$@"

@@ -361,6 +361,10 @@ Sin ese aparato, `dma.allow` no se podría probar contra nada real.
 ./scripts/run-x86_64.sh      # Ctrl-C para salir (NO Ctrl-A X: ver D26)
 ./scripts/run-aarch64.sh
 ./scripts/client.py --console       # una terminal para hablarle a mano
+
+# Y si se quiere que la maquina sobreviva a que el cliente se vaya (D14):
+SOCKET=/tmp/kornelia.sock ./scripts/run-x86_64.sh &   # el cable sale por un socket
+./scripts/client.py --connect --console               # engancharse, irse, y volver
 ./scripts/client.py --what memory   # hablarle el protocolo
 ./scripts/client.py --kvm --exec    # que el codigo lo corra el silicio, no la emulacion
 ./scripts/client.py --supervised    # D27: correr sin privilegio y ver el fault
