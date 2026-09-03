@@ -207,6 +207,12 @@ contesta por donde le llegó el pedido; esto agrega una tercera puerta, no un
 mecanismo. Se comprueba mirando los reclamos después del arranque: el que pidió
 el blob está, y con el blob cancelado no está.
 
+**Ojo: del blob está el mecanismo, no el contenido.** No hay driver de red ni de
+NVMe ni un `blob.bin` en el repo — el único blob que existe es el de prueba que
+genera `client.py`. Los drivers que nombran D19 y D20 son lo que *va* a ir ahí.
+Así que hoy el único transporte es el cordón umbilical: el transporte rápido que
+D5 le deja al agente todavía no lo escribió nadie.
+
 El portón es `./scripts/check.sh`: frontera + idioma + 102 tests + compila las
 dos + las bootea en QEMU y les habla el protocolo con `scripts/client.py`, **y
 bootea aarch64 una vez más sin ACPI** para que el device tree no sea una
