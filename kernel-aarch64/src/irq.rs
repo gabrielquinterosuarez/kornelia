@@ -109,16 +109,16 @@ unsafe fn write_byte(base: u64, reg: u64, v: u8) {
 /// Las tablas de paginas tienen que estar puestas.
 pub unsafe fn install(hw: &Hardware) -> Result<u8, &'static str> {
     let Some(gic) = hw.interrupts.filter(|i| i.kind == "gic") else {
-        return Err("la maquina no informa un GIC");
+        return Err("the machine does not report a GIC");
     };
     if gic.cpu_interface == 0 {
-        return Err("la maquina no informa la interfaz de nucleo del GIC");
+        return Err("the machine does not report the GIC core interface");
     }
     let Some(serial) = hw.serial else {
-        return Err("la maquina no informa donde esta el puerto serie");
+        return Err("the machine does not report where the serial port is");
     };
     if serial.gsi == 0 {
-        return Err("la maquina no informa por que interrupcion avisa el serie");
+        return Err("the machine does not report which interrupt the serial raises");
     }
 
     GICD = gic.address;
@@ -239,7 +239,7 @@ pub fn sleep() {
 /// Corre en el nucleo reclamado, con su tabla de vectores ya puesta.
 pub unsafe fn prepare_worker() -> Result<(), &'static str> {
     if GICC == 0 {
-        return Err("el GIC todavia no esta encendido");
+        return Err("the GIC is not on yet");
     }
     write_reg(GICC, GICC_PMR, 0xF0);
     write_reg(GICC, GICC_CTLR, 1);
@@ -386,7 +386,7 @@ pub fn wake(id: u64) {
 /// `install` tiene que haber corrido antes: comparten el GIC.
 pub unsafe fn install_doorbell() -> Result<kernel_core::channel::Doorbell, &'static str> {
     if GICD == 0 {
-        return Err("el GIC todavia no esta encendido");
+        return Err("the GIC is not on yet");
     }
 
     write_byte(GICD, GICD_IPRIORITYR + SGI_MAILBOX as u64, MAILBOX_PRIORITY);

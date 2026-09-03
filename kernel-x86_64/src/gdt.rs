@@ -137,7 +137,7 @@ struct Descriptor {
 /// Solo despues de `ExitBootServices`: se reemplaza la GDT del firmware.
 pub unsafe fn install(slot: usize) -> Result<(), &'static str> {
     if slot >= crate::percpu::SLOTS {
-        return Err("ranura fuera de rango");
+        return Err("slot out of range");
     }
 
     let tss = &mut (*core::ptr::addr_of_mut!(TSS_PER_CORE))[slot];
@@ -225,7 +225,7 @@ pub unsafe fn install(slot: usize) -> Result<(), &'static str> {
     let cs: u16;
     core::arch::asm!("mov {0:x}, cs", out(reg) cs, options(nomem, nostack));
     if cs != CODE {
-        return Err("CS no quedo en el segmento de codigo nuestro");
+        return Err("CS did not end up in our code segment");
     }
     Ok(())
 }

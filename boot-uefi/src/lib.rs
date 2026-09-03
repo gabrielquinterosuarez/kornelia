@@ -387,19 +387,19 @@ pub unsafe fn take_machine(image: *mut c_void, systab: *mut SystemTable) -> Mach
         return Machine::mute("ExitBootServices ya se llamo una vez (D25)");
     }
     if systab.is_null() {
-        return Machine::mute("el firmware paso un System Table nulo");
+        return Machine::mute("the firmware passed a null System Table");
     }
 
     // --- Red 2: verificar que los punteros son lo que decimos que son -------
     if (*systab).hdr.signature != SYSTEM_TABLE_SIGNATURE {
-        return Machine::mute("el System Table no tiene la firma 'IBI SYST'");
+        return Machine::mute("the System Table lacks the 'IBI SYST' signature");
     }
     let bs = (*systab).boot_services;
     if bs.is_null() {
         return Machine::mute("el System Table no trae Boot Services");
     }
     if (*bs).hdr.signature != BOOT_SERVICES_SIGNATURE {
-        return Machine::mute("los Boot Services no tienen la firma 'BOOTSERV'");
+        return Machine::mute("the Boot Services lack the 'BOOTSERV' signature");
     }
 
     // Primero las tablas: es solo recorrer una lista que ya existe, no asigna
@@ -428,7 +428,7 @@ pub unsafe fn take_machine(image: *mut c_void, systab: *mut SystemTable) -> Mach
     loop {
         attempt += 1;
         if attempt > 3 {
-            return Machine::mute("el mapa de memoria cambio tres veces seguidas");
+            return Machine::mute("the memory map changed three times in a row");
         }
 
         let mut size = BUFFER_SIZE;
@@ -439,10 +439,10 @@ pub unsafe fn take_machine(image: *mut c_void, systab: *mut SystemTable) -> Mach
         let st = ((*bs).get_memory_map)(&mut size, buffer, &mut key, &mut stride, &mut version);
 
         if st == BUFFER_TOO_SMALL {
-            return Machine::mute("el mapa de memoria no entra en 32 KiB");
+            return Machine::mute("the memory map does not fit in 32 KiB");
         }
         if st != SUCCESS {
-            return Machine::mute("GetMemoryMap fallo");
+            return Machine::mute("GetMemoryMap failed");
         }
         if stride < size_of::<Descriptor>() {
             return Machine::mute("el firmware reporto un descriptor imposible");
@@ -457,7 +457,7 @@ pub unsafe fn take_machine(image: *mut c_void, systab: *mut SystemTable) -> Mach
             break;
         }
         if st != INVALID_PARAMETER {
-            return Machine::mute("ExitBootServices fallo");
+            return Machine::mute("ExitBootServices failed");
         }
     }
 
@@ -686,7 +686,7 @@ unsafe fn load_blob(image: *mut c_void, bs: *mut BootServices) -> Blob {
     // que `blob.bin` sea reemplazable sin tocar `kernel.efi` (D20).
     let mut loaded: *mut c_void = core::ptr::null_mut();
     if ((*bs).handle_protocol)(image, &LOADED_IMAGE, &mut loaded) != SUCCESS || loaded.is_null() {
-        return Blob::Failed("el firmware no dice de donde nos cargo");
+        return Blob::Failed("the firmware does not say where it loaded us from");
     }
     let device = (*(loaded as *mut LoadedImage)).device_handle;
 
@@ -698,7 +698,7 @@ unsafe fn load_blob(image: *mut c_void, bs: *mut BootServices) -> Blob {
 
     let mut root: *mut File = core::ptr::null_mut();
     if ((*fs).open_volume)(fs, &mut root) != SUCCESS || root.is_null() {
-        return Blob::Failed("no se pudo abrir el volumen");
+        return Blob::Failed("could not open the volume");
     }
 
     let mut file: *mut File = core::ptr::null_mut();
@@ -715,7 +715,7 @@ unsafe fn load_blob(image: *mut c_void, bs: *mut BootServices) -> Blob {
     let read = ((*file).read)(file, &mut size, dest);
     if read != SUCCESS {
         ((*file).close)(file);
-        return Blob::Failed("blob.bin no se pudo leer");
+        return Blob::Failed("blob.bin could not be read");
     }
 
     // Si lleno el buffer justo, puede haber quedado archivo afuera. Se pregunta
@@ -734,7 +734,7 @@ unsafe fn load_blob(image: *mut c_void, bs: *mut BootServices) -> Blob {
 
     ((*file).close)(file);
     if size == 0 {
-        return Blob::Failed("blob.bin esta vacio");
+        return Blob::Failed("blob.bin is empty");
     }
     Blob::Loaded(core::slice::from_raw_parts(dest, size))
 }

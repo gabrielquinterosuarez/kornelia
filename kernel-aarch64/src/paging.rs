@@ -83,10 +83,10 @@ pub unsafe fn install(m: &Machine) -> Result<Mapping, &'static str> {
 
     let total = paging::span_gib(m);
     if total == 0 {
-        return Err("el mapa de memoria esta vacio");
+        return Err("the memory map is empty");
     }
     if total > (MAX_LEVEL1 * ENTRIES) as u64 {
-        return Err("la maquina direcciona mas de 4 TiB y las tablas no llegan");
+        return Err("the machine addresses more than 4 TiB and the tables do not reach");
     }
 
     let n0 = &mut *core::ptr::addr_of_mut!(LEVEL0);
@@ -121,7 +121,7 @@ pub unsafe fn install(m: &Machine) -> Result<Mapping, &'static str> {
 
         // Con kernel o con memoria libre adentro: se parte en bloques de 2 MiB.
         if split_count >= MAX_LEVEL2 {
-            return Err("hay mas pedazos con kernel adentro de los que se pueden partir");
+            return Err("more chunks contain kernel than can be split");
         }
         let table = &mut n2[split_count];
         for i in 0..ENTRIES {
@@ -147,7 +147,7 @@ pub unsafe fn install(m: &Machine) -> Result<Mapping, &'static str> {
     let read_back: u64;
     core::arch::asm!("mrs {}, ttbr0_el1", out(reg) read_back, options(nomem, nostack));
     if read_back & 0x0000_FFFF_FFFF_FFFE != root {
-        return Err("TTBR0_EL1 no quedo apuntando a nuestras tablas");
+        return Err("TTBR0_EL1 did not end up pointing at our tables");
     }
 
     // En aarch64 no hay nada que prender: que una pagina alcanzable desde EL0
@@ -247,7 +247,7 @@ pub unsafe fn set_user_access(
     user: bool,
 ) -> Result<(), &'static str> {
     if start % paging::BLOCK != 0 || bytes % paging::BLOCK != 0 || bytes == 0 {
-        return Err("el rango no esta alineado al bloque");
+        return Err("the range is not block-aligned");
     }
 
     let n1 = &mut *core::ptr::addr_of_mut!(LEVEL1);
@@ -257,12 +257,12 @@ pub unsafe fn set_user_access(
     while addr < start + bytes {
         let gib = addr / paging::GIB;
         if !paging::needs_split(m, gib) {
-            return Err("ese pedazo no tiene grano fino");
+            return Err("that chunk has no fine grain");
         }
         let which = (gib / ENTRIES as u64) as usize;
         let entry = n1[which].0[(gib % ENTRIES as u64) as usize];
         if entry & 0b11 != IS_TABLE {
-            return Err("ese pedazo quedo como un bloque entero");
+            return Err("that chunk stayed a whole block");
         }
         let table_addr = entry & 0x0000_FFFF_FFFF_F000;
 
@@ -270,7 +270,7 @@ pub unsafe fn set_user_access(
         let table = n2
             .iter_mut()
             .find(|t| core::ptr::addr_of!(**t) as u64 == table_addr)
-            .ok_or("no se encontro la tabla de bloques")?;
+            .ok_or("the block table was not found")?;
 
         if user {
             table.0[index] |= AP_USER;

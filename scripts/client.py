@@ -121,7 +121,7 @@ def dec(b, i=0):
 # --------------------------------------------------------------------------
 
 # Lo que el kernel dice cuando abre la ventana de rescate del blob (D18).
-RESCUE_PROMPT = b"mandar cualquier byte"
+RESCUE_PROMPT = b"send any byte"
 
 
 def read_until_marker(proc, timeout, show, cancel_blob=False):

@@ -64,15 +64,15 @@ const HUGE: u64 = 1 << 7;
 /// le sacaria el piso a sus propias estructuras.
 pub unsafe fn install(m: &Machine) -> Result<Mapping, &'static str> {
     if !has_1gib_pages() {
-        return Err("el CPU no tiene paginas de 1 GiB (CPUID 80000001h EDX.26)");
+        return Err("the CPU has no 1 GiB pages (CPUID 80000001h EDX.26)");
     }
 
     let total = paging::span_gib(m);
     if total == 0 {
-        return Err("el mapa de memoria esta vacio");
+        return Err("the memory map is empty");
     }
     if total > (MAX_PDPT * ENTRIES) as u64 {
-        return Err("la maquina direcciona mas de 4 TiB y las tablas no llegan");
+        return Err("the machine addresses more than 4 TiB and the tables do not reach");
     }
 
     let pml4 = &mut *core::ptr::addr_of_mut!(PML4);
@@ -103,7 +103,7 @@ pub unsafe fn install(m: &Machine) -> Result<Mapping, &'static str> {
         // Con kernel o con memoria libre adentro: se parte en bloques de 2 MiB
         // para poder marcar cuales alcanza el agente y cuales no.
         if split_count >= MAX_PD {
-            return Err("hay mas pedazos con kernel adentro de los que se pueden partir");
+            return Err("more chunks contain kernel than can be split");
         }
         let table = &mut pd[split_count];
         for i in 0..ENTRIES {
@@ -144,7 +144,7 @@ pub unsafe fn install(m: &Machine) -> Result<Mapping, &'static str> {
     let read_back: u64;
     core::arch::asm!("mov {}, cr3", out(reg) read_back, options(nostack, preserves_flags));
     if read_back & !0xFFF != root {
-        return Err("CR3 no quedo apuntando a nuestras tablas");
+        return Err("CR3 did not end up pointing at our tables");
     }
 
     // Y prender SMEP, que es lo que le prohibe al kernel **ejecutar** una
@@ -227,7 +227,7 @@ pub unsafe fn set_user_access(
     user: bool,
 ) -> Result<(), &'static str> {
     if start % paging::BLOCK != 0 || bytes % paging::BLOCK != 0 || bytes == 0 {
-        return Err("el rango no esta alineado al bloque");
+        return Err("the range is not block-aligned");
     }
 
     let pdpt = &mut *core::ptr::addr_of_mut!(PDPT);
@@ -237,13 +237,13 @@ pub unsafe fn set_user_access(
     while addr < start + bytes {
         let gib = addr / paging::GIB;
         if !paging::needs_split(m, gib) {
-            return Err("ese pedazo no tiene grano fino");
+            return Err("that chunk has no fine grain");
         }
         // Encontrar la tabla de bloques que cuelga de esa entrada.
         let which = (gib / ENTRIES as u64) as usize;
         let entry = pdpt[which].0[(gib % ENTRIES as u64) as usize];
         if entry & HUGE != 0 {
-            return Err("ese pedazo quedo como un bloque entero");
+            return Err("that chunk stayed a whole block");
         }
         let table_addr = entry & 0x000F_FFFF_FFFF_F000;
 
@@ -251,7 +251,7 @@ pub unsafe fn set_user_access(
         let table = pd
             .iter_mut()
             .find(|t| core::ptr::addr_of!(**t) as u64 == table_addr)
-            .ok_or("no se encontro la tabla de bloques")?;
+            .ok_or("the block table was not found")?;
 
         if user {
             table.0[index] |= USER;

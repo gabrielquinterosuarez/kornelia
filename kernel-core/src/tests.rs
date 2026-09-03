@@ -308,7 +308,7 @@ fn the_end_of_a_region_does_not_overflow() {
 fn an_unknown_kind_keeps_its_number() {
     // P4: no se le inventa significado, se informa crudo.
     let k = Kind::Other(9999);
-    assert_eq!(k.name(), "otra");
+    assert_eq!(k.code(), "other");
     match k {
         Kind::Other(n) => assert_eq!(n, 9999),
         _ => panic!("cambio de variante"),
@@ -783,7 +783,7 @@ fn the_report_says_cause_pc_and_registers() {
 
     assert!(t.contains("page-fault"), "{t}");
     // El numero crudo viaja aunque la causa ya este traducida (P4).
-    assert!(t.contains("crudo 14"), "{t}");
+    assert!(t.contains("raw 14"), "{t}");
     assert!(t.contains("0x0000000000001234"), "{t}");
     assert!(t.contains("0x000000000000cafe"), "{t}");
     assert!(t.contains("uno=000000000000dead"), "{t}");

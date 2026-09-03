@@ -140,7 +140,7 @@ unsafe fn tables_for(device: u32) -> Result<u64, &'static str> {
     let bus = (device >> 8) as u8;
     let slot = (device & 0xFF) as usize;
 
-    let ctx = context_for(bus).ok_or("no hay lugar para otro bus")?;
+    let ctx = context_for(bus).ok_or("no room for another bus")?;
     let entry = (ctx as *mut u64).add(slot * 2);
 
     if *entry & 1 != 0 {
@@ -148,7 +148,7 @@ unsafe fn tables_for(device: u32) -> Result<u64, &'static str> {
         return Ok(*entry & 0x000F_FFFF_FFFF_F000);
     }
 
-    let root = take_page().ok_or("no quedan paginas de tablas")?;
+    let root = take_page().ok_or("no table pages left")?;
     // La parte de arriba: el ancho de direccion —2 son 48 bits, o sea cuatro
     // niveles, los mismos que usa el CPU— y el numero de dominio, que aca es
     // siempre el mismo porque hay un solo agente (D13).
@@ -179,7 +179,7 @@ unsafe fn map(root: u64, start: u64, bytes: u64, allow: bool) -> Result<(), &'st
                     // No estaba mapeado: sacarlo no cuesta nada.
                     return Ok(());
                 }
-                let next = take_page().ok_or("no quedan paginas de tablas")?;
+                let next = take_page().ok_or("no table pages left")?;
                 // Lectura y escritura: quien decide que puede hacer el aparato
                 // es la hoja, no el camino.
                 *slot = next | 0b11;
@@ -240,7 +240,7 @@ unsafe fn enable() -> Result<(), &'static str> {
     while read32(GSTS) & (1 << 30) == 0 {
         rounds += 1;
         if rounds > 1_000_000 {
-            return Err("el IOMMU no tomo la tabla raiz");
+            return Err("the IOMMU did not take the root table");
         }
         core::hint::spin_loop();
     }
@@ -300,7 +300,7 @@ pub unsafe fn set_access(
     allow: bool,
 ) -> Result<(), &'static str> {
     if bytes == 0 {
-        return Err("un rango vacio no se puede declarar");
+        return Err("an empty range cannot be declared");
     }
     BASE = hw.base;
 

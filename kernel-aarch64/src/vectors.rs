@@ -321,7 +321,7 @@ pub unsafe fn install(slot: usize) -> Result<(), &'static str> {
 
     let addr = core::ptr::addr_of!(VECTORES) as u64;
     if addr % 2048 != 0 {
-        return Err("la tabla de vectores no quedo alineada a 2048");
+        return Err("the vector table did not end up 2048-aligned");
     }
     core::arch::asm!("msr vbar_el1, {}", in(reg) addr, options(nomem, nostack));
     core::arch::asm!("isb", options(nomem, nostack));
@@ -331,7 +331,7 @@ pub unsafe fn install(slot: usize) -> Result<(), &'static str> {
     let read_back: u64;
     core::arch::asm!("mrs {}, vbar_el1", out(reg) read_back, options(nomem, nostack));
     if read_back != addr {
-        return Err("VBAR_EL1 no quedo apuntando a nuestra tabla");
+        return Err("VBAR_EL1 did not end up pointing at our table");
     }
     Ok(())
 }

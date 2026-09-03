@@ -74,15 +74,20 @@ prometía algo que los diez no podían pedir).
    tiene X0–X30, RISC-V tiene x0–x31. La máquina informa qué tiene (P4).
 4. **Salida del UART en ASCII puro.** Manda bytes, no texto: los acentos salen rotos.
 5. Sin dependencias externas salvo que haya una razón fuerte. El kernel es `no_std`.
-6. **El código va en inglés; el español es solo para humanos.** Nombres de
-   archivos, tipos, campos, funciones, constantes, variables, etiquetas de
-   ensamblador y nombres de test: inglés. Comentarios y documentación: español.
-   Los textos que salen por el UART también en español, porque son para leer en
-   una terminal — pero en ASCII puro (regla 4).
+6. **El código y lo que el kernel *dice* van en inglés. El español es para
+   explicarle a un humano, no para hablarle a nadie.** Nombres de archivos,
+   tipos, campos, funciones, constantes, variables, etiquetas de ensamblador y
+   nombres de test: inglés. **Y también los textos que el kernel escribe por el
+   cable y los errores que devuelve el protocolo** — una cosa es un comentario y
+   otra lo que el kernel dice. El operador que este proyecto supone es un agente
+   (P3, D1), y el protocolo ya estaba entero en inglés: el banner en español era
+   la excepción, no la regla. Comentarios y documentación: español.
 
-   **Lo verifica `./scripts/check-language.py`, dentro del portón.** Esta regla
-   estuvo escrita acá y se rompió igual, dos veces: el proyecto ya sabe que una
-   regla que no se comprueba es una intención (D23). El chequeo es una lista de
+   **Lo verifica `./scripts/check-language.py`, dentro del portón**, y verifica
+   las dos mitades: los identificadores y los literales de los crates del kernel
+   (el arnés de `tests.rs` queda afuera: no es el kernel). Esta regla estuvo
+   escrita acá y se rompió igual, dos veces: el proyecto ya sabe que una regla
+   que no se comprueba es una intención (D23). El chequeo es una lista de
    palabras y por eso no es completo — cuando se cuela una que no está, se
    agrega a la lista y deja de poder volver.
 

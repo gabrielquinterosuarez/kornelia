@@ -166,7 +166,7 @@ impl Platform for AArch64 {
         hw: &kernel_core::acpi::Hardware,
     ) -> Result<&'static str, &'static str> {
         let Some(unit) = hw.iommu else {
-            return Err("esta maquina no informa un IOMMU");
+            return Err("this machine does not report an IOMMU");
         };
         smmu::install(&unit)?;
         Ok(unit.kind)
@@ -189,7 +189,7 @@ impl Platform for AArch64 {
         allow: bool,
     ) -> Result<(), &'static str> {
         let Some(unit) = hw.iommu else {
-            return Err("esta maquina no informa un IOMMU");
+            return Err("this machine does not report an IOMMU");
         };
         smmu::set_access(&unit, device, start, bytes, allow)
     }
@@ -282,7 +282,7 @@ pub extern "efiapi" fn efi_main(image: *mut c_void, systab: *mut c_void) -> usiz
 /// Se pasa por un estatico y no por argumento porque el salto de aca abajo
 /// cambia la pila: cualquier cosa que estuviera en la pila vieja deja de ser
 /// alcanzable en el momento en que SP se mueve.
-static mut MACHINE: Machine = Machine::mute("no se llego a describir la maquina");
+static mut MACHINE: Machine = Machine::mute("the machine was never described");
 
 /// La plataforma de este nucleo.
 ///

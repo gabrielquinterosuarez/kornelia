@@ -110,11 +110,12 @@ pub enum Kind {
 }
 
 impl Kind {
-    /// El identificador que viaja por el protocolo (D6).
+    /// El identificador que viaja por el protocolo (D6), y tambien el que sale
+    /// por el cable.
     ///
-    /// Va aparte de `name()` a proposito: `name()` es para que un humano lea el
-    /// serie y puede cambiar de redaccion cuando quiera; esto es interfaz, y si
-    /// cambia se rompe el cliente del otro lado.
+    /// Hubo un `name()` aparte, en espanol, para que un humano leyera el serie.
+    /// Dejo de tener sentido cuando lo que el kernel dice paso a ser ingles
+    /// (regla 6): decia lo mismo con otras palabras y no lo usaba nadie.
     pub fn code(&self) -> &'static str {
         match self {
             Kind::Free => "free",
@@ -128,23 +129,6 @@ impl Kind {
             Kind::Persistent => "persistent",
             Kind::Other(_) => "other",
             Kind::Unreported => "unreported",
-        }
-    }
-
-    /// Nombre corto para el cordon umbilical. ASCII puro.
-    pub fn name(&self) -> &'static str {
-        match self {
-            Kind::Free => "libre",
-            Kind::Kernel => "kernel",
-            Kind::Firmware => "firmware",
-            Kind::AcpiTables => "acpi",
-            Kind::FirmwareNvs => "acpi-nvs",
-            Kind::Mmio => "mmio",
-            Kind::Reserved => "reservada",
-            Kind::Broken => "rota",
-            Kind::Persistent => "persistente",
-            Kind::Other(_) => "otra",
-            Kind::Unreported => "sin informar",
         }
     }
 }

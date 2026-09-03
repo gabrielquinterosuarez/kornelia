@@ -152,20 +152,20 @@ fn move_to_reported_serial<P: Platform>(p: &mut P, m: &Machine, hw: &acpi::Hardw
     let reach = paging::span_gib(m).saturating_mul(paging::GIB);
     if sp.address >= reach {
         let mut u = Umbilical::new(p);
-        let _ = write!(u, "  serie: la maquina lo pone en {:#x}, fuera del mapa\r\n", sp.address);
+        let _ = write!(u, "  serial: the machine puts it at {:#x}, outside the map\r\n", sp.address);
         return;
     }
 
     {
         let mut u = Umbilical::new(p);
-        let _ = write!(u, "  serie: mudandose a {:#x}, que es donde la maquina lo pone\r\n",
+        let _ = write!(u, "  serial: moving to {:#x}, which is where the machine puts it\r\n",
                        sp.address);
     }
     // SAFETY: la dirección la informó la máquina y el identity map la cubre.
     unsafe { p.use_serial_at(sp.address) };
     {
         let mut u = Umbilical::new(p);
-        let _ = u.line("  serie: mudado. Esta linea sale por el que dijo la maquina");
+        let _ = u.line("  serial: moved. This line comes out of the one the machine reported");
     }
 }
 
@@ -228,8 +228,8 @@ fn run_blob<P: Platform>(p: &mut P, m: &Machine, hw: &acpi::Hardware, with_doorb
         machine::Blob::Absent => return,
         machine::Blob::Failed(reason) => {
             let mut u = Umbilical::new(p);
-            u.kv("blob", "no se pudo cargar");
-            u.kv("  motivo", reason);
+            u.kv("blob", "could not be loaded");
+            u.kv("  reason", reason);
             return;
         }
         machine::Blob::Loaded(bytes) => bytes,
@@ -238,18 +238,18 @@ fn run_blob<P: Platform>(p: &mut P, m: &Machine, hw: &acpi::Hardware, with_doorb
     let clock = p.clock();
     {
         let mut u = Umbilical::new(p);
-        let _ = write!(u, "blob: {} bytes cargados de blob.bin\r\n", bytes.len());
+        let _ = write!(u, "blob: {} bytes loaded from blob.bin\r\n", bytes.len());
         match clock {
             Some(_) => {
                 let _ = write!(
                     u,
-                    "  mandar cualquier byte en {} ms para NO ejecutarlo\r\n",
+                    "  send any byte within {} ms to NOT run it\r\n",
                     RESCUE_MS
                 );
             }
             // Sin reloj no se puede prometer un tiempo, asi que se dice lo que
             // hay: una ventana en vueltas, que dura lo que dure.
-            None => u.line("  mandar cualquier byte para NO ejecutarlo (sin reloj: sin plazo)"),
+            None => u.line("  send any byte to NOT run it (no clock: no deadline)"),
         }
     }
 
@@ -282,7 +282,7 @@ fn run_blob<P: Platform>(p: &mut P, m: &Machine, hw: &acpi::Hardware, with_doorb
             let from_ring = if with_doorbell { unsafe { serial::pop() } } else { None };
             if from_ring.is_some() || p.uart_read_byte().is_some() {
                 let mut u = Umbilical::new(p);
-                u.line("  cancelado: alguien esta del otro lado");
+                u.line("  cancelled: someone is on the other side");
                 return;
             }
         }
@@ -293,7 +293,7 @@ fn run_blob<P: Platform>(p: &mut P, m: &Machine, hw: &acpi::Hardware, with_doorb
     let region = (entry, bytes.len() as u64);
     {
         let mut u = Umbilical::new(p);
-        let _ = write!(u, "  ejecutando en {:#x}\r\n", entry);
+        let _ = write!(u, "  running at {:#x}\r\n", entry);
     }
 
     // `raw`: el blob es un cargador de drivers, y un driver toca registros de
@@ -333,16 +333,16 @@ fn run_blob<P: Platform>(p: &mut P, m: &Machine, hw: &acpi::Hardware, with_doorb
         // el protocolo, que es de donde va a salir el reemplazo.
         match outcome.fault {
             Some(f) => {
-                let _ = write!(u, "  el blob fallo: {} en {:#x}\r\n", f.cause.code(), f.pc);
+                let _ = write!(u, "  the blob faulted: {} at {:#x}\r\n", f.cause.code(), f.pc);
             }
-            None => u.line("  el blob fallo"),
+            None => u.line("  the blob faulted"),
         }
     } else {
         // Lo que dejó en el primer registro. Es lo único que el kernel puede
         // contar sin saber qué hace el blob, y alcanza para comprobar desde
         // afuera que corrió de verdad.
         let first = outcome.regs.first().copied().unwrap_or(0);
-        let _ = write!(u, "  el blob volvio, dejando {:#x}\r\n", first);
+        let _ = write!(u, "  the blob returned, leaving {:#x}\r\n", first);
     }
 }
 
@@ -355,10 +355,10 @@ fn run_blob<P: Platform>(p: &mut P, m: &Machine, hw: &acpi::Hardware, with_doorb
 fn report_deadline<P: Platform>(p: &mut P, r: Result<(), &'static str>) {
     let mut u = Umbilical::new(p);
     match r {
-        Ok(()) => u.line("plazo: el agente puede declarar cuanto tarda su codigo"),
+        Ok(()) => u.line("deadline: the agent can declare how long its code takes"),
         Err(reason) => {
-            u.line("plazo: NO se puede declarar");
-            u.kv("  motivo", reason);
+            u.line("deadline: CANNOT be declared");
+            u.kv("  reason", reason);
         }
     }
 }
@@ -374,11 +374,11 @@ fn report_iommu<P: Platform>(p: &mut P, r: Result<&'static str, &'static str>) {
     match r {
         Ok(kind) => {
             u.kv("iommu", kind);
-            u.line("  encendido. sin declarar nada, ningun aparato llega a la memoria");
+            u.line("  on. with nothing declared, no device reaches memory");
         }
         Err(reason) => {
             u.kv("iommu", "no");
-            u.kv("  motivo", reason);
+            u.kv("  reason", reason);
         }
     }
 }
@@ -394,13 +394,13 @@ fn report_doorbell<P: Platform>(p: &mut P, r: Result<u8, &'static str>) -> bool 
 
     match r {
         Ok(v) => {
-            let _ = write!(u, "serie: timbre {v}, el nucleo duerme entre pedidos\r\n");
+            let _ = write!(u, "serial: doorbell {v}, the core sleeps between requests\r\n");
             true
         }
         Err(reason) => {
-            u.line("serie: SIN TIMBRE, se sigue preguntando byte por byte");
-            u.kv("  motivo", reason);
-            u.line("  esto quema un nucleo entero.");
+            u.line("serial: NO DOORBELL, still polling byte by byte");
+            u.kv("  reason", reason);
+            u.line("  this burns a whole core.");
             false
         }
     }
@@ -419,28 +419,28 @@ fn greet<P: Platform>(p: &mut P, m: &Machine) {
     let mut u = Umbilical::new(p);
 
     u.line("");
-    u.line("== kernel agente-centrico ==");
-    u.kv("arquitectura", P::ARCH);
+    u.line("== agent-centric kernel ==");
+    u.kv("architecture", P::ARCH);
 
     match m.failure {
         // Un arranque que no pudo describir la máquina no es una muerte: es un
         // dato que hay que poder contar (P5).
         Some(reason) => {
-            u.line("NO SE PUDO DESCRIBIR LA MAQUINA");
-            u.kv("  motivo", reason);
+            u.line("COULD NOT DESCRIBE THE MACHINE");
+            u.kv("  reason", reason);
         }
         None => {
-            let _ = write!(u, "memoria: {} regiones, ", m.regions.len());
+            let _ = write!(u, "memory: {} regions, ", m.regions.len());
             u.size(m.free_bytes());
-            let _ = u.write_str(" libres\r\n");
+            let _ = u.write_str(" free\r\n");
 
-            let _ = u.write_str("tablas:");
+            let _ = u.write_str("tables:");
             for (name, hay) in [
                 ("acpi", m.tables.acpi.is_some()),
                 ("device-tree", m.tables.device_tree.is_some()),
                 ("smbios", m.tables.smbios.is_some()),
             ] {
-                let _ = write!(u, " {name}={}", if hay { "si" } else { "no" });
+                let _ = write!(u, " {name}={}", if hay { "yes" } else { "no" });
             }
             let _ = u.write_str("\r\n");
         }
@@ -449,7 +449,7 @@ fn greet<P: Platform>(p: &mut P, m: &Machine) {
     check_stack(&mut u, m);
 
     u.line("");
-    u.line("Sin procesos. Sin archivos. Sin shell. Sin usuarios.");
+    u.line("No processes. No files. No shell. No users.");
 }
 
 /// Cuenta cómo salió el mapeo (D12).
@@ -469,7 +469,7 @@ fn report_tables<P: Platform>(
         Ok(t) => {
             let _ = write!(
                 u,
-                "tablas: {} GiB identity-mapeados ({} cacheables, {} de dispositivo)\r\n",
+                "tables: {} GiB identity-mapped ({} cacheable, {} device)\r\n",
                 t.gib,
                 t.gib - t.device_gib,
                 t.device_gib
@@ -479,25 +479,25 @@ fn report_tables<P: Platform>(
             // poner pero no separa nada, y una garantía que no se cumple es
             // peor que no tenerla.
             if t.isolation {
-                u.line("  separacion kernel/agente: la hace cumplir el hardware");
+                u.line("  kernel/agent separation: the hardware enforces it");
             } else {
-                u.line("  separacion kernel/agente: NO la hace cumplir el hardware");
-                u.line("    el permiso se marca pero el kernel igual puede ejecutar ahi.");
+                u.line("  kernel/agent separation: the hardware does NOT enforce it");
+                u.line("    the permission is marked but the kernel can still execute there.");
             }
             // Mismo cuidado que con la pila: si la raíz cayera en memoria
             // reclamable, `mem.claim` podría entregársela al agente y la
             // traducción se rompería en cualquier parte.
             if maq.is_ours(t.root, 4096) {
-                let _ = write!(u, "  raiz en {:#x}, en memoria del kernel\r\n", t.root);
+                let _ = write!(u, "  root at {:#x}, in kernel memory\r\n", t.root);
             } else {
-                let _ = write!(u, "  raiz en {:#x} FUERA DE LA MEMORIA DEL KERNEL\r\n", t.root);
-                u.line("  mem.claim NO se puede habilitar asi.");
+                let _ = write!(u, "  root at {:#x} OUTSIDE KERNEL MEMORY\r\n", t.root);
+                u.line("  mem.claim cannot be enabled like this.");
             }
         }
         Err(reason) => {
-            u.line("tablas: NO SE PUDIERON ARMAR, se sigue con las del firmware");
-            u.kv("  motivo", reason);
-            u.line("  mem.claim NO se puede habilitar asi.");
+            u.line("tables: COULD NOT BE BUILT, continuing with the firmware ones");
+            u.kv("  reason", reason);
+            u.line("  mem.claim cannot be enabled like this.");
         }
     }
 }
@@ -518,14 +518,14 @@ fn check_stack<P: Platform>(u: &mut Umbilical<'_, P>, m: &Machine) {
     if m.regions.is_empty() {
         // Sin mapa no hay contra qué comprobar. Se dice, en vez de dar por
         // bueno lo que no se miró.
-        let _ = write!(u, "pila: {base:#x}, sin mapa para verificarla\r\n");
+        let _ = write!(u, "stack: {base:#x}, no map to verify it\r\n");
     } else if m.is_ours(base, stack::size()) {
-        let _ = write!(u, "pila: {base:#x}, en memoria del kernel\r\n");
+        let _ = write!(u, "stack: {base:#x}, in kernel memory\r\n");
     } else {
         // No es fatal todavía porque nadie puede reclamar memoria: `mem.claim`
         // no existe. Cuando exista, esto sí lo es.
-        let _ = write!(u, "pila: {base:#x} FUERA DE LA MEMORIA DEL KERNEL\r\n");
-        u.line("  mem.claim podria entregar esta memoria. NO habilitarlo asi.");
+        let _ = write!(u, "stack: {base:#x} OUTSIDE KERNEL MEMORY\r\n");
+        u.line("  mem.claim could hand out this memory. Do NOT enable it like this.");
     }
 }
 
@@ -545,9 +545,9 @@ fn test_faults<P: Platform>(p: &mut P, r: Result<(), &'static str>) {
 
     if let Err(reason) = r {
         let mut u = Umbilical::new(p);
-        u.line("faults: NO SE PUDO INSTALAR LA CAPTURA");
-        u.kv("  motivo", reason);
-        u.line("  cualquier error va a reiniciar la maquina en silencio.");
+        u.line("faults: COULD NOT INSTALL THE HANDLERS");
+        u.kv("  reason", reason);
+        u.line("  any error will silently reboot the machine.");
         return;
     }
 
@@ -561,19 +561,19 @@ fn test_faults<P: Platform>(p: &mut P, r: Result<(), &'static str>) {
         Some(f) if f.cause == fault::Cause::Breakpoint => {
             let _ = write!(
                 u,
-                "faults: capturados. autotest ok (breakpoint en {:#x}, {} registros)\r\n",
+                "faults: captured. selftest ok (breakpoint at {:#x}, {} registers)\r\n",
                 f.pc,
                 f.regs.len()
             );
         }
         Some(f) => {
             // Volvió de la excepción, pero mal traducida.
-            let _ = write!(u, "faults: el autotest devolvio '{}' en vez de breakpoint\r\n", f.cause.code());
+            let _ = write!(u, "faults: the selftest returned '{}' instead of breakpoint\r\n", f.cause.code());
         }
         None => {
             // Volvió del breakpoint sin haber registrado nada: el handler corrió
             // pero no dejó el dato donde tenía que dejarlo.
-            u.line("faults: el autotest no registro nada");
+            u.line("faults: the selftest recorded nothing");
         }
     }
 }
@@ -599,20 +599,20 @@ fn read_hardware<P: Platform>(p: &mut P, m: &Machine) -> acpi::Hardware {
 
     let mut u = Umbilical::new(p);
     if hw.signatures.is_empty() {
-        let _ = write!(u, "maquina: no se describe (ni acpi ni device tree)\r\n");
+        let _ = write!(u, "machine: does not describe itself (neither acpi nor device tree)\r\n");
         return hw;
     }
 
     let _ = write!(
         u,
-        "maquina: {} {} nodos, {} nucleos ({} usables)\r\n",
+        "machine: {} {} nodes, {} cores ({} usable)\r\n",
         dialect,
         hw.signatures.len(),
         hw.cpus.len(),
         hw.usable_cpus()
     );
     if let Some(i) = hw.interrupts {
-        let _ = write!(u, "  interrupciones: {} en {:#x}", i.kind, i.address);
+        let _ = write!(u, "  interrupts: {} at {:#x}", i.kind, i.address);
         if i.version != 0 {
             let _ = write!(u, " v{}", i.version);
         }
@@ -623,19 +623,19 @@ fn read_hardware<P: Platform>(p: &mut P, m: &Machine) -> acpi::Hardware {
         (Some(sp), Some(ours)) if sp.address != ours => {
             let _ = write!(
                 u,
-                "  serie: LA MAQUINA DICE {:#x} Y USAMOS {:#x}\r\n",
+                "  serial: THE MACHINE SAYS {:#x} AND WE USE {:#x}\r\n",
                 sp.address, ours
             );
         }
         (Some(sp), Some(_)) => {
-            let _ = write!(u, "  serie: {:#x} lo dice la maquina", sp.address);
+            let _ = write!(u, "  serial: {:#x}, the machine says so", sp.address);
             if sp.gsi != 0 {
-                let _ = write!(u, ", interrupcion {}", sp.gsi);
+                let _ = write!(u, ", interrupt {}", sp.gsi);
             }
             let _ = u.write_str("\r\n");
         }
         (Some(sp), None) => {
-            let _ = write!(u, "  serie: la maquina lo pone en {:#x}\r\n", sp.address);
+            let _ = write!(u, "  serial: the machine puts it at {:#x}\r\n", sp.address);
         }
         (None, _) => {}
     }
@@ -643,7 +643,7 @@ fn read_hardware<P: Platform>(p: &mut P, m: &Machine) -> acpi::Hardware {
     if let Some(x) = hw.pcie {
         let _ = write!(
             u,
-            "  pcie: config en {:#x}, buses {}-{}\r\n",
+            "  pcie: config at {:#x}, buses {}-{}\r\n",
             x.base, x.bus_start, x.bus_end
         );
     }
@@ -660,14 +660,14 @@ fn report_bell<P: Platform>(p: &mut P, r: Result<channel::Doorbell, &'static str
             channel::set_doorbell(d);
             let _ = write!(
                 u,
-                "buzon: timbre {}, {} escritura(s) para tocarlo\r\n",
+                "mailbox: doorbell {}, {} write(s) to ring it\r\n",
                 d.id, d.count
             );
         }
         Err(reason) => {
-            u.line("buzon: SIN TIMBRE PROPIO");
-            u.kv("  motivo", reason);
-            u.line("  un pedido que llegue solo por ahi espera al cable.");
+            u.line("mailbox: NO DOORBELL OF ITS OWN");
+            u.kv("  reason", reason);
+            u.line("  a request arriving only there waits for the cable.");
         }
     }
 }

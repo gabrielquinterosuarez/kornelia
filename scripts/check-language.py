@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
-"""El idioma del codigo (regla 6): los identificadores van en ingles.
+"""El idioma del codigo (regla 6): el codigo y lo que el kernel DICE van en ingles.
 
-Los comentarios, la documentacion y los textos que salen por el UART van en
-espanol, y este chequeo no los mira. Lo que mira son las **posiciones de
-codigo**: nombres de tipos, campos, funciones, constantes, variables,
-etiquetas de ensamblador y nombres de archivo.
+Son dos chequeos:
+
+1. Los **identificadores**: tipos, campos, funciones, constantes, variables,
+   etiquetas de ensamblador y nombres de archivo.
+2. Los **literales de cadena de los crates del kernel**, que es lo que el kernel
+   escribe por el cable o devuelve en el protocolo. Una cosa son los
+   comentarios y otra lo que el kernel dice: el operador que este proyecto
+   supone es un agente, y el protocolo ya esta entero en ingles.
+
+Los comentarios y la documentacion siguen en **espanol** y no se miran. El
+arnes de pruebas (`tests.rs`) tampoco: no es el kernel, y sus `assert!` son
+diagnostico de desarrollo, mas cerca de un comentario que de una salida.
 
 Existe porque la regla ya se rompio dos veces estando escrita en CLAUDE.md.
 Una regla que no se comprueba es una intencion, no una regla — la misma razon
@@ -49,6 +57,7 @@ respuesta responder revisar romper sacar salida salidas saltar saludar seguir
 serie siempre siguiente subir sumar tabla tablas tamano terminar timbre tipo
 tipos todavia todas todos tope trampolin ultima ultimo usadas usados usar
 vacia vacio valor valores verbo verificar vistos volver vueltas
+libres libre nodos usables cargados motivo arquitectura
 """.split())
 
 
@@ -156,6 +165,44 @@ def python_code(src):
     return out
 
 
+def rust_strings(src):
+    """Los literales de cadena de un `.rs`, con su numero de linea.
+
+    Es el complemento exacto de `rust_code`: lo que aquel descarta, este lo
+    mira. Los raw strings quedan afuera porque son ensamblador, no texto.
+    """
+    out = []
+    for i, line in enumerate(src.split('\n'), 1):
+        if re.match(r'\s*//', line):
+            continue
+        # Un raw string en la linea significa ensamblador: no es texto.
+        if re.search(r'r#*"', line):
+            continue
+        for lit in re.findall(r'"((?:[^"\\]|\\.)*)"', line):
+            out.append((i, lit))
+    return out
+
+
+# Donde vive el kernel. Lo que se escriba aca puede terminar saliendo por el
+# cable o en una respuesta del protocolo, asi que va en ingles.
+KERNEL_CRATES = ('kernel-core', 'kernel-x86_64', 'kernel-aarch64', 'boot-uefi')
+
+
+def check_strings(path):
+    """Los textos del kernel: en ingles, porque son lo que el kernel dice."""
+    if path.suffix != '.rs' or path.name == 'tests.rs':
+        return []
+    if not any(part in KERNEL_CRATES for part in path.parts):
+        return []
+    bad = []
+    for line, lit in rust_strings(path.read_text()):
+        for word in re.findall(r'[A-Za-z]+', lit.lower()):
+            if word in FORBIDDEN:
+                bad.append((line, lit, word))
+                break
+    return bad
+
+
 NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
 READERS = {'.rs': rust_code, '.sh': shell_code, '.py': python_code}
 
@@ -194,13 +241,19 @@ def main():
                 print(f"{rel}: el nombre del archivo lleva `{word}`, "
                       f"que es espanol")
                 total += 1
+        # Y lo que el kernel dice, que no es un comentario.
+        for line, lit, word in check_strings(p):
+            short = lit if len(lit) <= 50 else lit[:47] + '...'
+            print(f"{rel}:{line}: el kernel dice \"{short}\", y `{word}` "
+                  f"es espanol")
+            total += 1
 
     if total:
-        print(f"\n{total} identificadores en espanol. La regla 6: el codigo va "
-              f"en ingles;\nlos comentarios y los textos del UART siguen en "
-              f"espanol.")
+        print(f"\n{total} en espanol. La regla 6: el codigo y lo que el kernel "
+              f"dice van en ingles;\nlos comentarios y la documentacion siguen "
+              f"en espanol.")
         return 1
-    print("idioma: todo el codigo en ingles")
+    print("idioma: el codigo y lo que el kernel dice, en ingles")
     return 0
 
 

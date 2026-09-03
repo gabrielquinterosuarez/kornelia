@@ -128,10 +128,10 @@ pub fn report(f: &Fault, names: &[&str], out: &mut impl core::fmt::Write) {
     {
         core::hint::spin_loop();
     }
-    let _ = writeln!(out, "FAULT: {} (crudo {}, detalle {:#x})\r", f.cause.code(), f.raw, f.detail);
+    let _ = writeln!(out, "FAULT: {} (raw {}, detail {:#x})\r", f.cause.code(), f.raw, f.detail);
     let _ = writeln!(out, "  pc {:#018x}\r", f.pc);
     if let Some(a) = f.address {
-        let _ = writeln!(out, "  direccion tocada {a:#018x}\r");
+        let _ = writeln!(out, "  address touched {a:#018x}\r");
     }
 
     // De a cuatro por renglon: por serie a 115200, treinta y tres renglones de

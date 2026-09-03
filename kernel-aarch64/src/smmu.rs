@@ -254,7 +254,7 @@ unsafe fn push(dw0: u64, dw1: u64) -> Result<(), &'static str> {
         }
         rounds += 1;
         if rounds > 1_000_000 {
-            return Err("la cola de comandos del SMMU no se vacia");
+            return Err("the SMMU command queue does not drain");
         }
         core::hint::spin_loop();
     }
@@ -306,7 +306,7 @@ unsafe fn invalidate(sid: u32) -> Result<(), &'static str> {
 /// primera vez que aparece uno de ese grupo.
 unsafe fn entry_for(sid: u32) -> Result<*mut u64, &'static str> {
     if sid >= (1 << SID_BITS) {
-        return Err("esta maquina no nombra un aparato con ese numero");
+        return Err("this machine names no device with that number");
     }
     let top = (STRTAB as *mut u64).add((sid >> SPLIT) as usize);
     let bottom = (sid & ((1 << SPLIT) - 1)) as usize;
@@ -315,7 +315,7 @@ unsafe fn entry_for(sid: u32) -> Result<*mut u64, &'static str> {
     // tiene la tabla de abajo. En cero, no hay tabla — y un aparato que cae ahi
     // se aborta y **queda anotado**, que es justo el estado inicial que D8 pide.
     if *top & 0x1F == 0 {
-        let page = take_page().ok_or("no quedan paginas para la tabla de streams")?;
+        let page = take_page().ok_or("no pages left for the stream table")?;
         *top = (page & 0x000F_FFFF_FFFF_FFC0) | (SPLIT as u64 + 1);
         publish(top as u64, 8);
     }
@@ -335,7 +335,7 @@ unsafe fn tables_for(sid: u32, oas: u64) -> Result<u64, &'static str> {
         return Ok(*ste.add(3) & 0x000F_FFFF_FFFF_FFF0);
     }
 
-    let root = take_page().ok_or("no quedan paginas de tablas")?;
+    let root = take_page().ok_or("no table pages left")?;
 
     // Como se recorren las tablas: cuantos bits de direccion, en que nivel se
     // empieza, y con que atributos las lee el propio SMMU.
@@ -403,7 +403,7 @@ unsafe fn map(root: u64, start: u64, bytes: u64, allow: bool) -> Result<(), &'st
                     // No estaba mapeado: sacarlo no cuesta nada.
                     return Ok(());
                 }
-                let next = take_page().ok_or("no quedan paginas de tablas")?;
+                let next = take_page().ok_or("no table pages left")?;
                 *slot = next | IS_TABLE;
                 publish(slot as u64, 8);
             }
@@ -468,14 +468,14 @@ pub unsafe fn install(hw: &Iommu) -> Result<(), &'static str> {
         return Err("este SMMU no traduce en etapa 2");
     }
     if (idr0 >> 27) & 0b11 == 0 {
-        return Err("este SMMU no tiene tabla de streams en dos niveles");
+        return Err("this SMMU has no two-level stream table");
     }
     let idr1 = read32(IDR1);
     SID_BITS = (idr1 & 0x3F).min(MAX_SID_BITS);
     CMDQ_BITS = QUEUE_BITS.min((idr1 >> 21) & 0x1F);
     EVENTQ_BITS = QUEUE_BITS.min((idr1 >> 16) & 0x1F);
     if SID_BITS <= SPLIT || CMDQ_BITS < 2 || EVENTQ_BITS < 2 {
-        return Err("este SMMU es mas chico que lo que el kernel sabe armar");
+        return Err("this SMMU is smaller than what the kernel knows how to build");
     }
     // Cuantos bits de direccion fisica maneja: 0 son 32, 1 son 36, 2 son 40,
     // 3 son 42, 4 son 44. Tienen que ser al menos los 44 que se le declaran:
@@ -541,10 +541,10 @@ pub unsafe fn set_access(
     allow: bool,
 ) -> Result<(), &'static str> {
     if bytes == 0 {
-        return Err("un rango vacio no se puede declarar");
+        return Err("an empty range cannot be declared");
     }
     if start.saturating_add(bytes) > S2_LIMIT {
-        return Err("el aparato no alcanza direcciones tan altas");
+        return Err("the device cannot reach addresses that high");
     }
     BASE = hw.base;
     if !ENABLED {

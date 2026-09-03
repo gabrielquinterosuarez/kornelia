@@ -20,9 +20,9 @@ step "frontera"
 ./scripts/check-boundary.sh || bad "frontera"
 
 # --- 2. El idioma del codigo (regla 6) --------------------------------------
-# Los identificadores en ingles, los comentarios y los textos del UART en
-# espanol. Se comprueba por la misma razon que la frontera: la regla estaba
-# escrita y se rompio igual, dos veces.
+# El codigo Y lo que el kernel dice, en ingles; los comentarios y la
+# documentacion, en espanol. Se comprueba por la misma razon que la frontera: la
+# regla estaba escrita y se rompio igual, dos veces.
 step "idioma del codigo"
 if command -v python3 >/dev/null; then
     python3 ./scripts/check-language.py || bad "idioma"
@@ -62,10 +62,10 @@ else
         output=$(timeout 240 ./scripts/client.py --arch "$arch" --smp 4 --what memory,tables --clock --msi --deadline --recover --memory --exec --cores --mailbox --doorbell --handler --during --permission --supervised --on-core --dma 2>&1 || true)
 
         # Lo que tiene que haber dicho en el banner de texto.
-        for expected in "arquitectura: $arch" "memoria:" "tablas:" \
-                        "en memoria del kernel" "identity-mapeados" \
-                        "faults: capturados. autotest ok" "maquina: acpi" \
-                        "el nucleo duerme entre pedidos" "-- CBOR --"; do
+        for expected in "architecture: $arch" "memory:" "tables:" \
+                        "in kernel memory" "identity-mapped" \
+                        "faults: captured. selftest ok" "machine: acpi" \
+                        "the core sleeps between requests" "-- CBOR --"; do
             grep -qFe "$expected" <<<"$output" || bad "$arch no dijo: $expected"
         done
 
@@ -129,9 +129,9 @@ else
         # poder ejecutar ahi.
         if ! grep -qFe "permiso: ok" <<<"$output"; then
             bad "$arch no hace cumplir el permiso de la memoria del agente"
-            printf '%s\n' "$output" | grep -E "FALLA:|user=|separacion" | head -10
+            printf '%s\n' "$output" | grep -E "FALLA:|user=|separation" | head -10
         fi
-        grep -qFe "separacion kernel/agente: la hace cumplir el hardware" <<<"$output" \
+        grep -qFe "kernel/agent separation: the hardware enforces it" <<<"$output" \
             || bad "$arch no informa que el hardware haga cumplir la separacion"
 
         # Y que el puerto serie en uso sea el que dice la maquina, no el
@@ -140,7 +140,7 @@ else
         # linea no llegaria. Solo aarch64: en x86_64 el UART esta en puertos de
         # E/S y no hay a donde mudarse, cosa que el kernel tambien dice.
         if [ "$arch" = "aarch64" ]; then
-            grep -qFe "lo dice la maquina" <<<"$output" \
+            grep -qFe ", the machine says so" <<<"$output" \
                 || bad "$arch no usa el puerto serie que informa la maquina"
         fi
 
@@ -242,11 +242,11 @@ else
             --arch "$arch" --what claims 2>&1 || true)
         # Con reloj, la ventana se anuncia en milisegundos y no en vueltas: es
         # la diferencia entre un plazo que se puede cumplir y uno que no.
-        if ! grep -qE "mandar cualquier byte en [0-9]+ ms" <<<"$output"; then
+        if ! grep -qE "send any byte within [0-9]+ ms" <<<"$output"; then
             bad "$arch no dice cuanto dura la ventana de rescate"
             printf '%s\n' "$output" | grep -E "blob|mandar" | head -4
         fi
-        if ! grep -qE "el blob volvio, dejando 0x[0-9a-f]+" <<<"$output"; then
+        if ! grep -qE "the blob returned, leaving 0x[0-9a-f]+" <<<"$output"; then
             bad "$arch no corrio el blob"
             printf '%s\n' "$output" | grep -E "blob|FALLA:" | head -5
         fi
@@ -263,7 +263,7 @@ else
         if grep -qFe "'bytes': 28672" <<<"$output"; then
             bad "$arch: hay un reclamo del blob aunque el blob no corrio"
         fi
-        if ! grep -qFe "cancelado: alguien esta del otro lado" <<<"$output"; then
+        if ! grep -qFe "cancelled: someone is on the other side" <<<"$output"; then
             bad "$arch no deja cancelar el blob por el cable"
             printf '%s\n' "$output" | grep -E "blob|FALLA:" | head -5
         fi
@@ -286,7 +286,7 @@ else
     step "aarch64 se describe por device tree"
     output=$(NO_ACPI=1 timeout 240 ./scripts/client.py --arch aarch64 --no-acpi \
         --what cpus --memory --cores --dma 2>&1 || true)
-    if ! grep -qFe "maquina: device tree" <<<"$output"; then
+    if ! grep -qFe "machine: device tree" <<<"$output"; then
         bad "aarch64 sin ACPI no lee el device tree"
         printf '%s\n' "$output" | grep -E "maquina:|FALLA:" | head -5
     fi

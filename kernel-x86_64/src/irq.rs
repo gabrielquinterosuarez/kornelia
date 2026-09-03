@@ -139,7 +139,7 @@ pub unsafe fn install_deadline(tsc_hz: u64) -> Result<(), &'static str> {
     }
     APIC_HZ = ticked.saturating_mul(tsc_hz) / elapsed_tsc;
     if APIC_HZ == 0 {
-        return Err("no se pudo medir el reloj del APIC");
+        return Err("could not measure the APIC clock");
     }
 
     // Y desarmarlo hasta que alguien declare un plazo.
@@ -486,10 +486,10 @@ unsafe fn ioapic_write(base: u64, reg: u32, value: u32) {
 /// Las tablas de paginas y la IDT tienen que estar puestas.
 pub unsafe fn install(hw: &Hardware) -> Result<u8, &'static str> {
     let Some(apic) = hw.interrupts.filter(|i| i.kind == "apic") else {
-        return Err("la maquina no informa un APIC");
+        return Err("the machine does not report an APIC");
     };
     let Some(io) = hw.ioapic else {
-        return Err("la maquina no informa un IO-APIC");
+        return Err("the machine does not report an IO-APIC");
     };
     APIC = apic.address;
 
@@ -503,7 +503,7 @@ pub unsafe fn install(hw: &Hardware) -> Result<u8, &'static str> {
     // A que numero global corresponde el cable 4 en ESTA maquina.
     let gsi = hw.gsi_of(SERIAL_CABLE);
     if gsi < io.gsi_base {
-        return Err("el cable del serie no lo atiende este IO-APIC");
+        return Err("this IO-APIC does not serve the serial line");
     }
     let entry = gsi - io.gsi_base;
 
@@ -547,7 +547,7 @@ pub unsafe fn prepare_worker() -> Result<(), &'static str> {
     // APIC local de cada nucleo vive en la misma direccion, y cada uno ve el
     // suyo. Lo que NO se hereda es que este encendido.
     if APIC == 0 {
-        return Err("el APIC todavia no esta encendido");
+        return Err("the APIC is not on yet");
     }
     let svr = core::ptr::read_volatile((APIC + SVR) as *const u32);
     core::ptr::write_volatile((APIC + SVR) as *mut u32, svr | (1 << 8));
@@ -596,7 +596,7 @@ pub fn wake(id: u64) {
 /// `install` tiene que haber corrido antes: comparten el APIC.
 pub unsafe fn install_doorbell() -> Result<kernel_core::channel::Doorbell, &'static str> {
     if APIC == 0 {
-        return Err("el APIC todavia no esta encendido");
+        return Err("the APIC is not on yet");
     }
 
     crate::idt::set_gate(MAILBOX_VECTOR as usize, irq_mailbox_stub as *const () as u64)?;

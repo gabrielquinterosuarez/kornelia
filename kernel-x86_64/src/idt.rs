@@ -406,7 +406,7 @@ pub unsafe fn install(slot: usize) -> Result<(), &'static str> {
 /// `handler` tiene que apuntar a codigo que termine en `iretq`.
 pub unsafe fn set_gate(vector: usize, handler: u64) -> Result<(), &'static str> {
     if vector < EXCEPTIONS || vector >= 256 {
-        return Err("vector fuera del rango de los aparatos");
+        return Err("vector outside the device range");
     }
     let idt = &mut *core::ptr::addr_of_mut!(IDT);
     idt.0[vector] = Entry {
