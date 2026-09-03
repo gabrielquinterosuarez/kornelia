@@ -220,33 +220,49 @@ else
     # --- 6. El blob: persistencia a traves del reinicio (D18, D19, D20) ----
     #
     # El firmware trae `blob.bin` de la particion y el kernel lo corre antes de
-    # escuchar el cable. Se exigen **las dos mitades**, porque la segunda es la
-    # que hace que la primera sea reversible:
+    # escuchar el cable. Se exigen **las tres mitades**:
     #
     #   1. que corra, y que el kernel pueda contar que corrio;
-    #   2. que un byte por el cable lo cancele — sin eso, un blob roto deja la
+    #   2. que le pueda **pedir cosas al kernel** por la ventanilla que recibe al
+    #      arrancar — sin eso el blob solo tiene la maquina cruda, que alcanza
+    #      para un cargador (D19) y no para algo que quiera reclamar memoria;
+    #   3. que un byte por el cable lo cancele — sin eso, un blob roto deja la
     #      maquina inutil en cada arranque y hay que sacar el disco.
-    step "el blob se carga y se puede cancelar"
+    #
+    # La (2) no se cree por lo que devuelve la ventanilla: se comprueba mirando
+    # los reclamos de la maquina, que es donde tiene que haber quedado la huella
+    # de un pedido que nunca paso por el cable.
+    step "el blob se carga, le habla al kernel y se puede cancelar"
     blob_dir=$(mktemp -d)
     trap 'rm -rf "$blob_dir"' EXIT
     for arch in x86_64 aarch64; do
         ./scripts/client.py --arch "$arch" --write-blob "$blob_dir/blob.bin" >/dev/null
 
         output=$(BLOB="$blob_dir/blob.bin" timeout 240 ./scripts/client.py \
-            --arch "$arch" --what memory 2>&1 || true)
+            --arch "$arch" --what claims 2>&1 || true)
         # Con reloj, la ventana se anuncia en milisegundos y no en vueltas: es
         # la diferencia entre un plazo que se puede cumplir y uno que no.
         if ! grep -qE "mandar cualquier byte en [0-9]+ ms" <<<"$output"; then
             bad "$arch no dice cuanto dura la ventana de rescate"
             printf '%s\n' "$output" | grep -E "blob|mandar" | head -4
         fi
-        if ! grep -qFe "el blob volvio, dejando 0xc0ffee" <<<"$output"; then
+        if ! grep -qE "el blob volvio, dejando 0x[0-9a-f]+" <<<"$output"; then
             bad "$arch no corrio el blob"
             printf '%s\n' "$output" | grep -E "blob|FALLA:" | head -5
         fi
+        # 28672 = 0x7000, que es lo que pide el blob de prueba y nadie mas.
+        if ! grep -qFe "'bytes': 28672" <<<"$output"; then
+            bad "$arch: el blob no le pudo pedir memoria al kernel"
+            printf '%s\n' "$output" | grep -E "blob|claims" | head -5
+        fi
 
         output=$(BLOB="$blob_dir/blob.bin" timeout 240 ./scripts/client.py \
-            --arch "$arch" --cancel-blob --what memory 2>&1 || true)
+            --arch "$arch" --cancel-blob --what claims 2>&1 || true)
+        # Y cancelado no tiene que quedar la huella: si el reclamo apareciera
+        # igual, el que lo hizo seria otro y la prueba de arriba no probaria nada.
+        if grep -qFe "'bytes': 28672" <<<"$output"; then
+            bad "$arch: hay un reclamo del blob aunque el blob no corrio"
+        fi
         if ! grep -qFe "cancelado: alguien esta del otro lado" <<<"$output"; then
             bad "$arch no deja cancelar el blob por el cable"
             printf '%s\n' "$output" | grep -E "blob|FALLA:" | head -5

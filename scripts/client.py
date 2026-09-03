@@ -316,6 +316,80 @@ PROGRAMS = {
 }
 
 
+# Cuanta memoria le pide al kernel el blob de prueba. Es un numero raro a
+# proposito: asi, al ver los reclamos desde afuera, no hay duda de quien lo pidio.
+BLOB_CLAIM = 0x7000
+
+# Donde caen las tres partes del blob dentro del archivo. El codigo va primero
+# porque el kernel salta al byte cero; lo demas son datos suyos, y las
+# direcciones las calcula en runtime sumando a lo que recibe en el primer
+# argumento (el kernel le pasa ahi su propia direccion).
+BLOB_REQUEST_AT = 64
+BLOB_REPLY_AT = 256
+BLOB_REPLY_CAP = 256
+
+
+def blob_program(arch, request_len):
+    """El codigo del blob: le pide algo al kernel y devuelve el largo de la respuesta.
+
+    Recibe en el primer registro de argumento su propia direccion y en el
+    segundo la ventanilla del protocolo — cuales son esos dos registros lo dice
+    la maquina en `describe exec arguments` (P4). La ventanilla es una funcion
+    comun, porque el blob corre privilegiado y en el mismo espacio: no hay
+    trampa, hay una llamada.
+    """
+    if arch == "x86_64":
+        # rcx = base, rdx = ventanilla. **No rdi/rsi**: el kernel se compila para
+        # UEFI, donde la ABI de C es la de Windows. Esa misma ABI pide dos cosas
+        # mas que en Linux no hacen falta: 32 bytes de "shadow space" que reserva
+        # el que llama, y la pila alineada a 16 en el `call`.
+        return (
+            bytes([0x49, 0x89, 0xD2])                      # mov r10, rdx  (ventanilla)
+            + bytes([0x48, 0x89, 0xC8])                    # mov rax, rcx  (base)
+            + bytes([0x48, 0x89, 0xE3])                    # mov rbx, rsp  (para volver)
+            + bytes([0x48, 0x83, 0xE4, 0xF0])              # and rsp, -16
+            + bytes([0x48, 0x83, 0xEC, 0x20])              # sub rsp, 32   (shadow space)
+            + bytes([0x48, 0x8D, 0x88]) + BLOB_REQUEST_AT.to_bytes(4, "little")   # lea rcx,[rax+..]
+            + bytes([0xBA]) + request_len.to_bytes(4, "little")                   # mov edx, len
+            + bytes([0x4C, 0x8D, 0x80]) + BLOB_REPLY_AT.to_bytes(4, "little")     # lea r8,[rax+..]
+            + bytes([0x41, 0xB9]) + BLOB_REPLY_CAP.to_bytes(4, "little")          # mov r9d, cap
+            + bytes([0x41, 0xFF, 0xD2])                    # call r10
+            + bytes([0x48, 0x89, 0xDC])                    # mov rsp, rbx
+            + bytes([0xC3])                                # ret (deja rax como vino)
+        )
+
+    # x0 = base, x1 = ventanilla. Hay que guardar x30: `blr` lo pisa, y por ahi
+    # es por donde el blob vuelve al kernel.
+    def word(w):
+        return w.to_bytes(4, "little")
+
+    return (
+        word(0xF81F0FFE)                                   # str x30, [sp, #-16]!
+        + word(0xAA0103E9)                                 # mov x9, x1
+        + word(0xAA0003E8)                                 # mov x8, x0
+        + word(0x91000100 | (BLOB_REQUEST_AT << 10))       # add x0, x8, #req
+        + word(0xD2800001 | (request_len << 5))            # mov x1, #len
+        + word(0x91000102 | (BLOB_REPLY_AT << 10))         # add x2, x8, #reply
+        + word(0xD2800003 | (BLOB_REPLY_CAP << 5))         # mov x3, #cap
+        + word(0xD63F0120)                                 # blr x9
+        + word(0xF84107FE)                                 # ldr x30, [sp], #16
+        + word(0xD65F03C0)                                 # ret (deja x0 como vino)
+    )
+
+
+def blob_image(arch):
+    """El blob.bin entero: codigo, el pedido ya armado, y lugar para la respuesta."""
+    request = enc([900, "mem.claim", {"bytes": BLOB_CLAIM, "align": 4096}])
+    code = blob_program(arch, len(request))
+    assert len(code) <= BLOB_REQUEST_AT, f"el codigo pisa el pedido: {len(code)}"
+    assert BLOB_REQUEST_AT + len(request) <= BLOB_REPLY_AT, "el pedido pisa la respuesta"
+
+    image = bytearray(BLOB_REPLY_AT + BLOB_REPLY_CAP)
+    image[:len(code)] = code
+    image[BLOB_REQUEST_AT:BLOB_REQUEST_AT + len(request)] = request
+    return bytes(image)
+
+
 def test_exec(proc, timeout, arch):
     """Sube codigo maquina de verdad, lo corre, y comprueba las dos salidas.
 
@@ -2090,13 +2164,13 @@ def main():
                     help="prueba el lazo completo: claim, write, read, release")
     args = ap.parse_args()
 
-    # El blob de prueba son los mismos bytes que el programa que anda de
-    # `--exec`: deja 0xc0ffee en el primer registro y vuelve. Asi el kernel puede
-    # contar que corrio sin saber nada de lo que hace (D20: el blob es codigo del
-    # agente, el kernel no lo mira).
+    # El blob de prueba no solo corre: **le pide memoria al kernel** por la
+    # ventanilla que recibe al arrancar. Asi las dos mitades se pueden ver desde
+    # afuera sin que el kernel mire lo que hace el blob (D20): el largo de la
+    # respuesta lo deja en su registro, y el reclamo queda en la maquina.
     if args.write_blob:
         with open(args.write_blob, "wb") as f:
-            f.write(PROGRAMS[args.arch]["ok"])
+            f.write(blob_image(args.arch))
         print(f"blob de prueba para {args.arch}: {args.write_blob}")
         return 0
 

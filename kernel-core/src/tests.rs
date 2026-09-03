@@ -47,6 +47,7 @@ impl Platform for Fake {
     }
 
     const REGISTERS: &'static [&'static str] = &["r0", "r1"];
+    const ARGUMENTS: &'static [usize] = &[0, 1];
 
     unsafe fn install_fault_handlers(&mut self) -> Result<(), &'static str> {
         Err("la plataforma de prueba no tiene excepciones")

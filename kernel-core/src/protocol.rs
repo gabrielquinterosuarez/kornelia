@@ -69,9 +69,26 @@ static mut OUTBOX: [u8; MAX_RESPONSE] = [0; MAX_RESPONSE];
 enum Origin {
     Cable,
     Mailbox,
+    /// El blob (D18). Corre **antes** de que exista el protocolo, asi que su
+    /// transporte no es un cable ni un buzon: es un pedazo de memoria suyo, que
+    /// pasa en la misma llamada.
+    Blob,
 }
 
 static mut ORIGIN: Origin = Origin::Cable;
+
+/// Donde dejar la respuesta cuando el pedido vino del blob.
+struct BlobReply {
+    at: *mut u8,
+    cap: usize,
+    used: usize,
+    /// La respuesta no entro. Se anota en vez de mandar media: media respuesta
+    /// se parsea hasta la mitad y despues miente.
+    overflowed: bool,
+}
+
+static mut BLOB_REPLY: BlobReply =
+    BlobReply { at: core::ptr::null_mut(), cap: 0, used: 0, overflowed: false };
 
 /// La linea que avisa que de aca en adelante lo que sale es binario.
 ///
@@ -161,6 +178,80 @@ pub fn serve<P: Platform>(p: &mut P, m: &Machine, hw: &Hardware, with_doorbell: 
                 n -= length;
             }
         }
+    }
+}
+
+/// Con qué atender los pedidos del blob mientras corre. Punteros crudos porque
+/// la ventanilla es una función `extern "C"` que el blob llama y a la que no le
+/// puede pasar nada de esto.
+static mut BLOB_P: *mut () = core::ptr::null_mut();
+static mut BLOB_M: *const Machine = core::ptr::null();
+static mut BLOB_HW: *const Hardware = core::ptr::null();
+
+/// La ventanilla del blob: atiende **un** pedido y deja la respuesta en su
+/// buffer. Devuelve cuantos bytes ocupa, o 0 si no se pudo.
+///
+/// El blob corre con privilegio completo y en el mismo espacio de direcciones,
+/// asi que no le hace falta una ventanilla del estilo de `supervised`: llama a
+/// esta funcion como a cualquier otra. Y adentro es el mismo `dispatch` de los
+/// once verbos — lo unico distinto es por donde sale la respuesta (D17).
+///
+/// # Safety
+///
+/// `req` y `out` tienen que ser rangos validos de `len` y `cap` bytes. Nadie los
+/// puede comprobar: el blob corre `raw` y ya podia escribir donde quisiera.
+unsafe extern "C" fn serve_blob<P: Platform>(
+    req: *const u8,
+    len: usize,
+    out: *mut u8,
+    cap: usize,
+) -> usize {
+    // SAFETY: los tres los dejó `open_blob_gate` y valen mientras el blob corre.
+    if req.is_null() || out.is_null() || unsafe { BLOB_P }.is_null() {
+        return 0;
+    }
+    let p = unsafe { &mut *(BLOB_P as *mut P) };
+    let m = unsafe { &*BLOB_M };
+    let hw = unsafe { &*BLOB_HW };
+
+    let before = unsafe { ORIGIN };
+    unsafe {
+        ORIGIN = Origin::Blob;
+        BLOB_REPLY = BlobReply { at: out, cap, used: 0, overflowed: false };
+    }
+
+    // SAFETY: es el rango que declaró el blob.
+    unsafe { dispatch(p, core::slice::from_raw_parts(req, len), m, hw) };
+
+    let r = unsafe { &*core::ptr::addr_of!(BLOB_REPLY) };
+    let n = if r.overflowed { 0 } else { r.used };
+    unsafe { ORIGIN = before };
+    n
+}
+
+/// Deja lista la ventanilla y devuelve su direccion, para pasarsela al blob.
+///
+/// # Safety
+///
+/// El `&mut P` se guarda como puntero crudo: hay que cerrar la ventanilla con
+/// `close_blob_gate` apenas el blob vuelve, o queda apuntando a algo muerto.
+pub unsafe fn open_blob_gate<P: Platform>(p: &mut P, m: &Machine, hw: &Hardware) -> u64 {
+    unsafe {
+        BLOB_P = p as *mut P as *mut ();
+        BLOB_M = m;
+        BLOB_HW = hw;
+    }
+    serve_blob::<P> as *const () as usize as u64
+}
+
+/// Cierra la ventanilla. Un blob que guardo la direccion para usarla despues no
+/// va a encontrar nada: es a proposito, porque lo que hay del otro lado dejo de
+/// existir cuando el blob volvio.
+pub fn close_blob_gate() {
+    unsafe {
+        BLOB_P = core::ptr::null_mut();
+        BLOB_M = core::ptr::null();
+        BLOB_HW = core::ptr::null();
     }
 }
 
@@ -620,7 +711,7 @@ fn write_index(
 /// El kernel ofrece los dos y no elige: elegir es del agente (P6). Lo que si
 /// hace es **publicar el acuerdo**, para que no lo tenga horneado (P4).
 fn write_exec<P: Platform>(p: &mut P, w: &mut Writer<'_>) {
-    w.map(7);
+    w.map(8);
 
     w.text("modes");
     w.array(2);
@@ -655,6 +746,16 @@ fn write_exec<P: Platform>(p: &mut P, w: &mut Writer<'_>) {
     w.array(P::EXEC_INITIAL.len());
     for name in P::EXEC_INITIAL {
         w.text(name);
+    }
+
+    // Y por cuales de esos pasan los argumentos, en orden. En el primero llega
+    // la direccion de entrada; un blob recibe ademas en el segundo la direccion
+    // de la ventanilla con la que le habla al kernel (D18). Van los nombres y no
+    // los indices porque un nombre es lo que el agente puede pedir (D3).
+    w.text("arguments");
+    w.array(P::ARGUMENTS.len());
+    for i in P::ARGUMENTS {
+        w.text(P::REGISTERS[*i]);
     }
 
     // Hasta donde llega el kernel para cortar un trabajo que no vuelve, en esta
@@ -806,9 +907,25 @@ fn reply_error<P: Platform>(p: &mut P, id: u64, reason: &str) {
 
 /// Contesta por donde llegó el pedido (D17).
 fn emit<P: Platform>(p: &mut P, bytes: &[u8]) {
-    let from_mailbox = unsafe { ORIGIN } == Origin::Mailbox;
+    let origin = unsafe { ORIGIN };
 
-    if from_mailbox {
+    if origin == Origin::Blob {
+        // SAFETY: el buffer lo dio el blob en la llamada y vive mientras dure.
+        let r = unsafe { &mut *core::ptr::addr_of_mut!(BLOB_REPLY) };
+        match r.used.checked_add(bytes.len()) {
+            Some(end) if end <= r.cap && !r.overflowed => {
+                // SAFETY: recien se comprobo que entra.
+                unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), r.at.add(r.used), bytes.len()) };
+                r.used = end;
+            }
+            // Acá no hay a dónde caerse: el blob no tiene otro canal, y el cable
+            // todavía no es el protocolo. Se anota y la ventanilla devuelve 0.
+            _ => r.overflowed = true,
+        }
+        return;
+    }
+
+    if origin == Origin::Mailbox {
         if let Some(m) = channel::current() {
             // SAFETY: verificado al adoptarlo, y en memoria reclamada.
             let whole = unsafe { bytes.iter().all(|b| m.push(*b)) };

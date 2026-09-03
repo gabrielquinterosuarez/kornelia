@@ -284,9 +284,12 @@ pub const INITIAL: &[&str] = &[
     "x27", "x28", "x29",
 ];
 
-/// El registro por el que se pasa el primer argumento, como indice dentro de
+/// Los registros por los que pasan los argumentos, como indices dentro de
 /// `REGISTERS`, que es como viene `initial`.
-const FIRST_ARGUMENT: usize = 0; // x0
+pub const ARGUMENTS: &[usize] = &[0, 1]; // x0, x1
+
+/// El primero de esos: donde `exec` deja la direccion de entrada.
+const FIRST_ARGUMENT: usize = ARGUMENTS[0];
 
 pub unsafe fn run(
     entry: u64,

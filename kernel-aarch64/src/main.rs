@@ -51,6 +51,8 @@ impl Platform for AArch64 {
 
     const REGISTERS: &'static [&'static str] = vectors::REGISTERS;
 
+    const ARGUMENTS: &'static [usize] = exec::ARGUMENTS;
+
     unsafe fn install_fault_handlers(&mut self) -> Result<(), &'static str> {
         vectors::install(percpu::BOOT_SLOT)
     }

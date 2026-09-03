@@ -102,7 +102,7 @@ pub fn main<P: Platform>(p: &mut P) -> ! {
     // memoria, captura de faults para que un blob roto sea un dato y no una
     // máquina muerta, y la descripción de la máquina para que lo que haga tenga
     // sentido.
-    run_blob(p, &machine, with_doorbell);
+    run_blob(p, &machine, &hw, with_doorbell);
 
     // La marca va última: de acá en adelante lo que sale es binario, así que
     // cualquier texto después la convierte en basura para el cliente.
@@ -221,7 +221,7 @@ const RESCUE_POLL: u64 = 4096;
 /// red para eso: si falla, el fault vuelve como dato (P5) y el arranque sigue
 /// hasta el protocolo. Un blob roto tiene que dejar la máquina **contestando**,
 /// que es lo único que permite reemplazarlo.
-fn run_blob<P: Platform>(p: &mut P, m: &Machine, with_doorbell: bool) {
+fn run_blob<P: Platform>(p: &mut P, m: &Machine, hw: &acpi::Hardware, with_doorbell: bool) {
     use core::fmt::Write;
 
     let bytes = match m.blob {
@@ -301,12 +301,31 @@ fn run_blob<P: Platform>(p: &mut P, m: &Machine, with_doorbell: bool) {
     // decidiendo con qué privilegio corre el código del agente, que es justo lo
     // que D27 le devuelve al agente.
     //
+    // Y con qué le habla al kernel. El blob corre antes de que el protocolo
+    // exista, así que si no fuera por esto lo único que tendría es la máquina
+    // cruda: alcanza para un cargador (D19), no para algo que quiera reclamar
+    // memoria o instalar un handler. Como corre privilegiado y en el mismo
+    // espacio de direcciones, la ventanilla es literalmente una función que
+    // puede llamar — no hizo falta un verbo nuevo ni un mecanismo nuevo.
+    //
+    // SAFETY: se cierra apenas el blob vuelve, unas líneas más abajo.
+    let gate = unsafe { protocol::open_blob_gate(p, m, hw) };
+
+    // El primer argumento lo pone `exec`: la dirección de entrada. El segundo lo
+    // ponemos acá. Cuáles son esos dos registros lo dice la máquina (P4), y lo
+    // mismo que se usa acá se publica en `describe exec`.
+    let mut initial = [None; 64];
+    let second = P::ARGUMENTS.get(1).copied();
+    if let Some(i) = second {
+        initial[i] = Some(gate);
+    }
+    let initial = &initial[..P::REGISTERS.len().min(initial.len())];
+
     // SAFETY: los bytes están en la imagen del kernel, que el identity map
     // cubre. Lo que haya ahí puede ser cualquier cosa — de eso se trata (P2).
-    // Sin registros puestos: el blob recibe en el primero su propia direccion,
-    // que es lo mismo que recibe el codigo de `exec` cuando el agente no pide
-    // otra cosa. Un blob no tiene quien le pase valores — corre solo (P3).
-    let outcome = unsafe { p.exec(entry, region, false, &[]) };
+    let outcome = unsafe { p.exec(entry, region, false, initial) };
+
+    protocol::close_blob_gate();
 
     let mut u = Umbilical::new(p);
     if outcome.faulted {

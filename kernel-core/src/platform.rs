@@ -113,6 +113,21 @@ pub trait Platform {
     /// cuáles tiene (P4).
     const REGISTERS: &'static [&'static str];
 
+    /// Por qué registros pasan los argumentos en esta máquina, como índices
+    /// dentro de `REGISTERS`.
+    ///
+    /// Existe porque hay dos lugares donde el kernel le pasa algo a código que
+    /// no escribió: `exec` le pone en el primero su propia dirección, y el
+    /// arranque le pone al blob en el segundo la ventanilla del protocolo.
+    ///
+    /// Son los de la ABI de C **con la que se compila este kernel**, para que el
+    /// código del agente pueda ser una función compilada para el mismo target.
+    /// Cuáles son no se puede tener horneado (D3) — y no basta con saber la
+    /// arquitectura: en x86_64 son RCX y RDX y no RDI y RSI, porque el target es
+    /// UEFI y ahí la ABI de C es la de Windows. Se publica en `describe exec`
+    /// para que el agente lo lea en vez de suponerlo (P4).
+    const ARGUMENTS: &'static [usize];
+
     /// Instala la captura de excepciones (P5, D7).
     ///
     /// # Safety

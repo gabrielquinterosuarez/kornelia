@@ -29,7 +29,7 @@ Lo verifica `./scripts/check-boundary.sh`, dentro del portón.
 | IOMMU | `kernel-x86_64/src/iommu.rs` (VT-d) y `kernel-aarch64/src/smmu.rs` (SMMUv3). Hacen lo mismo y no se parecen en nada: empezar por el de x86, que es el más simple. |
 | El segundo canal | `kernel-core/src/channel.rs`. |
 | El reloj | `clock` en el `main.rs` de cada arquitectura. En x86 incluye la calibración contra el contador de ACPI. |
-| El blob de arranque | `boot-uefi/src/lib.rs::load_blob` (traerlo del disco) + `kernel-core/src/lib.rs::run_blob` (ventana de rescate y ejecución). |
+| El blob de arranque | `boot-uefi/src/lib.rs::load_blob` (traerlo del disco) + `kernel-core/src/lib.rs::run_blob` (ventana de rescate y ejecución) + `protocol.rs::open_blob_gate` (con qué le pide cosas al kernel). |
 | Lo que el agente ve de la máquina | `kernel-core/src/acpi.rs` y `fdt.rs` (los dos dialectos en que una máquina se describe) + `tables.rs::describe` (elegir cuál) + `protocol.rs::describe` (publicar). |
 
 ## El portón
@@ -43,7 +43,7 @@ Lo verifica `./scripts/check-boundary.sh`, dentro del portón.
 3. **102 tests** de `kernel-core`.
 4. **Compilan las dos.**
 5. **Arrancan las dos en QEMU y contestan el protocolo**, con `scripts/client.py`.
-6. **El blob se carga, corre y se puede cancelar** (D18), en las dos.
+6. **El blob se carga, corre, le habla al kernel y se puede cancelar** (D18), en las dos.
 7. **Y aarch64 arranca una vez más sin ACPI**, para que se describa por device
    tree. Ahí se le exige el IOMMU contra un aparato de verdad, que es la prueba
    que usa todo lo que sale de la descripción junto.

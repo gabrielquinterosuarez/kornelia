@@ -52,6 +52,8 @@ impl Platform for X86_64 {
 
     const REGISTERS: &'static [&'static str] = idt::REGISTERS;
 
+    const ARGUMENTS: &'static [usize] = exec::ARGUMENTS;
+
     unsafe fn install_fault_handlers(&mut self) -> Result<(), &'static str> {
         idt::install(percpu::BOOT_SLOT)
     }

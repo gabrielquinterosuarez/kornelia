@@ -126,8 +126,8 @@ entero reclama un núcleo, donde la prioridad la decide él. El kernel lo public
 (`describe exec` trae `this_core`) en vez de dejar que se descubra chocándose.
 
 `describe` sirve mapa de memoria, tablas, reclamos, núcleos, controlador de
-interrupciones y PCIe — más el acuerdo de `exec`: qué modos hay y con qué bytes
-se vuelve de `supervised`.
+interrupciones y PCIe — más el acuerdo de `exec`: qué modos hay, con qué bytes
+se vuelve de `supervised`, y por qué registros pasan los argumentos.
 
 **Y eso lo averigua por los dos dialectos en que una máquina se describe:** ACPI
 donde hay ACPI, y **device tree** donde no —las placas ARM y RISC-V embebidas—,
@@ -190,6 +190,18 @@ de D25— y el kernel lo corre antes de escuchar el cable, con la misma red que
 máquina inútil en cada arranque y habría que sacarle el disco. La ventana dura
 **dos segundos de verdad**, no un número de vueltas, porque ahora hay reloj.
 
+**Y el blob le habla al kernel.** Corre antes de que exista el protocolo, así que
+lo único que tenía era la máquina cruda: alcanzaba para un cargador (D19), no para
+algo que quisiera reclamar memoria. Ahora recibe en el segundo registro de
+argumento la dirección de **una función** que atiende un pedido y deja la
+respuesta en un buffer suyo. No hizo falta un verbo nuevo ni una ventanilla como
+la de `supervised`: el blob corre privilegiado y en el mismo espacio de
+direcciones, así que llamar al kernel es una instrucción. Y adentro es el mismo
+`dispatch` de los once verbos, con un origen más — D17 ya decía que el kernel
+contesta por donde le llegó el pedido; esto agrega una tercera puerta, no un
+mecanismo. Se comprueba mirando los reclamos después del arranque: el que pidió
+el blob está, y con el blob cancelado no está.
+
 El portón es `./scripts/check.sh`: frontera + idioma + 102 tests + compila las
 dos + las bootea en QEMU y les habla el protocolo con `scripts/client.py`, **y
 bootea aarch64 una vez más sin ACPI** para que el device tree no sea una
@@ -230,16 +242,20 @@ cubría todavía:
    el cordón. Mientras tanto el kernel **lo publica** (`describe exec` trae `cancel`) en vez de
    prometer un corte que no llega.
 
-3. **El blob no le puede pedir nada al kernel.** Corre antes del protocolo, así que no tiene
-   verbos: toca la máquina directo, que alcanza para un cargador (D19) pero no para algo que
-   quiera reclamar memoria o instalar un handler.
-
 
 ## Cosas que ya costaron caras
 
 Bugs que aparecieron una vez, no se ven venir, y **no se parecen a su causa**.
 Están acá para no volver a pagarlos:
 
+- **La ABI de C de este kernel en x86_64 no es la de Linux: es la de Windows.**
+  El target es `x86_64-unknown-uefi`, y ahí `extern "C"` pasa los argumentos por
+  **RCX, RDX, R8, R9** —no RDI/RSI— y además exige que quien llama reserve 32
+  bytes de pila vacía antes de la llamada. Saber la arquitectura no alcanza para
+  saber la convención: la pone el *target*, no el silicio. El síntoma fue una
+  llamada del blob que entraba a la función correcta y veía punteros nulos: los
+  cuatro argumentos estaban ahí, en otros cuatro registros. Por eso `ARGUMENTS`
+  vive en cada arquitectura y se publica (P4) en vez de deducirse.
 - **Un núcleo arrancado por PSCI viene con los registros SIMD atrapados**
   (`CPACR_EL1` en cero, que es su valor de reset). El de arranque no lo sufre
   porque UEFI se los habilitó. Y el compilador usa registros anchos para copiar

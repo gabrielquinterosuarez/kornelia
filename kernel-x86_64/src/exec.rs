@@ -282,10 +282,18 @@ pub const INITIAL: &[&str] = &[
     "r14", "r15",
 ];
 
-/// El registro por el que se pasa el primer argumento en esta arquitectura.
+/// Los registros por los que pasan los argumentos en esta arquitectura, como
+/// indices dentro de `REGISTERS`, que es como viene `initial`.
 ///
-/// Su indice dentro de `REGISTERS`, que es como viene `initial`.
-const FIRST_ARGUMENT: usize = 5; // rdi
+/// **RCX y RDX, no RDI y RSI.** El kernel se compila para UEFI, y ahi la ABI de
+/// C no es la de Linux sino la de Windows, que pasa los argumentos por otros
+/// registros. Importa porque asi el codigo del agente puede ser una funcion
+/// compilada para este mismo target y recibir lo que el kernel le pasa sin
+/// traduccion.
+pub const ARGUMENTS: &[usize] = &[2, 3]; // rcx, rdx
+
+/// El primero de esos: donde `exec` deja la direccion de entrada.
+const FIRST_ARGUMENT: usize = ARGUMENTS[0];
 
 pub unsafe fn run(
     entry: u64,
