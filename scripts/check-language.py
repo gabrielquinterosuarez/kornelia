@@ -58,6 +58,8 @@ serie siempre siguiente subir sumar tabla tablas tamano terminar timbre tipo
 tipos todavia todas todos tope trampolin ultima ultimo usadas usados usar
 vacia vacio valor valores verbo verificar vistos volver vueltas
 libres libre nodos usables cargados motivo arquitectura
+volumen ofrece sistema archivos entra lugar reservado reservada rota
+otra sin informar persistente ejecutando cancelado
 """.split())
 
 

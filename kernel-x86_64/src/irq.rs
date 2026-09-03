@@ -108,7 +108,7 @@ pub unsafe fn install_deadline(tsc_hz: u64) -> Result<(), &'static str> {
     if tsc_hz == 0 {
         // Sin un reloj del que se sepa el ritmo no hay contra que medir, y sin
         // medir no se puede traducir "cien milisegundos" a nada.
-        return Err("sin reloj no hay con que traducir un plazo");
+        return Err("no clock: nothing to translate a deadline with");
     }
     crate::idt::set_gate(DEADLINE_VECTOR as usize, irq_deadline_stub as *const () as u64)?;
 

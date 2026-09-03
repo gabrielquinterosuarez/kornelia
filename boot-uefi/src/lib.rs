@@ -692,7 +692,7 @@ unsafe fn load_blob(image: *mut c_void, bs: *mut BootServices) -> Blob {
 
     let mut fs: *mut c_void = core::ptr::null_mut();
     if ((*bs).handle_protocol)(device, &SIMPLE_FILE_SYSTEM, &mut fs) != SUCCESS || fs.is_null() {
-        return Blob::Failed("ese volumen no ofrece sistema de archivos");
+        return Blob::Failed("that volume offers no file system");
     }
     let fs = fs as *mut FileSystem;
 
@@ -727,7 +727,7 @@ unsafe fn load_blob(image: *mut c_void, bs: *mut BootServices) -> Blob {
         let more = ((*file).read)(file, &mut extra, &mut byte);
         ((*file).close)(file);
         if more == SUCCESS && extra > 0 {
-            return Blob::Failed("blob.bin no entra en el lugar reservado");
+            return Blob::Failed("blob.bin does not fit in the reserved space");
         }
         return Blob::Loaded(core::slice::from_raw_parts(dest, size));
     }

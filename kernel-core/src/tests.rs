@@ -1936,8 +1936,8 @@ fn what_the_machine_said_beats_what_can_be_deduced() {
     assert_eq!(crate::paging::attr_of(&m, 0), crate::paging::Attr::Memory);
 
     // Y la misma region sin el dato cae en la deduccion de siempre.
-    static SIN_DATO: [Region; 1] = [Region::new(0, GIB, Kind::Reserved)];
-    let m = Machine { regions: &SIN_DATO, tables: Tables::default(), failure: None, blob: crate::machine::Blob::Absent };
+    static NO_DATA: [Region; 1] = [Region::new(0, GIB, Kind::Reserved)];
+    let m = Machine { regions: &NO_DATA, tables: Tables::default(), failure: None, blob: crate::machine::Blob::Absent };
     assert_eq!(crate::paging::attr_of(&m, 0), crate::paging::Attr::Device);
 }
 
