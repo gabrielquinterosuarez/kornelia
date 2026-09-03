@@ -57,6 +57,7 @@ kernel no hiciera lo que dice, la prueba se cuelga o la máquina se queda muda.
 SKIP_QEMU=1 ./scripts/check.sh       # sin bootear, para iterar rápido
 ./scripts/client.py --arch aarch64 --smp 4 --dma --on-core --supervised
 ./scripts/client.py --arch aarch64 --no-acpi --dma   # el otro dialecto
+./scripts/client.py --console                        # hablarle a mano
 ./scripts/client.py --arch x86_64 --write-blob /tmp/blob.bin
 BLOB=/tmp/blob.bin ./scripts/run-x86_64.sh           # con blob (D18)
 ```

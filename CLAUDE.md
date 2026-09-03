@@ -360,7 +360,9 @@ Sin ese aparato, `dma.allow` no se podría probar contra nada real.
 ```bash
 ./scripts/run-x86_64.sh      # Ctrl-C para salir (NO Ctrl-A X: ver D26)
 ./scripts/run-aarch64.sh
+./scripts/client.py --console       # una terminal para hablarle a mano
 ./scripts/client.py --what memory   # hablarle el protocolo
+./scripts/client.py --kvm --exec    # que el codigo lo corra el silicio, no la emulacion
 ./scripts/client.py --supervised    # D27: correr sin privilegio y ver el fault
 ./scripts/client.py --smp 4 --on-core   # mandar el codigo a otro nucleo
 ./scripts/check.sh                  # el porton entero

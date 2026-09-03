@@ -17,6 +17,7 @@ bien" cuando quiza los dos esten mal de la misma manera.
 """
 
 import argparse
+import json
 import os
 import select
 import subprocess
@@ -2117,6 +2118,175 @@ def test_mailbox(proc, timeout):
     return 0
 
 
+# Los atajos de la consola: nombre corto -> (verbo, argumentos por posicion).
+# Lo que no este aca se manda igual con `send`, porque el kernel tiene once
+# verbos y la consola no puede ser la que decida cuales se pueden pedir.
+CONSOLE_VERBS = {
+    "describe": ("describe", ["what"]),
+    "claim": ("mem.claim", ["bytes"]),
+    "read": ("mem.read", ["handle", "off", "len"]),
+    "write": ("mem.write", ["handle", "bytes"]),
+    "core": ("core.claim", ["id"]),
+    "exec": ("exec", ["handle", "mode"]),
+    "irq": ("irq.install", ["interrupt", "handle"]),
+    "dma": ("dma.allow", ["device", "handle"]),
+    "listen": ("listen", ["handle"]),
+    "release": ("release", ["handle"]),
+}
+
+CONSOLE_HELP = """
+La consola corre en TU maquina, no en el kernel: el kernel no tiene shell y no
+va a tenerlo. Esto traduce lo que escribis a CBOR y lo manda por el cable, que
+es exactamente lo que hace un agente (P3, D1).
+
+  describe                     el indice de lo que la maquina sabe de si misma
+  describe memory              una seccion; varias con coma: describe cpus,pcie
+  claim 4096 align=4096        reclamar memoria -> devuelve un handle
+  claim at=0xfed90000 bytes=4096   reclamar una direccion concreta
+  write 1 48c7c0eeffc000c3     subir bytes (en hex) al reclamo 1
+  read 1 0 8                   leer 8 bytes del reclamo 1; width=4 si es un registro de aparato
+  core 1                       reclamar el nucleo que la maquina llama 1
+  exec 1 raw core=2            correr lo que subiste; mode es obligatorio (D27)
+  exec 1 supervised ms=100     con plazo declarado
+  release 1                    devolver un reclamo o un nucleo
+  send exec {"handle":1,"mode":"raw"}   cualquier verbo, con los argumentos crudos
+
+  help / ayuda                 esto
+  quit / salir / Ctrl-D        apagar la maquina
+
+Los numeros se pueden escribir 0x... o en decimal. true/false para los booleanos.
+
+Hay DOS recetas y no una, porque el privilegio cambia todo lo demas (D27). Los
+handles son los que va devolviendo cada pedido.
+
+Receta A — privilegio completo (`raw`), en un nucleo propio:
+
+  claim 4096 align=4096        SIN `user`: raw no corre memoria del agente
+  write 1 48c7c0eeffc000c3     x86_64: mov rax,0xc0ffee ; ret
+  core 1                       arranca el nucleo 1 -> devuelve handle 2
+  exec 1 raw core=2            OJO: core= lleva el HANDLE, no el id
+  release 2
+  release 1
+
+Receta B — sin privilegio (`supervised`), aca mismo:
+
+  claim 4096 align=4096 user=true    CON `user`, o supervised no arranca
+  write 1 48c7c0eeffc000cd80         ...pero se vuelve con `int 0x80`, no con ret
+  exec 1 supervised
+
+Por que no se pueden mezclar: el silicio no deja que una pagina sea alcanzable
+por el agente y ejecutable por el kernel a la vez. Asi que `user` sirve para
+supervised y estorba para raw, y el kernel lo dice en vez de hacer algo raro.
+Y ojo con el `ret` en supervised: desde ahi un retorno comun salta a lo que
+haya en la pila y termina en fault — se captura como cualquier otro (P5), pero
+el programa no volvio por donde debia.
+
+En aarch64 los bytes son otros: c0fd9fd20018a0f2c0035fd6 para la receta A, y
+para la B se cambia el ultimo `ret` por `svc #0` (010000d4).
+Y `exec raw` sin `core=` se rechaza a proposito: en el nucleo que atiende el
+protocolo manda el kernel, asi que ahi solo corre supervised (D29).
+"""
+
+
+def console_value(token):
+    """Traduce lo que escribio un humano al tipo que espera el protocolo."""
+    low = token.lower()
+    if low in ("true", "si"):
+        return True
+    if low in ("false", "no"):
+        return False
+    if low.startswith("0x"):
+        return int(token, 16)
+    if token.isdigit():
+        return int(token)
+    if "," in token:
+        return [console_value(t) for t in token.split(",")]
+    return token
+
+
+def console(proc, timeout):
+    """Una terminal para que un humano le hable al kernel."""
+    print(CONSOLE_HELP)
+    ident = 1000
+
+    while True:
+        try:
+            line = input("kornelia> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+        if not line:
+            continue
+        if line in ("quit", "salir", "exit"):
+            return 0
+        if line in ("help", "ayuda", "?"):
+            print(CONSOLE_HELP)
+            continue
+
+        words = line.split()
+        name, rest = words[0], words[1:]
+
+        # `send` no interpreta nada: verbo y argumentos tal como los escribieron.
+        if name == "send":
+            if not rest:
+                print("  send <verbo> {json}")
+                continue
+            verb = rest[0]
+            try:
+                args = json.loads(" ".join(rest[1:])) if len(rest) > 1 else {}
+            except ValueError as e:
+                print(f"  ese JSON no se entiende: {e}")
+                continue
+        elif name in CONSOLE_VERBS:
+            verb, positional = CONSOLE_VERBS[name]
+            args, i = {}, 0
+            for token in rest:
+                if "=" in token and not token.startswith("0x"):
+                    key, _, value = token.partition("=")
+                    args[key] = console_value(value)
+                elif i < len(positional):
+                    args[positional[i]] = console_value(token)
+                    i += 1
+                elif verb == "mem.write" and "bytes" in args:
+                    # Un volcado largo se copia con espacios en el medio. Se
+                    # pegan en vez de rechazarlos: son bytes, no palabras.
+                    args["bytes"] = f"{args['bytes']}{token}"
+                else:
+                    print(f"  no se donde va '{token}'; probá con clave=valor")
+                    args = None
+                    break
+            if args is None:
+                continue
+            # `what` siempre es lista, aunque se pida una sola seccion.
+            if verb == "describe" and "what" in args and not isinstance(args["what"], list):
+                args["what"] = [args["what"]]
+            # Los bytes que se suben van en hex: es codigo maquina, no texto.
+            if verb == "mem.write" and isinstance(args.get("bytes"), (str, int)):
+                try:
+                    args["bytes"] = bytes.fromhex(str(args["bytes"]))
+                except ValueError:
+                    print("  los bytes de write van en hex, por ejemplo: write 1 c3")
+                    continue
+        else:
+            print(f"  no conozco '{name}'. Probá 'help'.")
+            continue
+
+        ident += 1
+        try:
+            reply, _ = ask(proc, [ident, verb, args], timeout)
+        except (TimeoutError, EOFError) as e:
+            # No se sale: que la maquina no conteste es un resultado, y de los
+            # interesantes. Si murio de verdad, el proximo pedido lo dice igual.
+            print(f"  sin respuesta: {e}")
+            continue
+
+        _, ok, load = reply
+        if not ok:
+            print(f"  ERROR: {load}")
+        else:
+            show(load) if isinstance(load, dict) else print(f"  {load}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -2130,6 +2300,8 @@ def main():
                     help="arranca sin ACPI, para que la maquina se describa por device tree")
     ap.add_argument("--kvm", action="store_true",
                     help="que el codigo lo ejecute el silicio de verdad, no la emulacion")
+    ap.add_argument("--console", action="store_true",
+                    help="una terminal para hablarle al kernel a mano")
     ap.add_argument("--write-blob", metavar="RUTA",
                     help="escribe un blob.bin de prueba para esta arquitectura y sale")
     ap.add_argument("--msi", action="store_true",
@@ -2269,6 +2441,10 @@ def main():
         if args.permission:
             print()
             rc |= test_permission(proc, args.timeout, args.arch)
+        # La consola va ultima: se queda con la maquina hasta que la suelten, asi
+        # que cualquier prueba pedida en la misma corrida ya paso por aca.
+        if args.console:
+            rc |= console(proc, args.timeout)
         return rc
     finally:
         proc.kill()
