@@ -282,6 +282,17 @@ cubría todavía:
 Bugs que aparecieron una vez, no se ven venir, y **no se parecen a su causa**.
 Están acá para no volver a pagarlos:
 
+- **El anillo del cable era más chico que el pedido más grande, y perdía en
+  silencio.** El protocolo dice aceptar pedidos de 64 KiB; el buzón donde el
+  handler del serie deja los bytes tenía 4 KiB. El razonamiento escrito era que
+  los bytes llegan de a poco y el bucle los saca enseguida — cierto hasta que el
+  kernel empezó a hacer cosas lentas (programar el IOMMU espera a que se vacíe
+  una cola de comandos) con bytes llegando mientras tanto. **El síntoma no se
+  parece a la causa:** un `mem.write` de 4 KiB colgaba la máquina, porque el
+  pedido quedaba incompleto y el kernel esperaba para siempre el resto de un
+  CBOR que ya no venía. Y había un contador de bytes perdidos que **nadie podía
+  ver**: ahora se publica en `describe {what:["cable"]}`, y el portón exige que
+  sea cero.
 - **La ABI de C de este kernel en x86_64 no es la de Linux: es la de Windows.**
   El target es `x86_64-unknown-uefi`, y ahí `extern "C"` pasa los argumentos por
   **RCX, RDX, R8, R9** —no RDI/RSI— y además exige que quien llama reserve 32

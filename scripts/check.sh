@@ -57,9 +57,16 @@ elif ! command -v python3 >/dev/null; then
     step "arranque y protocolo"
     bad "falta python3, que es lo que corre el cliente"
 else
+    # Un payload conocido en el disco. Sin esto, leer un disco de ceros y recibir
+    # ceros se ve **igual** que no leer nada: la misma moneda que ya se pago con
+    # el IOMMU.
+    payload_dir=$(mktemp -d)
+    trap 'rm -rf "$payload_dir"' EXIT
+    ./scripts/client.py --write-payload "$payload_dir/payload.bin" >/dev/null
+
     for arch in x86_64 aarch64; do
         step "arranca $arch y contesta el protocolo"
-        output=$(timeout 240 ./scripts/client.py --arch "$arch" --smp 4 --what memory,tables --clock --msi --deadline --recover --memory --exec --cores --mailbox --doorbell --handler --during --permission --supervised --on-core --dma --nvme 2>&1 || true)
+        output=$(PAYLOAD="$payload_dir/payload.bin" timeout 240 ./scripts/client.py --arch "$arch" --smp 4 --what memory,tables,cable --clock --msi --deadline --recover --memory --exec --cores --mailbox --doorbell --handler --during --permission --supervised --on-core --dma --nvme 2>&1 || true)
 
         # Lo que tiene que haber dicho en el banner de texto.
         for expected in "architecture: $arch" "memory:" "tables:" \
@@ -146,6 +153,20 @@ else
         fi
         grep -qFe "serie 'kornelia'" <<<"$output" \
             || bad "$arch no le hablo al disco que le pusimos"
+        # Y que haya leido del disco lo que se escribio. Que devuelva el bloque
+        # que se le pidio y no siempre el primero es parte de la prueba.
+        grep -qFe "el bloque 0 trae el payload" <<<"$output" \
+            || bad "$arch no leyo el payload del disco"
+        grep -qFe "el bloque 2 es el bloque 2" <<<"$output" \
+            || bad "$arch no devuelve el bloque que se le pide"
+
+        # Y que no se haya perdido **ni un byte** del cable. Un pedido al que le
+        # falta un byte se ve como una maquina colgada, y sin esto seria un
+        # misterio: paso, y costo un rato encontrarlo.
+        if ! grep -qFe "'dropped': 0" <<<"$output"; then
+            bad "$arch perdio bytes del cable"
+            printf '%s\n' "$output" | grep -E "cable:" | head -2
+        fi
 
         # Y que el puerto serie en uso sea el que dice la maquina, no el
         # horneado (deuda 2). La prueba no es que lo informe: es que **todo lo

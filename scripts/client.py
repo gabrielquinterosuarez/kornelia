@@ -1736,9 +1736,8 @@ class Nvme:
         self.ask = ask_verb
         self.n = ident
         self.window = None      # el reclamo de su ventana de registros
-        self.sq_tail = 0        # hasta donde se dejaron pedidos
-        self.cq_head = 0        # hasta donde se leyeron respuestas
-        self.phase = 1          # el bit que distingue una respuesta nueva de una vieja
+        self.queues = {}        # numero de cola -> sus dos anillos y por donde van
+        self.claims = []        # todo lo reclamado, para poder devolverlo
         self.tag = 1            # con que se reconoce cada respuesta
         self.stride = 4
 
@@ -1821,6 +1820,27 @@ class Nvme:
         return f"no llego a RDY={want} en {timeout_ms} ms"
 
 
+    def shared_page(self, bytes_wanted=4096):
+        """Memoria que el aparato tambien va a tocar: pedida, limpia y declarada.
+
+        Los tres pasos van juntos **siempre**, y por eso van en una sola funcion.
+        Dejarla sin limpiar hace leer respuestas que nadie escribio —una entrada
+        vieja tiene el bit de fase puesto— y no declararla hace que el IOMMU la
+        bloquee, que se ve igual que un aparato que no contesta.
+        """
+        ok, claim = self.ask(self._id(), "mem.claim",
+                             {"bytes": bytes_wanted, "align": 4096})
+        if not ok:
+            return None, str(claim)
+        self.claims.append(claim)
+        self.ask(self._id(), "mem.write",
+                 {"handle": claim["handle"], "bytes": bytes(bytes_wanted)})
+        ok, e = self.ask(self._id(), "dma.allow",
+                         {"device": self.bdf, "handle": claim["handle"]})
+        if not ok:
+            return None, f"el IOMMU no la dejo declarar: {e}"
+        return claim, None
+
     def start(self, spec):
         """Apaga el controlador, le da sus colas de administracion y lo prende.
 
@@ -1835,28 +1855,14 @@ class Nvme:
 
         # 2. Memoria para las dos colas. Una pagina para cada una, que es de
         #    sobra: cuatro entradas de 64 bytes son 256.
-        ok, sq = self.ask(self._id(), "mem.claim", {"bytes": 4096, "align": 4096})
-        if not ok:
-            return f"sin memoria para la cola de pedidos: {sq}"
-        ok, cq = self.ask(self._id(), "mem.claim", {"bytes": 4096, "align": 4096})
-        if not ok:
-            return f"sin memoria para la cola de respuestas: {cq}"
-        self.sq, self.cq = sq, cq
-
-        # 3. Dejarlas en cero. Una entrada de respuesta se reconoce por un bit
-        #    que alterna, asi que arrancar con basura seria leer respuestas que
-        #    nadie escribio.
-        self.ask(self._id(), "mem.write", {"handle": sq["handle"], "bytes": bytes(4096)})
-        self.ask(self._id(), "mem.write", {"handle": cq["handle"], "bytes": bytes(4096)})
-
-        # 4. **Declarar el DMA**: el controlador lee y escribe esas colas por su
-        #    cuenta, sin pasar por el CPU. Sin esto el IOMMU lo bloquea, que es
-        #    justo lo que D8 promete — y el sintoma seria que nunca contesta.
-        for claim in (sq, cq):
-            ok, e = self.ask(self._id(), "dma.allow",
-                             {"device": self.bdf, "handle": claim["handle"]})
-            if not ok:
-                return f"el IOMMU no dejo declarar la cola: {e}"
+        sq, why = self.shared_page()
+        if why:
+            return f"sin memoria para la cola de pedidos: {why}"
+        cq, why = self.shared_page()
+        if why:
+            return f"sin memoria para la cola de respuestas: {why}"
+        self.queues[0] = {"sq": sq, "cq": cq, "entries": ADMIN_ENTRIES,
+                          "sq_tail": 0, "cq_head": 0, "phase": 1}
 
         # 5. Decirle donde estan y de que tamano. AQA lleva las dos cantidades
         #    menos uno, cada una en su mitad.
@@ -1876,19 +1882,30 @@ class Nvme:
 
     def release(self):
         """Suelta lo reclamado. Lo que el agente toma, el agente devuelve."""
-        for claim in (getattr(self, "sq", None), getattr(self, "cq", None), self.window):
-            if claim:
-                self.ask(self._id(), "release", {"handle": claim["handle"]})
+        for claim in self.claims + ([self.window] if self.window else []):
+            self.ask(self._id(), "release", {"handle": claim["handle"]})
+        self.claims = []
 
 
-    def admin(self, opcode, nsid=0, prp1=0, cdw10=0, cdw11=0):
-        """Manda un comando de administracion y espera su respuesta.
+    def bell(self, qid, which):
+        """Donde esta el timbre de una cola. `which` es 0 para pedidos, 1 para
+        respuestas.
+
+        Van todos seguidos a partir de 0x1000, de a dos por cola, separados por
+        lo que el aparato dijo en CAP.DSTRD. Suponer que la separacion es 4
+        anda en QEMU y falla en silencio donde no lo sea.
+        """
+        return 0x1000 + (2 * qid + which) * self.stride
+
+    def command(self, qid, opcode, nsid=0, prp1=0, cdw10=0, cdw11=0, cdw12=0):
+        """Manda un comando a una cola y espera su respuesta.
 
         Una cola NVMe son dos anillos en RAM: uno donde el que manda escribe
         pedidos, otro donde el aparato escribe respuestas. Nadie interrumpe a
         nadie: se avisa tocando un timbre, que es una escritura en la ventana de
         registros del aparato.
         """
+        q = self.queues[qid]
         # El pedido: 64 bytes. Solo se llenan los campos que se usan; el resto
         # va en cero, que para este comando significa "por omision".
         cmd = bytearray(SQ_ENTRY)
@@ -1899,18 +1916,18 @@ class Nvme:
         cmd[24:32] = prp1.to_bytes(8, "little")        # a donde escribe lo que devuelva
         cmd[40:44] = cdw10.to_bytes(4, "little")
         cmd[44:48] = cdw11.to_bytes(4, "little")
+        cmd[48:52] = cdw12.to_bytes(4, "little")
 
-        slot = self.sq_tail
+        slot = q["sq_tail"]
         ok, _ = self.ask(self._id(), "mem.write",
-                         {"handle": self.sq["handle"], "off": slot * SQ_ENTRY,
+                         {"handle": q["sq"]["handle"], "off": slot * SQ_ENTRY,
                           "bytes": bytes(cmd)})
         if not ok:
             return None, "no se pudo dejar el pedido en la cola"
 
-        # Tocarle el timbre: "hay algo nuevo hasta aca". Los timbres viven a
-        # partir de 0x1000 y el de la cola de pedidos numero 0 es el primero.
-        self.sq_tail = (slot + 1) % ADMIN_ENTRIES
-        self.reg_write(0x1000, self.sq_tail)
+        # Tocarle el timbre: "hay algo nuevo hasta aca".
+        q["sq_tail"] = (slot + 1) % q["entries"]
+        self.reg_write(self.bell(qid, 0), q["sq_tail"])
 
         # Y esperar la respuesta. Se reconoce por un bit que **alterna** en cada
         # vuelta del anillo: no alcanza con mirar si hay algo escrito, porque lo
@@ -1918,26 +1935,30 @@ class Nvme:
         deadline = time.time() + 5.0
         while time.time() < deadline:
             ok, r = self.ask(self._id(), "mem.read",
-                             {"handle": self.cq["handle"], "off": self.cq_head * CQ_ENTRY,
+                             {"handle": q["cq"]["handle"], "off": q["cq_head"] * CQ_ENTRY,
                               "len": CQ_ENTRY})
             if not ok:
                 return None, "no se pudo mirar la cola de respuestas"
             entry = r["bytes"]
             status = int.from_bytes(entry[14:16], "little")
-            if (status & 1) != self.phase:
+            if (status & 1) != q["phase"]:
                 continue
-            self.cq_head = (self.cq_head + 1) % ADMIN_ENTRIES
-            if self.cq_head == 0:
+            q["cq_head"] = (q["cq_head"] + 1) % q["entries"]
+            if q["cq_head"] == 0:
                 # Dio la vuelta: de aca en adelante el bit vale al reves.
-                self.phase ^= 1
+                q["phase"] ^= 1
             # Y decirle hasta donde se leyo, o la cola se llena y se traba.
-            self.reg_write(0x1000 + self.stride, self.cq_head)
+            self.reg_write(self.bell(qid, 1), q["cq_head"])
             code = status >> 1
             if code:
                 return None, f"el controlador rechazo el comando: estado {code:#x}"
             self.tag += 1
             return entry, None
         return None, "el controlador no contesto en 5 s"
+
+    def admin(self, *args, **kw):
+        """Atajo: la cola de administracion es siempre la cero."""
+        return self.command(0, *args, **kw)
 
     def identify(self):
         """Le pregunta al controlador quien es. Es el primer comando de todos."""
@@ -1969,6 +1990,114 @@ class Nvme:
             "serial": data[4:24].decode("ascii", "replace").strip(),
             "model": data[24:64].decode("ascii", "replace").strip(),
         }, None
+
+
+    def io_queue(self, qid=1, entries=4):
+        """Crea una cola de datos. Las de administracion no leen discos.
+
+        Son dos comandos y el orden importa: primero la de respuestas, porque la
+        de pedidos se crea diciendo a cual contesta. Al reves, el controlador
+        rechaza el segundo comando.
+        """
+        cq, why = self.shared_page()
+        if why:
+            return f"sin memoria para su cola de respuestas: {why}"
+        # Opcode 5 = Create I/O Completion Queue. El bit 0 de cdw11 dice que la
+        # cola es un bloque contiguo, que es lo que acabamos de reclamar.
+        _, why = self.admin(0x05, prp1=cq["start"],
+                            cdw10=((entries - 1) << 16) | qid, cdw11=1)
+        if why:
+            return f"no acepto crear la cola de respuestas: {why}"
+
+        sq, why = self.shared_page()
+        if why:
+            return f"sin memoria para su cola de pedidos: {why}"
+        # Opcode 1 = Create I/O Submission Queue. En cdw11 va, arriba, a que
+        # cola de respuestas le contesta.
+        _, why = self.admin(0x01, prp1=sq["start"],
+                            cdw10=((entries - 1) << 16) | qid, cdw11=(qid << 16) | 1)
+        if why:
+            return f"no acepto crear la cola de pedidos: {why}"
+
+        self.queues[qid] = {"sq": sq, "cq": cq, "entries": entries,
+                            "sq_tail": 0, "cq_head": 0, "phase": 1}
+        return None
+
+    def namespace(self, nsid=1):
+        """Cuanto mide el disco y de que tamano son sus bloques."""
+        buf, why = self.shared_page()
+        if why:
+            return None, why
+        # Opcode 6 = Identify, cdw10 = 0 pide la ficha de un namespace.
+        _, why = self.admin(0x06, nsid=nsid, prp1=buf["start"], cdw10=0)
+        if why:
+            return None, why
+        ok, r = self.ask(self._id(), "mem.read",
+                         {"handle": buf["handle"], "off": 0, "len": 200})
+        if not ok:
+            return None, "no se pudo leer la ficha"
+        data = r["bytes"]
+        blocks = int.from_bytes(data[0:8], "little")
+        # Cual de los formatos esta en uso, y de ahi el tamano de bloque: viene
+        # como potencia de dos, no como numero de bytes.
+        which = data[26] & 0xF
+        lbaf = data[128 + which * 4: 132 + which * 4]
+        shift = lbaf[2]
+        return {"blocks": blocks, "block_bytes": 1 << shift}, None
+
+    def read(self, lba, count, nsid=1, qid=1):
+        """Lee bloques del disco. Esto es, al fin, lo que el cargador necesita."""
+        ns, why = self.namespace(nsid)
+        if why:
+            return None, f"no dijo como es el disco: {why}"
+        size = ns["block_bytes"] * count
+        if size > 4096:
+            # Con una sola direccion se llega hasta dos paginas; mas necesita una
+            # lista, y el cargador todavia no la necesita. Se dice en vez de
+            # leer de menos y callarse.
+            return None, f"{size} bytes no entran en una pagina"
+        buf, why = self.shared_page()
+        if why:
+            return None, why
+
+        # Opcode 2 = Read. El bloque va partido en dos palabras de 32 bits, y
+        # cdw12 lleva **cuantos menos uno**: pedir cero bloques es pedir uno.
+        _, why = self.command(qid, 0x02, nsid=nsid, prp1=buf["start"],
+                              cdw10=lba & 0xFFFFFFFF, cdw11=(lba >> 32) & 0xFFFFFFFF,
+                              cdw12=count - 1)
+        if why:
+            return None, why
+        ok, r = self.ask(self._id(), "mem.read",
+                         {"handle": buf["handle"], "off": 0, "len": size})
+        if not ok:
+            return None, "no se pudo leer lo que dejo"
+        return r["bytes"], None
+
+
+# Lo que se escribe en el disco para poder comprobar que se leyo de verdad.
+#
+# Un disco recien creado son ceros, y leer ceros de un disco de ceros se ve
+# **igual** que no leer nada. Este proyecto ya pago esa moneda con el IOMMU: hay
+# que comprobar que la cosa que se prueba ocurre.
+PAYLOAD_MAGIC = b"KORNELIA-PAYLOAD"
+
+
+def payload_image(blocks=4, block_bytes=512):
+    """Un patron reconocible, y distinto en cada bloque.
+
+    Distinto en cada bloque a proposito: si fueran todos iguales, leer el bloque
+    5 y recibir el 0 pasaria la prueba.
+    """
+    out = bytearray()
+    for n in range(blocks):
+        block = bytearray(block_bytes)
+        block[0:len(PAYLOAD_MAGIC)] = PAYLOAD_MAGIC
+        block[16:20] = n.to_bytes(4, "little")
+        # El resto, un relleno que depende del numero de bloque.
+        for i in range(20, block_bytes):
+            block[i] = (n * 31 + i) & 0xFF
+        out += block
+    return bytes(out)
 
 
 def test_nvme(proc, timeout):
@@ -2014,6 +2143,56 @@ def test_nvme(proc, timeout):
         return 1
     print(f"  y contesta quien es: modelo {who['model']!r}, "
           f"serie {who['serial']!r}, fabricante {who['vendor']:#06x}")
+
+    # Y ahora lo que el cargador necesita: una cola de datos y leer del disco.
+    if (why := nvme.io_queue()):
+        print(f"  FALLA: {why}")
+        nvme.release()
+        return 1
+    ns, why = nvme.namespace()
+    if why:
+        print(f"  FALLA: {why}")
+        nvme.release()
+        return 1
+    size = ns["blocks"] * ns["block_bytes"]
+    print(f"  el disco tiene {ns['blocks']} bloques de {ns['block_bytes']} bytes"
+          f" ({size // (1 << 20)} MiB)")
+
+    # Leer el bloque 0 y **comprobar que dice lo que se escribio**. Sin esto la
+    # prueba pasaria con un disco de ceros aunque no se leyera nada.
+    data, why = nvme.read(0, 1)
+    if why:
+        print(f"  FALLA al leer el bloque 0: {why}")
+        nvme.release()
+        return 1
+
+    expected = payload_image(blocks=4, block_bytes=ns["block_bytes"])
+    if data.startswith(PAYLOAD_MAGIC):
+        print(f"  y el bloque 0 trae el payload: {data[:16]!r}")
+        if data != expected[:ns["block_bytes"]]:
+            print("  FALLA: el bloque 0 no coincide byte por byte")
+            nvme.release()
+            return 1
+        # Y otro bloque, para que "leyo algo" no se confunda con "leyo lo que se
+        # le pidio": si devolviera siempre el primero, esto lo delata.
+        other, why = nvme.read(2, 1)
+        if why:
+            print(f"  FALLA al leer el bloque 2: {why}")
+            nvme.release()
+            return 1
+        if other != expected[2 * ns["block_bytes"]: 3 * ns["block_bytes"]]:
+            print(f"  FALLA: pedido el bloque 2, vino otra cosa: {other[:20]!r}")
+            nvme.release()
+            return 1
+        print(f"  y el bloque 2 es el bloque 2: {other[16:20].hex()}")
+    elif data == bytes(len(data)):
+        # Sin payload el disco son ceros, y de ahi no se puede concluir nada.
+        print("  el disco esta vacio, asi que leer no prueba nada:"
+              " correr con PAYLOAD= para comprobarlo de verdad")
+    else:
+        print(f"  FALLA: el bloque 0 trae algo que nadie escribio: {data[:16].hex()}")
+        nvme.release()
+        return 1
 
     nvme.release()
     print("\n  nvme: ok")
@@ -2747,6 +2926,8 @@ def main():
                     help="arranca sin ACPI, para que la maquina se describa por device tree")
     ap.add_argument("--kvm", action="store_true",
                     help="que el codigo lo ejecute el silicio de verdad, no la emulacion")
+    ap.add_argument("--write-payload", metavar="RUTA",
+                    help="escribe un payload de prueba para el disco y sale")
     ap.add_argument("--nvme", action="store_true",
                     help="le habla al controlador NVMe con los once verbos")
     ap.add_argument("--lspci", action="store_true",
@@ -2795,6 +2976,12 @@ def main():
     # ventanilla que recibe al arrancar. Asi las dos mitades se pueden ver desde
     # afuera sin que el kernel mire lo que hace el blob (D20): el largo de la
     # respuesta lo deja en su registro, y el reclamo queda en la maquina.
+    if args.write_payload:
+        with open(args.write_payload, "wb") as f:
+            f.write(payload_image())
+        print(f"payload de prueba: {args.write_payload}")
+        return 0
+
     if args.write_blob:
         with open(args.write_blob, "wb") as f:
             f.write(blob_image(args.arch))

@@ -28,10 +28,18 @@
 
 /// Cuantos bytes aguanta sin que el bucle los saque.
 ///
-/// El pedido mas grande son 64 KiB, pero llegan de a poco y el bucle los saca
-/// enseguida: lo que tiene que aguantar es una rafaga entre dos despertadas, y
-/// la cola del UART en si misma tiene 16 bytes.
-const SIZE: usize = 4096;
+/// **Tiene que entrar un pedido entero, y por eso son 64 KiB y no 4.** El
+/// razonamiento viejo era que los bytes llegan de a poco y el bucle los saca
+/// enseguida, asi que alcanzaba con aguantar una rafaga entre dos despertadas.
+/// Eso valia mientras el kernel volvia rapido al bucle; dejo de valer cuando
+/// empezo a hacer cosas lentas —programar el IOMMU espera a que se vacie una
+/// cola de comandos— con bytes llegando mientras tanto.
+///
+/// El sintoma no se parecia a la causa: un `mem.write` de 4 KiB colgaba la
+/// maquina. Se perdian bytes, el pedido quedaba incompleto, y el kernel
+/// esperaba para siempre el resto de un CBOR que ya no venia. Prometer pedidos
+/// de 64 KiB con un buzon de 4 era prometer lo que el buzon no sostiene.
+const SIZE: usize = 64 * 1024 + 1;
 
 static mut RING: [u8; SIZE] = [0; SIZE];
 /// Donde escribe el que atiende el timbre.
@@ -81,4 +89,10 @@ pub unsafe fn pop() -> Option<u8> {
 /// Cuantos bytes se perdieron por falta de lugar.
 pub fn dropped() -> u64 {
     unsafe { DROPPED }
+}
+
+/// Cuantos bytes aguanta el anillo. Se publica para que el agente sepa contra
+/// que esta escribiendo en vez de descubrirlo perdiendo un pedido (P4).
+pub fn capacity() -> usize {
+    SIZE
 }

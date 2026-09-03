@@ -313,6 +313,8 @@ struct Sections {
     iommu: bool,
     /// El reloj de la maquina, si informa a que ritmo sube (deuda 17).
     clock: bool,
+    /// El estado del cordon umbilical, incluidos los bytes que se perdieron.
+    cable: bool,
     /// Si no vino la clave `what`, se devuelve el indice (D16).
     index: bool,
 }
@@ -353,6 +355,7 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
                     Some("exec") => q.exec = true,
                     Some("iommu") => q.iommu = true,
                     Some("clock") => q.clock = true,
+                    Some("cable") => q.cable = true,
                     // Contestar solo con lo que se reconocio, callado, seria
                     // mentir por omision.
                     Some(_) => return reply_error(p, id, "unknown section in what"),
@@ -387,7 +390,7 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
             sections += 1;
         }
         for extra in [q.cpus, q.interrupts, q.pcie, q.cores, q.channel, q.handlers,
-                      q.exec, q.iommu, q.clock] {
+                      q.exec, q.iommu, q.clock, q.cable] {
             if extra {
                 sections += 1;
             }
@@ -525,6 +528,10 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
             w.text("channel");
             write_channel(&mut w);
         }
+        if q.cable {
+            w.text("cable");
+            write_cable(&mut w);
+        }
         if q.exec {
             w.text("exec");
             write_exec::<P>(p, &mut w);
@@ -627,7 +634,7 @@ fn write_index(
     w.text(arch);
 
     w.text("sections");
-    w.array(12);
+    w.array(13);
     w.text("memory");
     w.text("tables");
     w.text("claims");
@@ -640,6 +647,7 @@ fn write_index(
     w.text("exec");
     w.text("iommu");
     w.text("clock");
+    w.text("cable");
 
     w.text("memory");
     w.map(2);
@@ -1958,6 +1966,20 @@ fn listen<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>) {
 ///
 /// Se publica en vez de documentarse aparte para que el agente no lo tenga
 /// horneado: si algun dia cambia, lo pregunta y se enteró (P4).
+/// El estado del cordon umbilical.
+///
+/// Existe por una razon concreta: el kernel puede **perder bytes** si le llegan
+/// mas rapido de lo que los saca, y hasta que esto se publico los perdia en
+/// silencio. Un pedido al que le falta un byte se ve como CBOR malformado o
+/// como una maquina colgada, y sin este numero es un misterio (P4).
+fn write_cable(w: &mut Writer<'_>) {
+    w.map(2);
+    w.text("dropped");
+    w.uint(crate::serial::dropped());
+    w.text("buffer");
+    w.uint(crate::serial::capacity() as u64);
+}
+
 fn write_channel(w: &mut Writer<'_>) {
     w.map(6);
 
