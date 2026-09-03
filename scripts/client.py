@@ -2045,6 +2045,81 @@ class Nvme:
         shift = lbaf[2]
         return {"blocks": blocks, "block_bytes": 1 << shift}, None
 
+    def read_into(self, claim, off, lba, count, ns, nsid=1, qid=1):
+        """Lee bloques directo a un reclamo del agente, sin pasar por el cable.
+
+        Es lo que hace que el cargador tenga sentido: el aparato escribe en la
+        memoria del agente por DMA, y nadie mueve esos bytes a mano.
+
+        Con una sola direccion en el comando se llega hasta una pagina, asi que
+        se parte de a paginas. Una lista de punteros permitiria mas por comando
+        y no hace falta todavia: se dice en vez de fingir que se lee de una.
+        """
+        per_page = 4096 // ns["block_bytes"]
+        done = 0
+        while done < count:
+            chunk = min(per_page, count - done)
+            here = claim["start"] + off + done * ns["block_bytes"]
+            _, why = self.command(qid, 0x02, nsid=nsid, prp1=here,
+                                  cdw10=(lba + done) & 0xFFFFFFFF,
+                                  cdw11=((lba + done) >> 32) & 0xFFFFFFFF,
+                                  cdw12=chunk - 1)
+            if why:
+                return f"leyendo el bloque {lba + done}: {why}"
+            done += chunk
+        return None
+
+    def load(self, ns, nsid=1):
+        """Trae el payload del disco a memoria. Esto es el cargador de D19.
+
+        Devuelve el reclamo donde quedo, listo para que alguien salte ahi.
+        """
+        head, why = self.read(0, 1, nsid=nsid)
+        if why:
+            return None, f"no se pudo leer la cabecera: {why}"
+        if head[0:8] != HEADER_MAGIC:
+            return None, f"el bloque 0 no es una cabecera: {head[0:8]!r}"
+        version = int.from_bytes(head[8:12], "little")
+        if version != HEADER_VERSION:
+            # Negarse es lo correcto: un formato que no se entiende leido como
+            # si se entendiera termina en un salto a cualquier lado.
+            return None, f"formato {version}, y este cargador sabe el {HEADER_VERSION}"
+        size = int.from_bytes(head[16:24], "little")
+        entry = int.from_bytes(head[24:32], "little")
+        want = int.from_bytes(head[32:40], "little")
+        if size == 0:
+            return None, "la cabecera dice que el payload esta vacio"
+        if entry >= size:
+            return None, "la entrada cae fuera del payload"
+
+        # Memoria para el payload. Va sin `user`: el payload corre con
+        # privilegio completo, y el silicio no deja que una pagina sea del
+        # agente y ejecutable por el kernel a la vez (D27).
+        room = (size + 4095) // 4096 * 4096
+        ok, claim = self.ask(self._id(), "mem.claim", {"bytes": room, "align": 4096})
+        if not ok:
+            return None, f"sin memoria para el payload: {claim}"
+        self.claims.append(claim)
+        ok, e = self.ask(self._id(), "dma.allow",
+                         {"device": self.bdf, "handle": claim["handle"]})
+        if not ok:
+            return None, f"el IOMMU no dejo declarar el destino: {e}"
+
+        blocks = (size + ns["block_bytes"] - 1) // ns["block_bytes"]
+        if (why := self.read_into(claim, 0, PAYLOAD_LBA, blocks, ns, nsid=nsid)):
+            return None, why
+
+        # Y comprobar que llego entero. Sin esto, media lectura se veria como
+        # una lectura buena hasta que el salto termina en cualquier lado.
+        ok, r = self.ask(self._id(), "mem.read",
+                         {"handle": claim["handle"], "off": 0, "len": size})
+        if not ok:
+            return None, "no se pudo releer lo cargado"
+        got = sum(r["bytes"]) & 0xFFFFFFFFFFFFFFFF
+        if got != want:
+            return None, f"la suma no da: la cabecera dice {want:#x} y salio {got:#x}"
+        return {"claim": claim, "size": size, "entry": entry}, None
+
     def read(self, lba, count, nsid=1, qid=1):
         """Lee bloques del disco. Esto es, al fin, lo que el cargador necesita."""
         ns, why = self.namespace(nsid)
@@ -2081,26 +2156,65 @@ class Nvme:
 # que comprobar que la cosa que se prueba ocurre.
 PAYLOAD_MAGIC = b"KORNELIA-PAYLOAD"
 
+# --- El formato del payload en el disco -------------------------------------
+#
+# D19 dice que el blob es un cargador y que el resto vive "en el bloque tal".
+# Esto es ese acuerdo, y es lo mas chico que puede ser: una cabecera en el
+# bloque 0 y el payload a continuacion.
+#
+# No hay sistema de archivos y no es una carencia: un cargador que entiende
+# FAT32 es mucho mas grande que uno que lee bloques por numero, y el payload lo
+# escribe el mismo que escribe el cargador. Nombres de archivo no hacen falta
+# cuando hay una sola cosa que traer.
+HEADER_MAGIC = b"KORNELIA"
+HEADER_VERSION = 1
+# La cabecera entra en un bloque, y el payload arranca en el siguiente.
+PAYLOAD_LBA = 1
 
-def payload_image(blocks=4, block_bytes=512):
-    """Un patron reconocible, y distinto en cada bloque.
 
-    Distinto en cada bloque a proposito: si fueran todos iguales, leer el bloque
-    5 y recibir el 0 pasaria la prueba.
+def payload_header(body, entry=0):
+    """La cabecera del bloque 0: que hay, cuanto mide, y por donde se empieza."""
+    h = bytearray(512)
+    h[0:8] = HEADER_MAGIC
+    h[8:12] = HEADER_VERSION.to_bytes(4, "little")
+    h[16:24] = len(body).to_bytes(8, "little")
+    h[24:32] = entry.to_bytes(8, "little")
+    # Una suma, no un hash: alcanza para distinguir "se leyo entero" de "se
+    # leyo la mitad", que es lo unico que puede fallar aca. Un disco no miente
+    # a proposito.
+    h[32:40] = (sum(body) & 0xFFFFFFFFFFFFFFFF).to_bytes(8, "little")
+    return bytes(h)
+
+
+def payload_image(blocks=4, block_bytes=512, body=None):
+    """El disco entero: cabecera, payload, y despues un patron reconocible.
+
+    El patron es distinto en cada bloque a proposito: si fueran todos iguales,
+    pedir el bloque 5 y recibir el 0 pasaria la prueba igual.
     """
+    body = body if body is not None else b""
     out = bytearray()
+    out += payload_header(body)
+    # El payload, redondeado a bloque.
+    padded = body + bytes((-len(body)) % block_bytes)
+    out += padded
+    # Y el relleno reconocible, para las pruebas de lectura cruda.
     for n in range(blocks):
         block = bytearray(block_bytes)
         block[0:len(PAYLOAD_MAGIC)] = PAYLOAD_MAGIC
         block[16:20] = n.to_bytes(4, "little")
-        # El resto, un relleno que depende del numero de bloque.
         for i in range(20, block_bytes):
             block[i] = (n * 31 + i) & 0xFF
         out += block
     return bytes(out)
 
 
-def test_nvme(proc, timeout):
+def payload_pattern_lba(body=b"", block_bytes=512):
+    """En que bloque empieza el patron reconocible, despues del payload."""
+    return 1 + (len(body) + block_bytes - 1) // block_bytes
+
+
+def test_nvme(proc, timeout, arch):
     """Le habla a un controlador NVMe de verdad, con los once verbos y nada mas.
 
     Es la primera prueba de que la superficie del kernel alcanza para escribir
@@ -2115,6 +2229,16 @@ def test_nvme(proc, timeout):
     if not ok or not d["pcie"]:
         print("  esta maquina no informa PCIe")
         return 1
+
+    # El nucleo donde va a correr el payload, **antes de reclamar nada**.
+    #
+    # En x86_64 el trampolin que arranca un nucleo pasa por una pagina baja y
+    # fija, y todo lo que reclama el driver cae justo ahi: las colas, el buffer
+    # y el payload. Pedirlo despues es pedirle al kernel que arranque un nucleo
+    # con esa pagina ya tomada. El kernel lo dice claro
+    # (`trampoline-page-taken`) desde que se distingue de "esta maquina no sabe
+    # arrancar nucleos", pero el orden correcto evita el problema entero.
+    core = core_for_raw(ask_verb, 450)
 
     nvme = Nvme(ask_verb, 401)
     if (why := nvme.find(d["pcie"]["base"])):
@@ -2158,41 +2282,81 @@ def test_nvme(proc, timeout):
     print(f"  el disco tiene {ns['blocks']} bloques de {ns['block_bytes']} bytes"
           f" ({size // (1 << 20)} MiB)")
 
-    # Leer el bloque 0 y **comprobar que dice lo que se escribio**. Sin esto la
-    # prueba pasaria con un disco de ceros aunque no se leyera nada.
-    data, why = nvme.read(0, 1)
+    # Leer y **comprobar que dice lo que se escribio**. Sin esto la prueba
+    # pasaria con un disco de ceros aunque no se leyera nada, que es la misma
+    # moneda que ya se pago con el IOMMU.
+    head, why = nvme.read(0, 1)
     if why:
         print(f"  FALLA al leer el bloque 0: {why}")
         nvme.release()
         return 1
 
-    expected = payload_image(blocks=4, block_bytes=ns["block_bytes"])
-    if data.startswith(PAYLOAD_MAGIC):
-        print(f"  y el bloque 0 trae el payload: {data[:16]!r}")
-        if data != expected[:ns["block_bytes"]]:
-            print("  FALLA: el bloque 0 no coincide byte por byte")
-            nvme.release()
-            return 1
-        # Y otro bloque, para que "leyo algo" no se confunda con "leyo lo que se
-        # le pidio": si devolviera siempre el primero, esto lo delata.
-        other, why = nvme.read(2, 1)
-        if why:
-            print(f"  FALLA al leer el bloque 2: {why}")
-            nvme.release()
-            return 1
-        if other != expected[2 * ns["block_bytes"]: 3 * ns["block_bytes"]]:
-            print(f"  FALLA: pedido el bloque 2, vino otra cosa: {other[:20]!r}")
-            nvme.release()
-            return 1
-        print(f"  y el bloque 2 es el bloque 2: {other[16:20].hex()}")
-    elif data == bytes(len(data)):
+    if head == bytes(len(head)):
         # Sin payload el disco son ceros, y de ahi no se puede concluir nada.
         print("  el disco esta vacio, asi que leer no prueba nada:"
               " correr con PAYLOAD= para comprobarlo de verdad")
-    else:
-        print(f"  FALLA: el bloque 0 trae algo que nadie escribio: {data[:16].hex()}")
+        nvme.release()
+        print("\n  nvme: ok")
+        return 0
+    if head[0:8] != HEADER_MAGIC:
+        print(f"  FALLA: el bloque 0 trae algo que nadie escribio: {head[:16].hex()}")
         nvme.release()
         return 1
+
+    # El patron reconocible vive despues del payload. Que cada bloque sea
+    # distinto es parte de la prueba: si devolviera siempre el mismo, "leyo
+    # algo" pasaria por "leyo el que se le pidio".
+    body = PROGRAMS[arch]["ok"]
+    first = payload_pattern_lba(body, ns["block_bytes"])
+    expected = payload_image(blocks=4, block_bytes=ns["block_bytes"], body=body)
+    for n in (0, 2):
+        lba = first + n
+        got, why = nvme.read(lba, 1)
+        if why:
+            print(f"  FALLA al leer el bloque {lba}: {why}")
+            nvme.release()
+            return 1
+        want = expected[lba * ns["block_bytes"]: (lba + 1) * ns["block_bytes"]]
+        if got != want:
+            print(f"  FALLA: pedido el bloque {lba}, vino otra cosa: {got[:20]!r}")
+            nvme.release()
+            return 1
+    print(f"  y los bloques {first} y {first + 2} traen lo que se escribio,"
+          f" cada uno el suyo")
+
+    # Y ahora el cargador entero: traer el payload del disco y **correrlo**.
+    # Esto es D19 de punta a punta.
+    loaded, why = nvme.load(ns)
+    if why:
+        print(f"  no se pudo cargar un payload: {why}")
+        nvme.release()
+        # Sin payload no hay nada que cargar, y eso no es una falla del driver.
+        print("\n  nvme: ok")
+        return 0
+    print(f"  payload cargado: {loaded['size']} bytes en"
+          f" {loaded['claim']['start']:#x}, entrada en +{loaded['entry']:#x}")
+
+    # Correrlo necesita un nucleo propio: en el del protocolo manda el kernel y
+    # solo se corre supervisado (D29), y este codigo vuelve con `ret`.
+    if core is None:
+        print("  (sin un nucleo libre donde correrlo)")
+        nvme.release()
+        print("\n  nvme: ok")
+        return 0
+    ok, out = ask_verb(451, "exec", {"handle": loaded["claim"]["handle"],
+                                     "mode": "raw", "core": core,
+                                     "off": loaded["entry"], "deadline_ms": 1000})
+    if not ok or out.get("faulted"):
+        print(f"  FALLA al saltar al payload: {out}")
+        nvme.release()
+        return 1
+    first = list(out["registers"].values())[0] if out.get("registers") else 0
+    print(f"  y corrio: dejo {first:#x}")
+    if first != 0xC0FFEE:
+        print(f"  FALLA: el payload del disco no dejo lo que tenia que dejar")
+        nvme.release()
+        return 1
+    ask_verb(452, "release", {"handle": core})
 
     nvme.release()
     print("\n  nvme: ok")
@@ -2977,9 +3141,14 @@ def main():
     # afuera sin que el kernel mire lo que hace el blob (D20): el largo de la
     # respuesta lo deja en su registro, y el reclamo queda en la maquina.
     if args.write_payload:
+        # El payload es codigo maquina de verdad: el mismo programa que prueba
+        # `exec`, que deja 0xc0ffee y vuelve. Asi, cuando el cargador salta, se
+        # puede comprobar desde afuera que corrio lo que estaba en el disco.
+        body = PROGRAMS[args.arch]["ok"]
         with open(args.write_payload, "wb") as f:
-            f.write(payload_image())
-        print(f"payload de prueba: {args.write_payload}")
+            f.write(payload_image(body=body))
+        print(f"payload de prueba para {args.arch}: {args.write_payload}"
+              f" ({len(body)} bytes de codigo)")
         return 0
 
     if args.write_blob:
@@ -3099,7 +3268,7 @@ def main():
             rc |= test_lspci(proc, args.timeout)
         if args.nvme:
             print("\n== un driver de NVMe, escrito con los once verbos ==")
-            rc |= test_nvme(proc, args.timeout)
+            rc |= test_nvme(proc, args.timeout, args.arch)
         # La consola va ultima: se queda con la maquina hasta que la suelten, asi
         # que cualquier prueba pedida en la misma corrida ya paso por aca.
         if args.console:

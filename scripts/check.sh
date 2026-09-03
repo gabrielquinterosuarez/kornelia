@@ -62,11 +62,12 @@ else
     # el IOMMU.
     payload_dir=$(mktemp -d)
     trap 'rm -rf "$payload_dir"' EXIT
-    ./scripts/client.py --write-payload "$payload_dir/payload.bin" >/dev/null
 
     for arch in x86_64 aarch64; do
+        # El payload lleva codigo maquina, asi que es distinto por arquitectura.
+        ./scripts/client.py --arch "$arch" --write-payload "$payload_dir/$arch.bin" >/dev/null
         step "arranca $arch y contesta el protocolo"
-        output=$(PAYLOAD="$payload_dir/payload.bin" timeout 240 ./scripts/client.py --arch "$arch" --smp 4 --what memory,tables,cable --clock --msi --deadline --recover --memory --exec --cores --mailbox --doorbell --handler --during --permission --supervised --on-core --dma --nvme 2>&1 || true)
+        output=$(PAYLOAD="$payload_dir/$arch.bin" timeout 240 ./scripts/client.py --arch "$arch" --smp 4 --what memory,tables,cable --clock --msi --deadline --recover --memory --exec --cores --mailbox --doorbell --handler --during --permission --supervised --on-core --dma --nvme 2>&1 || true)
 
         # Lo que tiene que haber dicho en el banner de texto.
         for expected in "architecture: $arch" "memory:" "tables:" \
@@ -155,10 +156,15 @@ else
             || bad "$arch no le hablo al disco que le pusimos"
         # Y que haya leido del disco lo que se escribio. Que devuelva el bloque
         # que se le pidio y no siempre el primero es parte de la prueba.
-        grep -qFe "el bloque 0 trae el payload" <<<"$output" \
-            || bad "$arch no leyo el payload del disco"
-        grep -qFe "el bloque 2 es el bloque 2" <<<"$output" \
-            || bad "$arch no devuelve el bloque que se le pide"
+        grep -qFe "traen lo que se escribio" <<<"$output" \
+            || bad "$arch no leyo del disco lo que se le escribio"
+        # Y el cargador entero (D19): traer el payload del disco y saltar. Que
+        # deje 0xc0ffee prueba que corrio **lo que estaba en el disco**, no
+        # cualquier cosa que hubiera en esa memoria.
+        grep -qFe "payload cargado:" <<<"$output" \
+            || bad "$arch no cargo el payload del disco"
+        grep -qFe "y corrio: dejo 0xc0ffee" <<<"$output" \
+            || bad "$arch no ejecuto el payload que trajo del disco"
 
         # Y que no se haya perdido **ni un byte** del cable. Un pedido al que le
         # falta un byte se ve como una maquina colgada, y sin esto seria un

@@ -95,6 +95,14 @@ pub enum Error {
     NotSupported,
     /// La maquina no informa como arrancarlos.
     NoMechanism,
+    /// La maquina **si** sabe arrancar nucleos, pero el agente reclamo la
+    /// pagina baja por la que tienen que pasar.
+    ///
+    /// Va aparte de `NoMechanism` a proposito: son dos situaciones que el
+    /// agente resuelve distinto. Una dice "esta maquina no puede" y la otra
+    /// "solta ese reclamo". Decirle la primera cuando es la segunda lo manda a
+    /// buscar el problema donde no esta.
+    TrampolineTaken,
     /// Tiene trabajo en curso. No se suelta con codigo de alguien adentro.
     Working,
     /// Se le pidio que corte y no contesto. Queda perdido: su codigo enmascaro
@@ -113,6 +121,7 @@ impl Error {
             Error::NeverArrived => "core-never-arrived",
             Error::NotSupported => "not-supported",
             Error::NoMechanism => "no-start-mechanism",
+            Error::TrampolineTaken => "trampoline-page-taken",
             Error::Working => "core-working",
             Error::DidNotStop => "core-did-not-stop",
         }

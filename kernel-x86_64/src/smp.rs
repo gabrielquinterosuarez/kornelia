@@ -260,10 +260,12 @@ pub unsafe fn start(hw: &Hardware, id: u64, slot: usize) -> Result<(), cores::Er
     }
 
     // El trampolin va a una direccion fija y baja. Si el agente reclamo
-    // justo esa pagina, se avisa en vez de pisarsela.
+    // justo esa pagina, se avisa en vez de pisarsela — y se avisa **que fue
+    // eso**, no que la maquina no sepa arrancar nucleos: son dos problemas que
+    // se resuelven distinto, y confundirlos manda a buscar donde no es.
     let end = TRAMPOLINE + 4096;
     if claims::all().any(|c| TRAMPOLINE < c.end() && end > c.start) {
-        return Err(cores::Error::NoMechanism);
+        return Err(cores::Error::TrampolineTaken);
     }
 
     let start_at = core::ptr::addr_of!(AP_TRAMPOLINE_START) as u64;
