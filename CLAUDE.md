@@ -166,6 +166,15 @@ el número que el bus le pone al aparato.
 de configuración en aarch64; la MCFG de ACPI sí, y se suma al mapa donde el mapa
 se arma. Antes el kernel publicaba una dirección que él mismo hacía inalcanzable.
 
+**Y la memoria que el kernel necesita para sí figura como suya.** En x86_64 el
+trampolín con el que se arrancan los otros núcleos pasa por una página baja y
+fija, que el firmware informa como libre: si el agente la reclamaba, el kernel se
+quedaba sin poder arrancar núcleos. Se arregla **en el mapa** —esa página sale
+como `kernel` y el firmware la parte en dos pedazos libres a los lados— y no con
+un chequeo al reclamar, porque un chequeo haría que `describe memory` diga
+"libre" sobre algo que `mem.claim` rechaza: dos respuestas distintas a la misma
+pregunta. Así el agente lo ve antes en vez de descubrirlo chocándose (P4).
+
 **Y alcanza los registros de un aparato aunque estén fuera del mapa.** Si el
 rango que se reclama cae más arriba de lo que las tablas cubren, el kernel **lo
 mapea** y reintenta, en vez de contestar `unmapped`. No es comodidad: en aarch64

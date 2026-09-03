@@ -526,6 +526,59 @@ unsafe fn add_pcie_window(tables: &kernel_core::Tables, count: usize) -> usize {
     1
 }
 
+/// Marca un rango como memoria del kernel, partiendo la region que lo contiene.
+///
+/// Existe porque hay memoria que el kernel **necesita para si** y que el mapa
+/// del firmware informa como libre. El caso concreto es el trampolin con el que
+/// x86_64 arranca los otros nucleos: pasa por una pagina baja y fija, y si el
+/// agente la reclama, el kernel se queda sin poder arrancar nucleos.
+///
+/// Se arregla en el mapa y no con un chequeo al reclamar, porque un chequeo
+/// haria que `describe memory` diga "libre" sobre algo que `mem.claim` rechaza
+/// — dos respuestas distintas a la misma pregunta. Asi el agente **lo ve**
+/// (P4) y no se entera chocandose.
+///
+/// # Safety
+///
+/// Solo durante el arranque, antes de que nadie mire el mapa.
+pub unsafe fn reserve_for_kernel(m: Machine, start: u64, bytes: u64) -> Machine {
+    let end = start + bytes;
+    let dest = &raw mut REGIONS as *mut Region;
+    let mut count = m.regions.len();
+
+    for i in 0..count {
+        let r = *dest.add(i);
+        // Solo se parte lo que esta libre: si ya es del kernel no hay nada que
+        // hacer, y si es de otra clase, cambiarla seria mentir sobre que hay.
+        if r.kind != Kind::Free || r.start > start || r.end() < end {
+            continue;
+        }
+        // Hasta dos pedazos nuevos: lo de antes y lo de despues.
+        if count + 2 > MAX_REGIONS {
+            return m;
+        }
+        let (before, after) = (start - r.start, r.end() - end);
+
+        dest.add(i).write(Region { start, bytes, kind: Kind::Kernel, caching: r.caching });
+        if before > 0 {
+            dest.add(count).write(Region {
+                start: r.start, bytes: before, kind: Kind::Free, caching: r.caching,
+            });
+            count += 1;
+        }
+        if after > 0 {
+            dest.add(count).write(Region {
+                start: end, bytes: after, kind: Kind::Free, caching: r.caching,
+            });
+            count += 1;
+        }
+        let mut out = m;
+        out.regions = core::slice::from_raw_parts(dest as *const Region, count);
+        return out;
+    }
+    m
+}
+
 /// Recorre la Configuration Table anotando donde esta cada cosa conocida.
 ///
 /// Lo que no se reconoce se ignora en silencio: la lista trae cualquier cosa que

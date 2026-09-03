@@ -23,7 +23,7 @@ use kernel_core::{claims, cores};
 
 /// Donde se copia el trampolin. Tiene que estar abajo de 1 MiB, alineado a
 /// pagina, y coincidir con la constante `TRAMP` del ensamblador de abajo.
-const TRAMPOLINE: u64 = 0x8000;
+pub const TRAMPOLINE: u64 = 0x8000;
 
 /// 16 KiB de pila para cada nucleo.
 const STACK_SIZE: usize = 16 * 1024;

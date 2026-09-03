@@ -174,6 +174,16 @@ else
             printf '%s\n' "$output" | grep -E "cable:" | head -2
         fi
 
+        # Y que la memoria que el kernel necesita para si aparezca como suya en
+        # el mapa. En x86_64 el trampolin que arranca los otros nucleos pasa por
+        # una pagina baja y fija: si el agente la pudiera reclamar, el kernel se
+        # quedaria sin poder arrancar nucleos. Se comprueba en el mapa y no en
+        # el rechazo, porque lo que importa es que el agente **lo vea antes**.
+        if [ "$arch" = "x86_64" ]; then
+            grep -qE "0x0+8000 +4 KiB +kernel" <<<"$output" \
+                || bad "$arch no reserva la pagina del trampolin en el mapa"
+        fi
+
         # Y que el puerto serie en uso sea el que dice la maquina, no el
         # horneado (deuda 2). La prueba no es que lo informe: es que **todo lo
         # que sigue sale por ahi**, asi que si esa direccion fuera mala esta

@@ -276,6 +276,12 @@ pub extern "efiapi" fn efi_main(image: *mut c_void, systab: *mut c_void) -> usiz
     // Al volver de acá la máquina es nuestra y los Boot Services ya no existen.
     let machine = unsafe { boot_uefi::take_machine(image, systab.cast()) };
 
+    // El trampolin con el que se arrancan los otros nucleos pasa por una pagina
+    // baja y fija, y el mapa del firmware la informa como libre. Se marca como
+    // del kernel **en el mapa**, asi el agente la ve ocupada en vez de
+    // reclamarla y quedarse sin poder arrancar nucleos (P4).
+    let machine = unsafe { boot_uefi::reserve_for_kernel(machine, smp::TRAMPOLINE, 4096) };
+
     // Ya no queda nada por pedirle al firmware, asi que se abandona su pila.
     unsafe {
         MACHINE = machine;
