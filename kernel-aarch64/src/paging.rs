@@ -74,11 +74,64 @@ const MAIR: u64 = 0x0000_0000_0000_04FF;
 /// # Safety
 ///
 /// Solo despues de `ExitBootServices`, y solo desde EL1.
+/// Extiende el identity map para alcanzar un rango que la maquina no informo.
+///
+/// Se mapea de a bloques de 1 GiB, igual que el arranque, y como dispositivo:
+/// ahi no hay RAM sino registros, y cachearlos rompe el aparato de una forma
+/// dificil de diagnosticar.
+///
+/// Aca hace mas falta que en x86_64: los BARs de PCIe de la maquina `virt` caen
+/// en 512 GiB y el mapa que informa el firmware llega a 257.
+///
+/// # Safety
+///
+/// Cambia las tablas vivas. Solo desde el nucleo que atiende el protocolo.
+pub unsafe fn map_device(start: u64, bytes: u64) -> Result<(), &'static str> {
+    let end = start.checked_add(bytes).ok_or("the range wraps around")?;
+    let first = start / paging::GIB;
+    let last = end.div_ceil(paging::GIB);
+    if last > (MAX_LEVEL1 * ENTRIES) as u64 {
+        return Err("that address is above 4 TiB and the tables do not reach");
+    }
+
+    let n0 = &mut *core::ptr::addr_of_mut!(LEVEL0);
+    let n1 = &mut *core::ptr::addr_of_mut!(LEVEL1);
+
+    for gib in first..last {
+        let which = (gib / ENTRIES as u64) as usize;
+        let entry = (gib % ENTRIES as u64) as usize;
+
+        // La tabla de esa franja de 512 GiB puede no estar colgada: el arranque
+        // colgo solo las que el mapa necesitaba.
+        n0.0[which] = (core::ptr::addr_of!(n1[which]) as u64) | IS_TABLE;
+
+        // Si ya habia algo ahi no se pisa: seria cambiarle los atributos a
+        // memoria que alguien ya esta usando.
+        if n1[which].0[entry] & 0b11 != 0 {
+            continue;
+        }
+        n1[which].0[entry] = (gib * paging::GIB) | AF | ATTR_DEVICE | IS_BLOCK;
+    }
+
+    // Sin esto la MMU sigue usando lo que tenia cacheado de la traduccion, que
+    // para estas direcciones es "no hay nada". Y las barreras no son adorno: en
+    // ARM hay que asegurar que las escrituras a la tabla se vean **antes** de
+    // tirar el TLB, y que nada de lo que sigue se adelante.
+    core::arch::asm!(
+        "dsb ishst",
+        "tlbi vmalle1is",
+        "dsb ish",
+        "isb",
+        options(nostack, preserves_flags)
+    );
+    Ok(())
+}
+
 pub unsafe fn install(m: &Machine) -> Result<Mapping, &'static str> {
     if exception_level() != 1 {
         // A EL2 le corresponden otros registros. UEFI en la maquina `virt` sin
         // virtualizacion entrega en EL1, pero se comprueba en vez de suponerlo.
-        return Err("no estamos en EL1");
+        return Err("we are not in EL1");
     }
 
     let total = paging::span_gib(m);

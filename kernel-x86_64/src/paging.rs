@@ -56,6 +56,52 @@ const PCD: u64 = 1 << 4;
 /// PS en el PDPT: esta entrada es una pagina de 1 GiB.
 const HUGE: u64 = 1 << 7;
 
+/// Extiende el identity map para alcanzar un rango que la maquina no informo.
+///
+/// Se mapea de a bloques de 1 GiB, que es lo mismo que hace el arranque, y como
+/// dispositivo: ahi no hay RAM sino registros, y cachearlos rompe el aparato de
+/// una forma dificil de diagnosticar.
+///
+/// # Safety
+///
+/// Cambia las tablas vivas. Solo desde el nucleo que atiende el protocolo.
+pub unsafe fn map_device(start: u64, bytes: u64) -> Result<(), &'static str> {
+    let end = start.checked_add(bytes).ok_or("the range wraps around")?;
+    let first = start / paging::GIB;
+    let last = end.div_ceil(paging::GIB);
+    if last > (MAX_PDPT * ENTRIES) as u64 {
+        return Err("that address is above 4 TiB and the tables do not reach");
+    }
+
+    let pml4 = &mut *core::ptr::addr_of_mut!(PML4);
+    let pdpt = &mut *core::ptr::addr_of_mut!(PDPT);
+
+    for gib in first..last {
+        let which = (gib / ENTRIES as u64) as usize;
+        let entry = (gib % ENTRIES as u64) as usize;
+
+        // Puede que el PDPT de esa franja de 512 GiB ni siquiera cuelgue del
+        // PML4: el arranque solo colgo los que el mapa necesitaba.
+        let table = core::ptr::addr_of!(pdpt[which]) as u64;
+        pml4.0[which] = table | PRESENT | WRITABLE | USER;
+
+        // Si ya habia algo mapeado ahi, no se pisa: seria cambiarle los
+        // atributos a memoria que alguien ya esta usando.
+        if pdpt[which].0[entry] & PRESENT != 0 {
+            continue;
+        }
+        pdpt[which].0[entry] = (gib * paging::GIB) | PRESENT | WRITABLE | HUGE | PCD | PWT;
+    }
+
+    // Sin esto el CPU sigue usando lo que tenia cacheado de la traduccion, que
+    // para estas direcciones es "no hay nada". Recargar CR3 tira todo el TLB,
+    // que es mas de lo necesario pero pasa una vez por aparato.
+    let root: u64;
+    core::arch::asm!("mov {}, cr3", out(reg) root, options(nostack, preserves_flags));
+    core::arch::asm!("mov cr3, {}", in(reg) root, options(nostack, preserves_flags));
+    Ok(())
+}
+
 /// Arma las tablas y las carga en CR3.
 ///
 /// # Safety

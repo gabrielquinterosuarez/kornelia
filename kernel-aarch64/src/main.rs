@@ -53,6 +53,10 @@ impl Platform for AArch64 {
 
     const ARGUMENTS: &'static [usize] = exec::ARGUMENTS;
 
+    unsafe fn map_device(&mut self, start: u64, bytes: u64) -> Result<(), &'static str> {
+        paging::map_device(start, bytes)
+    }
+
     unsafe fn install_fault_handlers(&mut self) -> Result<(), &'static str> {
         vectors::install(percpu::BOOT_SLOT)
     }

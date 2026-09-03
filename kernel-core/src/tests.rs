@@ -49,6 +49,12 @@ impl Platform for Fake {
     const REGISTERS: &'static [&'static str] = &["r0", "r1"];
     const ARGUMENTS: &'static [usize] = &[0, 1];
 
+    unsafe fn map_device(&mut self, _start: u64, _bytes: u64) -> Result<(), &'static str> {
+        // No hay tablas que tocar: lo que se prueba aca arriba es que el
+        // kernel **reintente** despues de mapear, no como se mapea.
+        Ok(())
+    }
+
     unsafe fn install_fault_handlers(&mut self) -> Result<(), &'static str> {
         Err("la plataforma de prueba no tiene excepciones")
     }
@@ -966,13 +972,54 @@ fn a_range_that_leaves_its_region_is_not_handed_out() {
     });
 }
 
-/// Un hueco arriba de lo que el identity map alcanza no se entrega: seria
-/// prometer una direccion que el CPU no puede tocar.
+/// Un hueco arriba de lo que el identity map alcanza no se entrega **todavia**:
+/// seria prometer una direccion que el CPU no puede tocar. Quien atiende el
+/// pedido lo mapea y reintenta; esta capa por si sola no lo sabe.
 #[test]
 fn a_hole_beyond_the_identity_map_is_not_handed_out() {
     with_clean_table(|| {
+        crate::paging::forget_mapped();
         let r = Request { bytes: 0x100, at: Some(4 << 30), ..Default::default() };
         assert_eq!(claims::claim(&sample_machine(), r), Err(Error::Unmapped));
+    });
+}
+
+/// Y una vez mapeado, si.
+///
+/// Es la otra mitad de lo de arriba, y la que importa: sin esto el kernel seria
+/// la razon por la que no se puede usar un aparato (P1). En aarch64 lo era —los
+/// BARs de PCIe caen en 512 GiB y el mapa que da el firmware llega a 257— asi
+/// que el controlador NVMe era inalcanzable.
+#[test]
+fn a_hole_beyond_the_map_is_handed_out_once_mapped() {
+    with_clean_table(|| {
+        crate::paging::forget_mapped();
+        let m = sample_machine();
+        let at = 4 << 30;
+        let r = Request { bytes: 0x100, at: Some(at), ..Default::default() };
+        assert_eq!(claims::claim(&m, r), Err(Error::Unmapped));
+
+        assert!(crate::paging::note_mapped(at, at + crate::paging::GIB));
+        let c = claims::claim(&m, r).expect("mapeado, tiene que entregarse");
+        assert_eq!(c.start, at);
+        // Sigue siendo un hueco: mapearlo no es enterarse de que hay ahi (P4).
+        assert_eq!(c.kind, Kind::Unreported);
+        crate::paging::forget_mapped();
+    });
+}
+
+/// Lo mapeado a pedido cubre lo que abarca, y nada mas.
+#[test]
+fn what_was_mapped_on_request_does_not_cover_its_neighbours() {
+    with_clean_table(|| {
+        crate::paging::forget_mapped();
+        let m = sample_machine();
+        let at = 8 << 30;
+        assert!(crate::paging::note_mapped(at, at + crate::paging::GIB));
+        assert!(crate::paging::covers(&m, at, at + 0x1000));
+        // El GiB de al lado no se mapeo, asi que sigue sin alcanzarse.
+        assert!(!crate::paging::covers(&m, at + crate::paging::GIB, at + crate::paging::GIB + 0x1000));
+        crate::paging::forget_mapped();
     });
 }
 

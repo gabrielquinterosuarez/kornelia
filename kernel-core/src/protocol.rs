@@ -1097,7 +1097,25 @@ fn mem_claim<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine) {
         user: wants_user,
     };
 
-    match claims::claim(m, request) {
+    // Un rango que la maquina no informo y que cae mas arriba de lo que las
+    // tablas alcanzan no es un "no": es un aparato al que todavia no llegamos.
+    // Se mapea y se reintenta **una** vez. Sin esto el kernel seria la razon por
+    // la que no se puede usar el aparato (P1), y en aarch64 lo era: los BARs de
+    // PCIe caen en 512 GiB y el mapa que da el firmware llega a 257.
+    let mut result = claims::claim(m, request);
+    if let (Err(claims::Error::Unmapped), Some(at)) = (&result, a.at) {
+        let first = at / crate::paging::GIB * crate::paging::GIB;
+        let last = at.saturating_add(bytes).div_ceil(crate::paging::GIB) * crate::paging::GIB;
+        // SAFETY: el rango esta fuera de lo mapeado —es justo por eso que
+        // fallo— asi que no se le pisan los atributos a nada en uso.
+        if unsafe { p.map_device(first, last - first) }.is_ok()
+            && crate::paging::note_mapped(first, last)
+        {
+            result = claims::claim(m, request);
+        }
+    }
+
+    match result {
         Err(e) => reply_failure(p, id, e),
         Ok(mut c) => {
             // Y si lo pidio alcanzable sin privilegio, marcarlo de verdad. Si

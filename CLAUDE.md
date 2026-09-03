@@ -166,6 +166,15 @@ el número que el bus le pone al aparato.
 de configuración en aarch64; la MCFG de ACPI sí, y se suma al mapa donde el mapa
 se arma. Antes el kernel publicaba una dirección que él mismo hacía inalcanzable.
 
+**Y alcanza los registros de un aparato aunque estén fuera del mapa.** Si el
+rango que se reclama cae más arriba de lo que las tablas cubren, el kernel **lo
+mapea** y reintenta, en vez de contestar `unmapped`. No es comodidad: en aarch64
+los BARs de PCIe caen en 512 GiB y el mapa que da el firmware llega a 257, así
+que el controlador NVMe era **inalcanzable** — o sea, el kernel era la razón por
+la que no se podía usar un aparato, que es exactamente lo que prohíbe P1. Se
+mapea como dispositivo porque no se sabe qué hay, y se sigue entregando como
+`unreported`: alcanzarlo no es enterarse (P4).
+
 **Y también alcanza los registros de un aparato.** Un rango que cae en un hueco
 del mapa —donde quedan los BARs que el firmware no listó— se entrega con la clase
 `unreported`, que no es `mmio`: el agente se lleva el rango **y** la advertencia

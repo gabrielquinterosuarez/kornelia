@@ -53,6 +53,58 @@ pub fn span_gib(m: &Machine) -> u64 {
     cap.div_ceil(GIB)
 }
 
+/// Cuantos rangos se pueden mapear a pedido, ya arrancada la maquina.
+///
+/// Ocho alcanza para los aparatos de una maquina. Si no alcanzara, se dice en
+/// vez de mapear a medias: media ventana de registros es peor que ninguna,
+/// porque el aparato contesta hasta la mitad y calla el resto.
+const MAX_EXTRA: usize = 8;
+
+/// Lo que se mapeo **despues** del arranque, porque el agente lo pidio.
+///
+/// El mapa que informa la maquina no cubre todo lo que hay: los BARs de PCIe
+/// pueden caer mucho mas arriba de la region mas alta, y en aarch64 caen — el
+/// controlador NVMe de la maquina de prueba aparece en 512 GiB y el mapa llega
+/// a 257. Antes eso era un `unmapped` y el aparato quedaba inalcanzable, o sea
+/// que el kernel era la razon por la que no se podia usar (P1).
+static mut EXTRA: [Option<(u64, u64)>; MAX_EXTRA] = [None; MAX_EXTRA];
+
+/// Anota un rango recien mapeado. `false` si ya no queda lugar.
+pub fn note_mapped(start: u64, end: u64) -> bool {
+    // SAFETY: se llama desde el nucleo del protocolo, que atiende de a uno.
+    let extra = unsafe { &mut *core::ptr::addr_of_mut!(EXTRA) };
+    for slot in extra.iter_mut() {
+        match slot {
+            // Ya estaba: mapear dos veces el mismo BAR no es un error, es el
+            // agente reclamandolo, soltandolo y volviendolo a reclamar.
+            Some((s, e)) if *s <= start && end <= *e => return true,
+            None => {
+                *slot = Some((start, end));
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Si el CPU puede tocar ese rango: porque la maquina lo informo en el mapa, o
+/// porque se mapeo a pedido despues.
+pub fn covers(m: &Machine, start: u64, end: u64) -> bool {
+    if end <= span_gib(m).saturating_mul(GIB) {
+        return true;
+    }
+    // SAFETY: solo lectura, y quien escribe es un solo nucleo.
+    let extra = unsafe { &*core::ptr::addr_of!(EXTRA) };
+    extra.iter().flatten().any(|(s, e)| *s <= start && end <= *e)
+}
+
+/// Olvida lo mapeado a pedido. Solo para los tests, que comparten estaticos.
+#[cfg(test)]
+pub fn forget_mapped() {
+    unsafe { EXTRA = [None; MAX_EXTRA] };
+}
+
 /// Con que atributos hay que mapear la pagina numero `gib`.
 ///
 /// Ante la duda, `Device`. Cachear RAM que en realidad era un registro rompe el

@@ -128,6 +128,23 @@ pub trait Platform {
     /// para que el agente lo lea en vez de suponerlo (P4).
     const ARGUMENTS: &'static [usize];
 
+    /// Extiende el identity map para alcanzar un rango que la maquina no
+    /// informo, como dispositivo (no cacheable).
+    ///
+    /// Existe por P1: el mapa que da el firmware no cubre todo lo que hay, y en
+    /// aarch64 los BARs de PCIe caen muy por encima de la region mas alta. Si
+    /// el kernel dijera "no llego", seria el kernel la razon por la que no se
+    /// puede usar el aparato.
+    ///
+    /// No se supone que haya RAM ahi: se mapea como dispositivo porque no se
+    /// sabe que hay, que es el mismo criterio que usa el arranque (D12).
+    ///
+    /// # Safety
+    ///
+    /// Cambia las tablas de paginas vivas. El rango tiene que estar fuera de lo
+    /// que ya se mapeo, o se pisa lo que habia.
+    unsafe fn map_device(&mut self, start: u64, bytes: u64) -> Result<(), &'static str>;
+
     /// Instala la captura de excepciones (P5, D7).
     ///
     /// # Safety

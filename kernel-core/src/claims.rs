@@ -216,9 +216,10 @@ fn claim_exact(m: &Machine, start: u64, bytes: u64) -> Result<Claim, Error> {
                 // entregar media cosa de cada clase.
                 return Err(Error::Unmapped);
             }
-            if end > reach(m) {
-                // Mas arriba de lo que las tablas de paginas mapean. Entregarlo
-                // seria prometer una direccion que el CPU no puede tocar.
+            if !crate::paging::covers(m, start, end) {
+                // Mas arriba de lo que las tablas de paginas alcanzan. Quien
+                // atiende el pedido lo mapea y reintenta (P1): decir que no
+                // seria que el kernel decida que aparatos existen.
                 return Err(Error::Unmapped);
             }
             // Un hueco no dice nada de si se puede cachear, y suponerlo seria
@@ -239,10 +240,7 @@ fn is_hole(m: &Machine, start: u64, end: u64) -> bool {
     !m.regions.iter().any(|r| r.start < end && r.end() > start)
 }
 
-/// Hasta donde llega el identity map, que es hasta donde el CPU puede tocar.
-fn reach(m: &Machine) -> u64 {
-    crate::paging::span_gib(m).saturating_mul(crate::paging::GIB)
-}
+
 
 /// Busca el primer hueco libre que sirva.
 fn find_gap(m: &Machine, r: Request) -> Result<Claim, Error> {
