@@ -207,12 +207,28 @@ cubría todavía:
    de hoy no tienen cable, escriben un dato en una dirección. Lo que **no** está es el camino
    viejo (INTx), y no es olvido: saber qué cable le toca a un aparato pide interpretar AML, un
    lenguaje entero adentro de ACPI. MSI lo hace innecesario.
-2. **El segundo escalón para cortar un núcleo falta en aarch64.** En x86_64 está: el NMI corta
-   hasta al que hizo `cli`. En ARM sería el FIQ —`msr daifset, #2` no lo tapa— pero para que una
-   interrupción llegue como FIQ hay que ponerla en el Grupo 0 del GIC y prender `FIQEn`, y hoy
-   *todas* las nuestras son del Grupo 0: prenderlo mandaría por FIQ el cable, el buzón y los
-   handlers del agente. Es riesgo alto sobre lo único que sostiene el cordón. Mientras tanto el
-   kernel lo publica (`describe exec` trae `cancel`) en vez de prometerlo.
+2. **El segundo escalón para cortar un núcleo falta en aarch64, y se intentó.** En x86_64 está:
+   el NMI corta hasta al que hizo `cli`. En ARM sería el FIQ —`msr daifset, #2` no lo tapa— y
+   para eso hay que dejar el timbre del corte en el Grupo 0 del GIC, prender `FIQEn`, y mover
+   **todo lo demás** al Grupo 1, porque hoy todas nuestras interrupciones son del Grupo 0 y
+   prender el FIQ las mandaría a todas por ahí.
+
+   Lo que se probó y lo que se aprendió, para que el próximo intento no empiece de cero:
+
+   - Los grupos **sí existen** en este GIC: se escribe `GICD_IGROUPR` y lee de vuelta lo
+     escrito. Eso no se daba por sentado — en GICv2 sin extensiones de seguridad el registro
+     puede estar sin implementar.
+   - Pero al mover el cable al Grupo 1 **deja de entregarse**: el kernel arranca, llega al
+     protocolo, y no contesta más. Pasa igual con `FIQEn` apagado, así que no es el FIQ: es el
+     Grupo 1.
+   - No alcanza con leer las del Grupo 1 por sus registros propios (`GICC_AIAR`/`GICC_AEOIR`
+     en vez de `GICC_IAR`/`GICC_EOIR`), que era la explicación más plausible. Se probó y sigue
+     sin entregar.
+
+   Queda algo más en el medio —prioridades entre grupos, el `PMR`, o que este GIC no soporte
+   bien el Grupo 1 sin extensiones de seguridad— y averiguarlo es tocar el camino que sostiene
+   el cordón. Mientras tanto el kernel **lo publica** (`describe exec` trae `cancel`) en vez de
+   prometer un corte que no llega.
 
 3. **`core.claim` y `exec {core}` siguen esperando en vueltas**, ahora que hay reloj con qué
    medir. Ahí el número solo cambia cuánto se tarda en dar un núcleo por perdido, así que no
