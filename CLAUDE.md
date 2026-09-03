@@ -219,28 +219,42 @@ cubría todavía:
    de hoy no tienen cable, escriben un dato en una dirección. Lo que **no** está es el camino
    viejo (INTx), y no es olvido: saber qué cable le toca a un aparato pide interpretar AML, un
    lenguaje entero adentro de ACPI. MSI lo hace innecesario.
-2. **El segundo escalón para cortar un núcleo falta en aarch64, y se intentó.** En x86_64 está:
-   el NMI corta hasta al que hizo `cli`. En ARM sería el FIQ —`msr daifset, #2` no lo tapa— y
-   para eso hay que dejar el timbre del corte en el Grupo 0 del GIC, prender `FIQEn`, y mover
-   **todo lo demás** al Grupo 1, porque hoy todas nuestras interrupciones son del Grupo 0 y
-   prender el FIQ las mandaría a todas por ahí.
+2. **El segundo escalón para cortar un núcleo no se puede hacer en esta máquina, y ahora se
+   sabe por qué.** En x86_64 está: el NMI corta hasta al que hizo `cli`. En ARM sería el FIQ
+   —`msr daifset, #2` no lo tapa— y para eso hace falta dejar el timbre del corte en el
+   **Grupo 0** del GIC (que es el único que se puede entregar como FIQ) y mover **todo lo
+   demás** al Grupo 1, porque hoy todas nuestras interrupciones son del Grupo 0 y prender
+   `FIQEn` las mandaría a todas por ahí — y entonces no habría dos escalones sino uno.
 
-   Lo que se probó y lo que se aprendió, para que el próximo intento no empiece de cero:
+   El diagnóstico, medido y cerrado. **El Grupo 1 no se puede reconocer en este GIC:**
 
-   - Los grupos **sí existen** en este GIC: se escribe `GICD_IGROUPR` y lee de vuelta lo
-     escrito. Eso no se daba por sentado — en GICv2 sin extensiones de seguridad el registro
-     puede estar sin implementar.
-   - Pero al mover el cable al Grupo 1 **deja de entregarse**: el kernel arranca, llega al
-     protocolo, y no contesta más. Pasa igual con `FIQEn` apagado, así que no es el FIQ: es el
-     Grupo 1.
-   - No alcanza con leer las del Grupo 1 por sus registros propios (`GICC_AIAR`/`GICC_AEOIR`
-     en vez de `GICC_IAR`/`GICC_EOIR`), que era la explicación más plausible. Se probó y sigue
-     sin entregar.
+   - Los grupos existen y se habilitan: `GICD_CTLR` y `GICC_CTLR` aceptan `EnableGrp1`, y
+     `FIQEn` también — se les escribe y leen de vuelta lo escrito (`0x3` y `0xb`).
+   - Con el Grupo 1 habilitado, una interrupción puesta ahí **queda pendiente** (`GICD_ISPENDR`
+     la muestra) y el GIC la considera de prioridad suficiente. No es un problema de
+     habilitación ni de prioridad ni del `PMR`.
+   - Pero `GICC_IAR` devuelve **1022**, y ese número no es basura: significa "la pendiente es
+     del Grupo 1 y vos lees desde el mundo seguro; si la querés, reconocela por `GICC_AIAR`".
+   - Y **`GICC_AIAR` lee cero**, porque los registros del otro grupo existen sólo con
+     extensiones de seguridad, y este GIC no las tiene (`GICD_TYPER` bit 10 en cero).
 
-   Queda algo más en el medio —prioridades entre grupos, el `PMR`, o que este GIC no soporte
-   bien el Grupo 1 sin extensiones de seguridad— y averiguarlo es tocar el camino que sostiene
-   el cordón. Mientras tanto el kernel **lo publica** (`describe exec` trae `cancel`) en vez de
-   prometer un corte que no llega.
+   O sea: el GIC nos manda a una puerta que en esta máquina no está construida. Sin poder
+   reconocer una interrupción no hay handler posible, así que las normales no pueden vivir en
+   el Grupo 1, así que el corte no puede quedarse solo en el Grupo 0. **La limitación es de la
+   máquina, no del kernel** — y por eso el kernel **lo publica** (`describe exec` trae
+   `cancel`) en vez de prometer un corte que no llega.
+
+   **Dónde sí se podría:** en **GICv3**, donde el Grupo 0 se entrega como FIQ a EL1 y hay
+   `ICC_IAR0_EL1`/`ICC_IAR1_EL1` de verdad, sin depender de extensiones de seguridad. Pero eso
+   es un driver nuevo entero (redistribuidores por núcleo, la interfaz por registros de
+   sistema) **y se lleva puesto el MSI**: con GICv3, QEMU no da el frame GICv2m que usa
+   `irq.install {msi:true}` sino el ITS, que es otro driver grande. Es un proyecto, no un
+   pendiente.
+
+   Y el intento anterior falló por otra razón, más tonta y que conviene no repetir: movía
+   interrupciones al Grupo 1 **sin habilitar el Grupo 1** (`GICC_CTLR` se quedaba en `1`). Con
+   eso nada se entrega, con `FIQEn` prendido o apagado — que es justo lo que se había observado
+   y llevó a descartar el FIQ como sospechoso cuando el FIQ nunca había estado en juego.
 
 
 ## Cosas que ya costaron caras
