@@ -216,6 +216,15 @@ ls /sys/kernel/iommu_groups/     # tiene que haber algo
 dmesg | grep -i dmar
 ```
 
+> [!note] Si algún día querés vsock
+> Es un canal punto a punto con el anfitrión que **no usa la red**: sin IP, sin puertos reenviados, sin NAT. Se agrega con un aparato más:
+>
+> ```bash
+> -device vhost-vsock-pci,guest-cid=3
+> ```
+>
+> Necesita `/dev/vhost-vsock` en el anfitrión (en Debian 13 ya está, y es del grupo `kvm`). Con eso, `ssh vsock/3` entra desde el host y el mensaje del generador desaparece. No hace falta para nada de este libro; está acá porque el concepto sí importa — ver [[Maquina-virtual]].
+
 ## Lo que hace que esto sirva: snapshots
 
 Antes de romper nada:
@@ -264,6 +273,7 @@ chmod +x ~/vm-practicas/arrancar.sh
 | `-device intel-iommu: Parameter 'driver' expects a dynamic sysbus device type for the machine` | Falta `-machine q35`. El IOMMU de Intel solo existe en esa máquina; en la de omisión el aparato no se puede ni instanciar. QEMU no arranca: no es que la VM falle después. |
 | Dice `DataSourceNone` en vez de `DataSourceNoCloud` | El `seed.img` no se adjuntó, o le falta `format=raw` en el `-drive`. Sin eso no hay usuario ni clave y no podés entrar. |
 | Terminó pero `gcc` no existe | cloud-init no pudo instalar los paquetes: casi siempre no había red. Mirá `cloud-init status --long` y `/var/log/cloud-init-output.log`. |
+| `systemd-ssh-generator: Failed to query local AF_VSOCK CID: Cannot assign requested address` | **Inofensivo, ignoralo.** systemd intenta ofrecer SSH por [[Maquina-virtual#El canal que no es una red\|vsock]], que es un canal directo con el anfitrión sin pasar por la red. Esta VM no tiene ese aparato, así que no hay dirección de vsock que consultar. Para entrar usás el `hostfwd` del 2222. Aparece tarde en el log porque los generadores de systemd **se re-ejecutan en cada `daemon-reload`**, no solo al arrancar. |
 | `Could not access KVM kernel module` | Falta el módulo o el usuario no está en el grupo `kvm`. `sudo usermod -aG kvm $USER` y volver a entrar. En una máquina que ya es virtual, KVM anidado puede no estar. Sacá `-enable-kvm`: va lento pero anda. |
 | Arranca y no aparece la consola | Falta `-nographic`, o la imagen no es *genericcloud* (las `generic` esperan pantalla). |
 | No pide usuario nunca | `seed.img` no se adjuntó o el YAML tiene un error de indentación. cloud-init es muy quisquilloso. Mirá `sudo cloud-init status --long` adentro. |

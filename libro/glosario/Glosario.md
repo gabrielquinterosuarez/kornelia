@@ -172,6 +172,7 @@ Si dos términos te suenan iguales, el lugar es [[Falsos-amigos]].
 
 - **Vector** (de interrupción) — El índice en la tabla de handlers. Distinto del número de IRQ. Ver [[Falsos-amigos#12]].
 - **`volatile`** — "No optimices este acceso". Obligatorio para MMIO, inútil para concurrencia. Ver [[MMIO]].
+- **VSOCK** (*AF_VSOCK*) — Una familia de direcciones para que una máquina virtual hable con su anfitrión **sin pasar por la red**: en vez de IP y puerto, un CID y un puerto. Ver [[Maquina-virtual]].
 - **VT-d** — El IOMMU de Intel. Se le habla por registros. Ver [[IOMMU]].
 
 ## W

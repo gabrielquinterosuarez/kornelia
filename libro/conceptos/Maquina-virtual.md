@@ -68,6 +68,27 @@ Se confunden todo el tiempo:
 
 Un contenedor **no es una VM chiquita**: es un proceso de Linux con la vista recortada. Si el kernel se cuelga, se cuelgan todos los contenedores. Ver [[08-Monolitico-micro-exo-unikernel]].
 
+## El canal que no es una red
+
+Un huésped y su anfitrión necesitan hablarse, y la forma obvia —darle una IP al huésped y usar TCP— arrastra una pila entera: direcciones, ruteo, NAT, cortafuegos, DHCP. Todo eso para conectar dos programas que están **en la misma máquina física**, separados solo por una capa de software.
+
+**AF_VSOCK** es la alternativa: una familia de direcciones entera, al mismo nivel que `AF_INET`, hecha para eso y nada más. En vez de una IP y un puerto, una dirección de vsock es un **CID** (*context ID*: el número del huésped en el bus) y un puerto. No hay ruteo porque no hay a dónde rutear: el único destino posible es el anfitrión.
+
+Lo provee un aparato paravirtualizado (`vhost-vsock-pci`), o sea que **no existe en el mundo físico**: es de la misma familia que `virtio` de más arriba, un aparato inventado para que el huésped hable rápido con quien lo emula.
+
+Se ve en el arranque de cualquier Debian moderno adentro de una VM sin ese aparato:
+
+```
+systemd-ssh-generator[5398]: Failed to query local AF_VSOCK CID: Cannot assign requested address
+```
+
+systemd intenta ofrecer SSH por vsock —así se entra a una VM que ni siquiera tiene red configurada— y al no encontrar el aparato, se calla y sigue. Inofensivo.
+
+> [!tip] Por qué esto le importa a este libro
+> Es la forma exacta del problema que plantea **D5**: *el [[UART]] es el cordón umbilical, no el transporte; el agente escribe el transporte rápido.* Un cable serie a 115.200 baudios alcanza para hablar, no para mover un volcado de memoria.
+>
+> vsock es cómo se ve ese transporte rápido **cuando la máquina es virtual**: un aparato de cola en memoria, sin cables, sin protocolo de red, y sin nada que descubrir. Y ahí está lo honesto — **Kornelia no lo tiene**. El transporte rápido que D5 le deja al agente no lo escribió nadie todavía, así que hoy el único camino sigue siendo el cordón umbilical.
+
 ## Cómo lo hace Linux
 
 ```bash
@@ -122,6 +143,8 @@ En x86_64 no se veía, porque ahí la RAM arranca en cero. **"Bloqueado" y "nunc
 - [[P03-Emulado-contra-KVM]] — *(mirar)* correr el mismo `exec` de las dos formas y comparar tiempos.
 
 ## Recordar #flashcards/conceptos
+
+¿Qué es AF_VSOCK y qué problema resuelve?::Una familia de direcciones para que un huésped hable con su anfitrión **sin usar la red**: en vez de IP y puerto, un CID (el número del huésped en el bus) y un puerto. No hay ruteo porque el único destino posible es el anfitrión.
 
 ¿Diferencia entre emulación y virtualización?::En emulación un programa lee cada instrucción y la simula, así que puede correr otra arquitectura y va 10-100 veces más lento. En virtualización el silicio ejecuta las instrucciones de verdad, a velocidad casi nativa, pero solo de la misma arquitectura.
 
