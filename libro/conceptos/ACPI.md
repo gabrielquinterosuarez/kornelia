@@ -10,7 +10,7 @@ capitulos: [15-Enumerar-sin-adivinar-ACPI, 34-Del-cable-al-numero-PIC-APIC-GIC, 
 
 # ACPI
 
-> Las tablas donde el [[Firmware|firmware]] deja escrito **qué tiene la máquina**: cuántos núcleos, dónde está el controlador de interrupciones, dónde se configura el bus.
+> Las tablas donde el [[Firmware|firmware]] deja escrito **qué tiene la máquina**: cuántos núcleos, dónde está el controlador de [[Interrupcion|interrupciones]], dónde se configura el [[Bus|bus]].
 
 *Advanced Configuration and Power Interface.* El mapa de memoria dice cuánta RAM hay y nada más. Todo lo demás —lo que un kernel necesita para dar el segundo paso— vive acá.
 
@@ -44,10 +44,10 @@ Cada tabla arranca con el mismo encabezado de 36 bytes, y los primeros cuatro so
 
 | Firma | Nombre | Qué trae | Sin ella |
 |---|---|---|---|
-| `APIC` | **MADT** | Cuántos núcleos hay, su identificador, y dónde está el controlador de interrupciones (APIC en x86, GIC en ARM). También dónde disparar un [[MSI]] en ARM. | No se puede arrancar un segundo núcleo ni instalar un handler. |
-| `MCFG` | — | La dirección base de la ventana de configuración de [[PCIe]] mapeada en memoria, y qué buses cubre. | No se encuentra ningún aparato del bus. |
+| `APIC` | **MADT** | Cuántos núcleos hay, su identificador, y dónde está el controlador de interrupciones (APIC en x86, GIC en ARM). También dónde disparar un [[MSI]] en ARM. | No se puede arrancar un segundo núcleo ni instalar un [[Handler|handler]]. |
+| `MCFG` | — | La dirección base de la ventana de configuración de [[PCIe]] mapeada en memoria, y qué buses cubre. | No se encuentra ningún [[Aparato|aparato]] del bus. |
 | `SPCR` | — | Dónde está el puerto serie de consola y por qué interrupción avisa. | Hay que hornear una dirección y rezar. |
-| `DMAR` | — | Dónde están los registros del IOMMU de Intel (VT-d). En ARM el equivalente es `IORT`. | No se puede declarar qué memoria alcanza un aparato (D8). |
+| `DMAR` | — | Dónde están los registros del [[IOMMU]] de Intel (VT-d). En ARM el equivalente es `IORT`. | No se puede declarar qué memoria alcanza un aparato (D8). |
 | `FACP` | **FADT** | Un cajón de sastre: el contador de frecuencia fija, cómo se le pide al firmware que arranque un núcleo en ARM (PSCI), y el puntero al DSDT. | — |
 | `DSDT` | — | **AML.** Ver abajo. | — |
 
@@ -100,7 +100,7 @@ El recorrido entero es un `match` sobre cuatro letras (`kernel-core/src/acpi.rs:
 
 Tres cosas que salen directo de P4:
 
-1. **El cable se muda.** El kernel arranca con la dirección del UART horneada, porque hay que poder hablar antes de leer nada. Apenas la SPCR dice dónde está la consola de verdad, se muda ahí. Es P4 aplicado a lo más básico que tiene el kernel.
+1. **El cable se muda.** El kernel arranca con la dirección del [[UART]] horneada, porque hay que poder hablar antes de leer nada. Apenas la SPCR dice dónde está la consola de verdad, se muda ahí. Es P4 aplicado a lo más básico que tiene el kernel.
 2. **Se publican las firmas de todas las tablas, se lean o no** (`kernel-core/src/protocol.rs:876#acpi_signatures`). Que exista en la máquina algo que este kernel todavía no sabe leer **es más útil que callarlo**: el agente ve la lista y decide.
 3. **Lo que no se interpreta se dice.** SMBIOS se informa con su dirección y nada más: inventarle campos sería peor que admitir que no se leyó.
 

@@ -44,7 +44,7 @@ Una página de 2 MiB o de 1 GiB no es otro mecanismo: es **el mismo recorrido, c
 | 2 MiB | 21 = 12 + 9 | 3 | 512 veces más |
 | 1 GiB | 30 = 12 + 9 + 9 | 2 | 262.144 veces más |
 
-Lo que se gana es **presión sobre el TLB**, que es lo que se nota en una base de datos o una máquina virtual: con 4 KiB, 8 GiB de memoria activa no entran ni de casualidad en el TLB y cada acceso paga un recorrido. Lo que se pierde es grano: los atributos son de todo el bloque, y el desperdicio del final también.
+Lo que se gana es **presión sobre el TLB**, que es lo que se nota en una base de datos o una [[Maquina-virtual|máquina virtual]]: con 4 KiB, 8 GiB de memoria activa no entran ni de casualidad en el TLB y cada acceso paga un recorrido. Lo que se pierde es grano: los atributos son de todo el bloque, y el desperdicio del final también.
 
 ## Alineación
 
@@ -96,7 +96,7 @@ El segundo es el que da sorpresas: la promoción cuesta compactar, y compactar f
 ## Cómo se ve roto
 
 > [!danger] Una alineación mayor que la página es una promesa que el cargador no cumple
-> `#[repr(align(8192))]` deja el símbolo alineado **adentro de la imagen**, pero UEFI carga la imagen en una dirección alineada a 4 KiB, y ahí una alineación de 8 KiB se pierde. Lo caro no es que la estructura quede desalineada: es que **el compilador le cree al `align`** y, dando por cierto que los bits de abajo son cero, simplifique las máscaras con las que se arma la dirección. El síntoma fue un SMMU leyendo ceros una página más abajo de donde habíamos escrito, que no se parece en nada a la causa. La salida es pedir el doble de lugar y alinear **a mano en runtime**, para que la dirección sea un dato y no una suposición: `kernel-aarch64/src/smmu.rs:152#struct StreamL1` y `kernel-aarch64/src/smmu.rs:158#static mut STRTAB`. Ver [[24-Alineacion-la-promesa-que-el-cargador-no-cumple]].
+> `#[repr(align(8192))]` deja el símbolo alineado **adentro de la imagen**, pero [[UEFI]] carga la imagen en una dirección alineada a 4 KiB, y ahí una alineación de 8 KiB se pierde. Lo caro no es que la estructura quede desalineada: es que **el compilador le cree al `align`** y, dando por cierto que los bits de abajo son cero, simplifique las máscaras con las que se arma la dirección. El síntoma fue un SMMU leyendo ceros una página más abajo de donde habíamos escrito, que no se parece en nada a la causa. La salida es pedir el doble de lugar y alinear **a mano en runtime**, para que la dirección sea un dato y no una suposición: `kernel-aarch64/src/smmu.rs:152#struct StreamL1` y `kernel-aarch64/src/smmu.rs:158#static mut STRTAB`. Ver [[24-Alineacion-la-promesa-que-el-cargador-no-cumple]].
 
 | Síntoma | Causa |
 |---|---|

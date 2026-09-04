@@ -14,7 +14,7 @@ capitulos: [06-El-silicio-tiene-modos, 25-Como-se-baja-de-privilegio, 28-Que-es-
 
 ## Qué problema resuelve
 
-Hay instrucciones que, ejecutadas por cualquiera, terminan el juego: enmascarar interrupciones (`cli`), cambiar la tabla de páginas (`mov cr3`), apagar la caché, hablarle a un puerto de E/S. Si todo el código pudiera hacerlas, no habría nada que un kernel pudiera garantizar — ni siquiera seguir corriendo.
+Hay instrucciones que, ejecutadas por cualquiera, terminan el juego: enmascarar [[Interrupcion|interrupciones]] (`cli`), cambiar la [[Tabla-de-paginas|tabla de páginas]] (`mov cr3`), apagar la [[Cache|caché]], hablarle a un puerto de E/S. Si todo el código pudiera hacerlas, no habría nada que un kernel pudiera garantizar — ni siquiera seguir corriendo.
 
 La respuesta podría haber sido "que el kernel revise el código antes de ejecutarlo". No es posible: revisar código arbitrario para saber qué va a hacer es el problema de la parada. Así que la respuesta es del hardware: **el procesador tiene un estado que dice cuánto puede el código de ahora**, y las instrucciones prohibidas no fallan por buena voluntad — fallan porque el silicio las rechaza.
 
@@ -25,7 +25,7 @@ El mismo mecanismo con tres nombres y, en dos de los tres, **numerado al revés*
 | Arquitectura | Cómo se llama | El más privilegiado | El menos |
 |---|---|---|---|
 | x86_64 | **Anillo** (*ring*) | **0** — el número **baja** al subir el privilegio | 3 |
-| aarch64 | **Nivel de excepción** (*EL*) | **EL3** (firmware) — el número **sube** | EL0 |
+| aarch64 | **Nivel de excepción** (*EL*) | **EL3** ([[Firmware|firmware]]) — el número **sube** | EL0 |
 | RISC-V | **Modo** | M (máquina) | U (usuario) |
 
 En x86_64 los anillos 1 y 2 existen y casi nadie los usa. En aarch64 un kernel normal vive en EL1, el hipervisor en EL2 y el firmware seguro en EL3. Y quién manda en x86 no es un registro aparte: **son los dos bits de abajo de `CS`**, el selector de segmento. El segmento en 64 bits ya casi no direcciona nada, pero sigue llevando el privilegio ([[Falsos-amigos#5]]).
@@ -34,12 +34,12 @@ Qué se pierde al bajar:
 
 | Se pierde | Se conserva |
 |---|---|
-| Enmascarar interrupciones | **Escribirle a los registros de un aparato PCIe** — están en memoria ([[MMIO]]) y escribirlos es una instrucción común |
+| Enmascarar interrupciones | **Escribirle a los registros de un [[Aparato|aparato]] [[PCIe]]** — están en memoria ([[MMIO]]) y escribirlos es una instrucción común |
 | Cargar tablas de páginas propias | Leer y escribir la memoria que te dejaron alcanzable |
 | Los MSR y los puertos de E/S de x86 | Aritmética, saltos, todo el cómputo |
-| Instrucciones de mantenimiento de caché y TLB | |
+| Instrucciones de mantenimiento de caché y [[TLB]] | |
 
-Fijate en la fila de arriba a la derecha: **la parte central de un driver anda sin privilegio**. Es la observación que hace que D27 sea barato.
+Fijate en la fila de arriba a la derecha: **la parte central de un [[Driver|driver]] anda sin privilegio**. Es la observación que hace que D27 sea barato.
 
 Y la transición no es una llamada: **bajar de privilegio es "volver de una excepción que nunca ocurrió"**. Se le arma al hardware el marco que espera y se ejecuta `iretq` (x86_64) o `eret` (aarch64). Subir de vuelta requiere un trap: eso es [[Syscall]].
 

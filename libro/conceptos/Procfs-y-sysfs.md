@@ -16,9 +16,9 @@ capitulos: [00-Como-mirar-una-maquina, 18-Lo-que-la-maquina-no-dice, 53-Sin-sist
 
 ## Qué problema resuelve
 
-Un kernel sabe cosas que nadie más sabe: cuánta memoria hay y dónde, qué aparatos están enchufados, cuántas interrupciones llegaron por cada vector, qué tiene mapeado cada proceso. Y el espacio de usuario **no puede leer eso**: está del otro lado del privilegio.
+Un kernel sabe cosas que nadie más sabe: cuánta memoria hay y dónde, qué [[Aparato|aparatos]] están enchufados, cuántas interrupciones llegaron por cada vector, qué tiene mapeado cada proceso. Y el espacio de usuario **no puede leer eso**: está del otro lado del privilegio.
 
-Hacen falta, entonces, una puerta y un formato. Y ahí aparece la incomodidad de verdad: **una puerta nueva por cada dato es una llamada al sistema nueva por cada dato**. Cada una hay que diseñarla, versionarla y mantenerla para siempre, y una vez que existe no se puede sacar.
+Hacen falta, entonces, una puerta y un formato. Y ahí aparece la incomodidad de verdad: **una puerta nueva por cada dato es una [[Syscall|llamada al sistema]] nueva por cada dato**. Cada una hay que diseñarla, versionarla y mantenerla para siempre, y una vez que existe no se puede sacar.
 
 La idea de `/proc` es no agregar puertas: **usar la que ya está**. `open`, `read`, `close` ya existen, ya tienen permisos, ya andan con `cat`, `grep` y cualquier lenguaje. Un dato nuevo del kernel es un archivo nuevo, y no cuesta nada.
 
@@ -49,7 +49,7 @@ Es la distinción que hay que llevarse:
 | | `/proc` | `/sys` |
 |---|---|---|
 | Cuándo | 1992, copiando a Plan 9. | 2002, con el modelo de dispositivos de Linux 2.6. |
-| Qué contiene | Todo lo que fue apareciendo. | El árbol de dispositivos, buses y drivers. |
+| Qué contiene | Todo lo que fue apareciendo. | El árbol de dispositivos, buses y [[Driver|drivers]]. |
 | Formato | **Libre.** Cada archivo inventó el suyo. | **Un valor por archivo**, casi siempre un número o una palabra. |
 | Para quién | Un humano con una terminal. | Un programa (`udev`, `systemd`). |
 | Cómo se lee | `grep`, `awk`, y saber la forma de ese archivo en particular. | `cat` y listo. |
@@ -67,15 +67,15 @@ Los que usa este libro:
 
 | Ruta | Qué contesta |
 |---|---|
-| `/proc/iomem` | El mapa de memoria física: qué rango es RAM, cuál es el BAR de qué aparato. Ver [[MMIO]]. |
-| `/proc/interrupts` | Cuántas interrupciones llegaron, por vector y por núcleo, con el nombre del handler. Ver [[Interrupcion]]. |
+| `/proc/iomem` | El mapa de memoria física: qué rango es RAM, cuál es el [[BAR]] de qué aparato. Ver [[MMIO]]. |
+| `/proc/interrupts` | Cuántas interrupciones llegaron, por vector y por núcleo, con el nombre del [[Handler|handler]]. Ver [[Interrupcion]]. |
 | `/proc/cpuinfo` | Qué procesador hay y qué capacidades tiene (`flags`). |
 | `/proc/self/maps` | Qué tiene mapeado **este** proceso y con qué permisos. Ver [[MMU]]. |
-| `/proc/vmstat` | Contadores del subsistema de memoria, incluidos los page faults. |
-| `/sys/bus/pci/devices/` | Un directorio por aparato PCIe, con `vendor`, `device`, `class`, `resource0`. Ver [[17-PCIe-buses-funciones-y-BARs]]. |
+| `/proc/vmstat` | Contadores del subsistema de memoria, incluidos los page [[Fault|faults]]. |
+| `/sys/bus/pci/devices/` | Un directorio por aparato [[PCIe]], con `vendor`, `device`, `class`, `resource0`. Ver [[17-PCIe-buses-funciones-y-BARs]]. |
 | `/sys/kernel/iommu_groups/` | Qué aparatos comparten grupo de aislamiento. Ver [[47-IOMMU-VT-d-y-SMMUv3]]. |
-| `/sys/firmware/acpi/tables/` | Las tablas de ACPI **crudas**, para volcarlas con `iasl`. Ver [[15-Enumerar-sin-adivinar-ACPI]]. |
-| `/sys/firmware/devicetree/base/` | El device tree, un directorio por nodo. Ver [[16-El-otro-dialecto-device-tree]]. |
+| `/sys/firmware/acpi/tables/` | Las tablas de [[ACPI]] **crudas**, para volcarlas con `iasl`. Ver [[15-Enumerar-sin-adivinar-ACPI]]. |
+| `/sys/firmware/devicetree/base/` | El [[Device-tree|device tree]], un directorio por nodo. Ver [[16-El-otro-dialecto-device-tree]]. |
 
 ```bash
 sudo cat /proc/iomem | head -30
@@ -99,11 +99,11 @@ Lo mismo, con **un solo verbo**: `describe`. Y no hay sistema de archivos en nin
 
 Se pide con `describe {what:["memory","pcie"]}` y vuelve solo eso. Tres cosas de ese diseño no son detalles:
 
-**1. Sin `what`, contesta un índice, no todo.** Devuelve la arquitectura, **la lista de las trece secciones**, y unos pocos números de resumen: cuántas regiones de memoria hay, si el firmware dejó ACPI o device tree. Es `ls /sys`, no `cat` de todo `/sys`. Esa es D16: volcar todo ahoga al cliente chico, y resumir le saca información al grande, así que **el cliente pide la profundidad que quiere** y el kernel no adivina a quién le habla.
+**1. Sin `what`, contesta un índice, no todo.** Devuelve la arquitectura, **la lista de las trece secciones**, y unos pocos números de resumen: cuántas regiones de memoria hay, si el [[Firmware|firmware]] dejó ACPI o device tree. Es `ls /sys`, no `cat` de todo `/sys`. Esa es D16: volcar todo ahoga al cliente chico, y resumir le saca información al grande, así que **el cliente pide la profundidad que quiere** y el kernel no adivina a quién le habla.
 
-**2. Una sección que no conoce es un error, no un silencio:** `kernel-core/src/protocol.rs:361#unknown section in what`. El comentario de al lado dice por qué: *contestar solo con lo que se reconoció, callado, sería mentir por omisión*. Si pedís `iomu` en vez de `iommu` y el kernel te contesta alegremente con las otras doce secciones, tu programa concluye que esta máquina no tiene IOMMU. Ver [[18-Lo-que-la-maquina-no-dice]].
+**2. Una sección que no conoce es un error, no un silencio:** `kernel-core/src/protocol.rs:361#unknown section in what`. El comentario de al lado dice por qué: *contestar solo con lo que se reconoció, callado, sería mentir por omisión*. Si pedís `iomu` en vez de `iommu` y el kernel te contesta alegremente con las otras doce secciones, tu programa concluye que esta máquina no tiene [[IOMMU]]. Ver [[18-Lo-que-la-maquina-no-dice]].
 
-**3. Lo que se publica incluye lo que la máquina no puede.** `describe {what:["exec"]}` trae `cancel`, que dice si el segundo escalón para cortar un núcleo existe en esta máquina —en aarch64 no, porque el GIC de QEMU no tiene los registros que harían falta— y `describe {what:["clock"]}` dice **que no se sabe** la frecuencia cuando nadie la informa, en vez de calcular un tiempo falso. Publicar una carencia es P4 aplicado al revés.
+**3. Lo que se publica incluye lo que la máquina no puede.** `describe {what:["exec"]}` trae `cancel`, que dice si el segundo escalón para cortar un núcleo existe en esta máquina —en aarch64 no, porque el GIC de [[QEMU]] no tiene los registros que harían falta— y `describe {what:["clock"]}` dice **que no se sabe** la frecuencia cuando nadie la informa, en vez de calcular un tiempo falso. Publicar una carencia es P4 aplicado al revés.
 
 Y el contador de bytes que el cable perdió está en `describe {what:["cable"]}`, porque antes existía y **nadie lo podía ver**: el portón exige que sea cero.
 

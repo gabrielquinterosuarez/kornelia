@@ -10,7 +10,7 @@ capitulos: [35-MSI-interrupciones-sin-cable, 36-Nivel-contra-flanco, 17-PCIe-bus
 
 # MSI
 
-> Una [[Interrupcion|interrupción]] sin cable: el aparato **escribe un dato en una dirección** y esa escritura se convierte en interrupción.
+> Una [[Interrupcion|interrupción]] sin cable: el [[Aparato|aparato]] **escribe un dato en una dirección** y esa escritura se convierte en interrupción.
 
 *Message Signaled Interrupts.* Es como interrumpe todo lo moderno, y entenderlo cambia dos cosas más: por qué ya casi nadie interpreta AML, y por qué el [[IOMMU]] puede bloquear una interrupción.
 
@@ -18,9 +18,9 @@ capitulos: [35-MSI-interrupciones-sin-cable, 36-Nivel-contra-flanco, 17-PCIe-bus
 
 El modelo viejo —INTx— es un **cable físico**. Un aparato tiene cuatro pines (`INTA#` a `INTD#`), los conecta a la placa, y la placa los conecta al controlador. De ahí salen tres problemas que se acumulan:
 
-1. **Hay pocos cables.** Un PC viejo tenía 16 IRQ. Con más aparatos que cables, hay que **compartir**: varios drivers en cadena sobre el mismo número, cada uno preguntando "¿fue mío?". Eso es latencia y es código que se equivoca.
+1. **Hay pocos cables.** Un PC viejo tenía 16 IRQ. Con más aparatos que cables, hay que **compartir**: varios [[Driver|drivers]] en cadena sobre el mismo número, cada uno preguntando "¿fue mío?". Eso es latencia y es código que se equivoca.
 2. **No hay forma de decir *cuál*.** Una tarjeta con ocho colas de recepción tiene un solo cable: no puede decir "terminó la cola 3".
-3. **Y sobre todo: saber qué cable le toca a un aparato es un infierno.** El cable físico no está en ninguna tabla simple. En una máquina con ACPI, el ruteo (`_PRT`) está escrito en **AML**, que es un *lenguaje entero* metido adentro de ACPI, con variables, condicionales y un intérprete. Para averiguar por qué pin interrumpe una placa, un kernel tiene que **ejecutar un programa del firmware**.
+3. **Y sobre todo: saber qué cable le toca a un aparato es un infierno.** El cable físico no está en ninguna tabla simple. En una máquina con [[ACPI]], el ruteo (`_PRT`) está escrito en **AML**, que es un *lenguaje entero* metido adentro de ACPI, con variables, condicionales y un intérprete. Para averiguar por qué pin interrumpe una placa, un kernel tiene que **ejecutar un programa del [[Firmware|firmware]]**.
 
 MSI borra los tres. No hay cable que rutear, hay tantos "números" como el aparato quiera, y **el kernel no necesita interpretar AML** para nada de esto.
 
@@ -39,7 +39,7 @@ flowchart LR
 
 Y de ahí salen las dos consecuencias que hacen a esta nota:
 
-> [!important] Un MSI **es** un DMA
+> [!important] Un MSI **es** un [[DMA]]
 > Es una escritura del aparato a memoria, igual que cualquier otra. Así que el [[IOMMU]] la ve, la traduce y **la puede bloquear**. Si el agente no declaró esa dirección, la interrupción no llega — y no se ve como un problema de interrupciones, se ve como un aparato mudo. Ver [[Falsos-amigos#4]].
 
 > [!important] Un MSI es un **pulso**, no un nivel
@@ -71,7 +71,7 @@ cat /proc/interrupts                    # las MSI aparecen con nombres tipo nvme
 ls /sys/bus/pci/devices/*/msi_irqs/     # los números que le tocaron a cada aparato
 ```
 
-Fijate en `/proc/interrupts`: las filas con nombre `nvme0q1`, `nvme0q2`… son **una MSI-X por cola**. Eso es el punto 2 de arriba resuelto, y se ve a simple vista. MSI-X es la versión grande de MSI: hasta 2048 vectores por aparato, cada uno con su propia dirección y dato en una tabla en el BAR.
+Fijate en `/proc/interrupts`: las filas con nombre `nvme0q1`, `nvme0q2`… son **una MSI-X por cola**. Eso es el punto 2 de arriba resuelto, y se ve a simple vista. MSI-X es la versión grande de MSI: hasta 2048 vectores por aparato, cada uno con su propia dirección y dato en una tabla en el [[BAR]].
 
 ## Cómo lo hace Kornelia
 
@@ -123,5 +123,5 @@ En Kornelia, ¿quién elige el número de una interrupción MSI y por qué?::El 
 
 - [[Interrupcion]] · [[Handler]] · [[MMIO]]
 - [[Falsos-amigos#12]] — IRQ, línea, vector, MSI.
-- [[Falsos-amigos#4]] — direcciones física, virtual, de bus, IOVA.
+- [[Falsos-amigos#4]] — direcciones física, virtual, de [[Bus|bus]], IOVA.
 - [[36-Nivel-contra-flanco]] · [[47-IOMMU-VT-d-y-SMMUv3]] · [[46-DMA-el-aparato-lee-memoria-solo]]

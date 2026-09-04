@@ -10,9 +10,9 @@ capitulos: [46-DMA-el-aparato-lee-memoria-solo, 47-IOMMU-VT-d-y-SMMUv3, 48-Colas
 
 # DMA
 
-> El aparato lee y escribe la RAM **por su cuenta**: el procesador le dice dónde y cuánto, y se va a hacer otra cosa.
+> El [[Aparato|aparato]] lee y escribe la RAM **por su cuenta**: el procesador le dice dónde y cuánto, y se va a hacer otra cosa.
 
-*Direct Memory Access.* Es la mitad que falta de [[MMIO]]. En MMIO el procesador va al aparato; en DMA **el aparato va a la memoria**, y es un maestro del bus como cualquier otro. Todo el hardware rápido de los últimos treinta años funciona así.
+*Direct Memory Access.* Es la mitad que falta de [[MMIO]]. En MMIO el procesador va al aparato; en DMA **el aparato va a la memoria**, y es un maestro del [[Bus|bus]] como cualquier otro. Todo el hardware rápido de los últimos treinta años funciona así.
 
 ## Qué problema resuelve
 
@@ -21,7 +21,7 @@ La alternativa es PIO (*programmed I/O*): el procesador copia los datos de a ped
 | Acceso | Orden de magnitud |
 |---|---|
 | Un registro del procesador | menos de 1 ns |
-| Caché L1 | ~1 ns |
+| [[Cache|Caché]] L1 | ~1 ns |
 | RAM | ~80 ns |
 | **Un registro de un aparato por MMIO** | **cientos de ns a 1 µs** |
 | Un bloque de un SSD NVMe | ~50 µs |
@@ -55,13 +55,13 @@ Cuatro condiciones que no se ven en el dibujo y sin las cuales no ocurre nada:
 
 ### Por qué es peligroso
 
-**El aparato no pasa por la [[MMU]].** Un puntero mal puesto en un registro de aparato no da page fault: el DMA ocurre, en otro lado, y sigue todo andando hasta que algo lejano se rompe. Es corrupción silenciosa de memoria, el peor bug posible, y no hay forma de atraparlo desde el procesador porque el procesador no participó.
+**El aparato no pasa por la [[MMU]].** Un puntero mal puesto en un registro de aparato no da page [[Fault|fault]]: el DMA ocurre, en otro lado, y sigue todo andando hasta que algo lejano se rompe. Es corrupción silenciosa de memoria, el peor bug posible, y no hay forma de atraparlo desde el procesador porque el procesador no participó.
 
 Y es peor que un error: un aparato es una máquina de leer toda la RAM. Cualquier cosa conectada a un puerto que hable PCIe —Thunderbolt, por ejemplo— puede leer las claves de una máquina bloqueada. La respuesta a las dos cosas, el error y el ataque, es el mismo silicio: el [[IOMMU]].
 
 ## Cómo lo hace Linux
 
-Hay una API de DMA entera, y su razón de ser es que el driver **no** manipule direcciones físicas a mano. Vive en `Documentation/core-api/dma-api.rst` y `kernel/dma/`.
+Hay una API de DMA entera, y su razón de ser es que el [[Driver|driver]] **no** manipule direcciones físicas a mano. Vive en `Documentation/core-api/dma-api.rst` y `kernel/dma/`.
 
 ```c
 dma_set_mask_and_coherent(dev, DMA_BIT_MASK(64));  // cuántos bits emite el aparato
@@ -109,7 +109,7 @@ Y se prueba contra un aparato de verdad: las máquinas de `scripts/run-*.sh` lle
 |---|---|
 | El aparato "no hace nada". La memoria queda intacta. | Falta el bit de *bus master*, o el rango no está declarado en el IOMMU (D8: sin declarar, no llega). |
 | El DMA parece funcionar y una estructura lejana aparece corrupta. | Se le escribió al aparato una dirección virtual, o la de otro reclamo. El aparato no pasa por la MMU: no hay fault, hay memoria distinta. |
-| El destino nunca se toca, y no hay error en ningún lado. | El aparato no **alcanza** esa dirección. El `edu` de QEMU recorta la dirección a 28 bits si no se le dice otra cosa, y en aarch64 la RAM arranca en 1 GiB: ningún destino podía llegar. En x86_64 no se veía, porque ahí la RAM arranca en cero. |
+| El destino nunca se toca, y no hay error en ningún lado. | El aparato no **alcanza** esa dirección. El `edu` de [[QEMU]] recorta la dirección a 28 bits si no se le dice otra cosa, y en aarch64 la RAM arranca en 1 GiB: ningún destino podía llegar. En x86_64 no se veía, porque ahí la RAM arranca en cero. |
 | El bloqueo del IOMMU "funciona" desde la primera prueba. | Cuidado: **"bloqueado" y "nunca pasó nada" se ven idénticos desde afuera**. Antes de creerle a un bloqueo hay que comprobar que la cosa bloqueada ocurre — booteando sin IOMMU y mirando. Ver [[58-Una-prueba-que-no-puede-pasar-por-accidente]]. |
 | El aparato escribió, pero el procesador sigue leyendo lo viejo. | La caché. En x86 el DMA es coherente; en ARM hay que invalidar antes de leer. |
 | El aparato lee basura de una cola recién armada. | El buffer no se limpió antes de declararlo, o la escritura del procesador todavía está en el buffer de escritura y falta una barrera. |

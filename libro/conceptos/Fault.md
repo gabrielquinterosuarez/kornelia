@@ -62,7 +62,7 @@ ps -o min_flt,maj_flt,cmd -p $$
 perf stat -e page-faults,minor-faults,major-faults ./mi-programa
 ```
 
-- **Minor fault** — la página se resolvió sin tocar disco (se puso una nueva en cero, o ya estaba en la caché de páginas). Son millones y son normales.
+- **Minor fault** — la página se resolvió sin tocar disco (se puso una nueva en cero, o ya estaba en la [[Cache|caché]] de páginas). Son millones y son normales.
 - **Major fault** — hubo que ir al disco. Son los caros.
 
 Cuando la rama de abajo se activa en espacio de usuario, es un `SIGSEGV` — que, dicho sea de paso, casi nunca tiene que ver con segmentos: el nombre quedó de un esquema de memoria muerto ([[Falsos-amigos#5]]). Y cuando se activa **dentro del kernel**, es un `oops`:
@@ -95,7 +95,7 @@ Y un cuarto campo que **no** es un fault: **`cancelled`**. Si el código no volv
 **Lo que el kernel no hace: deshacer.** D11 es tajante y la razón es física, no económica:
 
 > [!important] El rollback verdadero es imposible, no caro
-> Un DMA que ya salió **escribió**. Un registro de GPU ya escrito **cambió el aparato**. Prometer atomicidad sería mentir, y un agente que confía en una atomicidad falsa decide peor que uno que sabe que no la tiene. Si quiere rollback, se lo construye con `mem.read` y `mem.write` (P2).
+> Un [[DMA]] que ya salió **escribió**. Un registro de GPU ya escrito **cambió el [[Aparato|aparato]]**. Prometer atomicidad sería mentir, y un agente que confía en una atomicidad falsa decide peor que uno que sabe que no la tiene. Si quiere rollback, se lo construye con `mem.read` y `mem.write` (P2).
 
 Dos detalles de implementación que valen por sí solos:
 
@@ -108,7 +108,7 @@ Y P5 no se cumple solo por existir el mecanismo de `exec`: **el kernel también 
 
 | Síntoma | Causa |
 |---|---|
-| Silencio total, ni una letra. | **Bucle de faults**: el handler de excepciones provoca la misma excepción. Caso real: `CPACR_EL1` en cero deja los registros SIMD atrapados, el compilador usa registros anchos para copiar structs, y el handler repite la falla al copiar la suya. |
+| Silencio total, ni una letra. | **Bucle de faults**: el [[Handler|handler]] de excepciones provoca la misma excepción. Caso real: `CPACR_EL1` en cero deja los registros SIMD atrapados, el compilador usa registros anchos para copiar structs, y el handler repite la falla al copiar la suya. |
 | La máquina se reinicia sola en vez de reportar. | Triple fault en x86: falló el fault, falló el doble fault, el CPU se rinde. Casi siempre la pila de excepciones. |
 | El fault vuelve con la causa correcta y la dirección en cero. | La arquitectura no llenó el campo para esa causa (no toda excepción tiene "dirección tocada"), o se leyó `CR2`/`FAR_EL1` después de que otra cosa lo pisara. |
 | El fault informa un registro con el nombre de otro. | El orden de `REGISTERS` y el orden en que el ensamblador apila los valores se desincronizaron. Ya pasó, en aarch64. |

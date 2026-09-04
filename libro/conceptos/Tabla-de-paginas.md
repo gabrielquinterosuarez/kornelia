@@ -40,7 +40,7 @@ Una entrada es un `u64`. La dirección ocupa el medio, y arriba y abajo van band
 | 1 | **R/W** | 0 = solo lectura. | Software |
 | 2 | **U/S** (User) | 1 = alcanzable desde el nivel sin privilegio. | Software |
 | 3 | **PWT** | Write-through. | Software |
-| 4 | **PCD** | Cache disable. Con PWT arriba, "no cacheable". | Software |
+| 4 | **PCD** | [[Cache]] disable. Con PWT arriba, "no cacheable". | Software |
 | 5 | **A** (Accessed) | Alguien la tocó. | **Hardware** |
 | 6 | **D** (Dirty) | Alguien la **escribió**. Solo en las hojas. | **Hardware** |
 | 7 | **PS** | "Esta entrada *es* la página": corta el recorrido acá. | Software |
@@ -61,7 +61,7 @@ La idea es la misma y **no hay un solo bit en el mismo lugar**.
 | NX, un bit | **PXN** (53) y **UXN** (54): no ejecutable con privilegio, y no ejecutable sin él. | Dos bits, uno por nivel. |
 | PWT/PCD, la cacheabilidad en la entrada | **AttrIndx**, bits [4:2]: un **índice de 3 bits** a `MAIR_EL1`, un registro con ocho ranuras. | El descriptor no dice *qué* es la memoria: dice *cuál de las ocho definiciones* usar. |
 | — | **SH**, bits [9:8]: shareability. | x86 no tiene equivalente: la coherencia es implícita. |
-| A (bit 5) | **AF**, bit 10, y al revés: si está en **cero**, el primer acceso **da fault**. | El software lo prende en el handler y así se entera. Hardware que lo prenda solo es opcional (ARMv8.1). |
+| A (bit 5) | **AF**, bit 10, y al revés: si está en **cero**, el primer acceso **da [[Fault|fault]]**. | El software lo prende en el [[Handler|handler]] y así se entera. Hardware que lo prenda solo es opcional (ARMv8.1). |
 | D (bit 6) | **DBM**, bit 51, y también opcional. | Sin él, "sucio" se emula: se mapea de solo lectura, el primer intento de escritura da fault, y ahí se anota. |
 
 Que dos arquitecturas resuelvan lo mismo tan distinto es el argumento entero de D22/D23: un kernel escrito contra una sola cree que el formato *es* el concepto.
@@ -90,14 +90,14 @@ echo 4 | sudo tee /proc/self/clear_refs   # borra el soft-dirty y volvés a mira
 | **Decisiones** | D12 (identity map con páginas de 1 GiB), D27 (el bit de usuario, bloque por bloque) |
 | **Dónde vive** | `kernel-x86_64/src/paging.rs:5#Cuatro niveles de tablas` y `kernel-aarch64/src/paging.rs:54#const IS_TABLE: u64 = 0b11;`; el plan común en `kernel-core/src/paging.rs:30#pub const GIB: u64 = 1 << 30;` |
 
-Las tablas son **arreglos estáticos dentro de la imagen del kernel**. No es prolijidad: un estático cae en memoria que UEFI cargó como `LoaderData` y el mapa informa como `Kernel`, y esa clase no se entrega nunca. Si vivieran en memoria libre, `mem.claim` se las podría dar al agente — y eso no falla donde se escribe, falla en la próxima traducción, en cualquier parte.
+Las tablas son **arreglos estáticos dentro de la imagen del kernel**. No es prolijidad: un estático cae en memoria que [[UEFI]] cargó como `LoaderData` y el mapa informa como `Kernel`, y esa clase no se entrega nunca. Si vivieran en memoria libre, `mem.claim` se las podría dar al agente — y eso no falla donde se escribe, falla en la próxima traducción, en cualquier parte.
 
 Cuatro cosas concretas:
 
 1. **El árbol es enano.** Una raíz, hasta ocho tablas de segundo nivel (4 TiB de alcance) y hasta cuatro de bloques. Con entradas de 1 GiB (`kernel-x86_64/src/paging.rs:57#const HUGE: u64 = 1 << 7;`), mapear toda la RAM son unas pocas entradas.
 2. **Se parte solo donde hace falta.** Un gigabyte se baja a bloques de 2 MiB únicamente si tiene kernel o memoria libre adentro (`kernel-core/src/paging.rs:206#pub fn needs_split`), que en la práctica son uno o dos. Lo demás queda en una sola entrada.
 3. **El permiso efectivo es el AND de todos los niveles.** Por eso la raíz y el nivel de arriba llevan el bit de usuario **prendido** aunque casi nada de abajo sea del agente: si estuviera apagado ahí, lo que digan los bloques no importaría (`kernel-x86_64/src/paging.rs:262#const USER: u64 = 1 << 2;`, `kernel-aarch64/src/paging.rs:289#const AP_USER: u64 = 0b01 << 6;`). Quien decide es cada bloque, uno por uno, cuando el agente reclama memoria pidiéndolo (D27, P6).
-4. **En aarch64 hay que configurar `MAIR_EL1` antes que nada.** El descriptor solo lleva el índice: si el registro no dice qué significa la ranura 1, "memoria de dispositivo" no quiere decir nada (`kernel-aarch64/src/paging.rs:70#const MAIR: u64 = 0x0000_0000_0000_04FF;`).
+4. **En aarch64 hay que configurar `MAIR_EL1` antes que nada.** El descriptor solo lleva el índice: si el registro no dice qué significa la ranura 1, "memoria de [[Aparato|dispositivo]]" no quiere decir nada (`kernel-aarch64/src/paging.rs:70#const MAIR: u64 = 0x0000_0000_0000_04FF;`).
 
 **Qué se quitó.** No hay una tabla por espacio, porque hay un solo [[Espacio-de-direcciones|espacio]] (D12, D13). **Los bits A y D no los mira nadie**: existen, el hardware los prende, y el kernel no los lee nunca porque no hay reemplazo de páginas ni disco a dónde escribir (ver [[Memoria-virtual]]). Y no hay asignador de tablas: son estáticas con techo, y si el mapa no entra el kernel **avisa** en vez de mapear a medias.
 
@@ -116,7 +116,7 @@ Cuatro cosas concretas:
 
 ## Práctica
 
-- [[P03-Ver-las-tablas-de-paginas]] — *(mirar/construir)* recorrer una traducción a mano en Linux con `/proc/self/pagemap`, y volcar el identity map de Kornelia desde el monitor de QEMU.
+- [[P03-Ver-las-tablas-de-paginas]] — *(mirar/construir)* recorrer una traducción a mano en Linux con `/proc/self/pagemap`, y volcar el identity map de Kornelia desde el monitor de [[QEMU]].
 - [[P06-Desarmar-una-entrada-de-tabla]] — *(construir)* tomar un `u64` de una tabla real y separarle a mano la dirección de las banderas, en las dos arquitecturas.
 
 ## Recordar #flashcards/conceptos

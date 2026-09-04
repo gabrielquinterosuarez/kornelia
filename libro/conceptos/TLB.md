@@ -69,7 +69,7 @@ ARM lo resuelve en el silicio: el sufijo `is` propaga la invalidación por el in
 
 ### ASID y PCID, por arriba
 
-Si el TLB solo guarda `virtual → física`, cambiar de espacio de direcciones obliga a **tirarlo entero**, porque las traducciones del anterior ahora son mentira. Un cambio de contexto quedaría seguido de una lluvia de misses.
+Si el TLB solo guarda `virtual → física`, cambiar de [[Espacio-de-direcciones|espacio de direcciones]] obliga a **tirarlo entero**, porque las traducciones del anterior ahora son mentira. Un cambio de contexto quedaría seguido de una lluvia de misses.
 
 La solución es agregarle al par una etiqueta de dueño: ASID en ARM, PCID en x86. Las entradas de dos dueños conviven, y cambiar de dueño no tira nada. El costo se mueve a otro lado: las etiquetas son pocas (256 o 65.536), así que hay que reciclarlas, y reciclar una sí obliga a invalidar.
 
@@ -113,7 +113,7 @@ Casi todo lo que hace complicado al TLB **no aparece acá**, y por razones que s
 
 Pero el TLB **igual hay que mantenerlo a mano**, en dos lugares exactos:
 
-1. **Al extender el identity map en caliente.** Cuando el agente reclama un rango que cae más arriba de lo que las tablas cubren, el kernel lo mapea y reintenta (P1). Antes de eso la traducción guardada dice "acá no hay nada", así que hay que tirarla: en x86 recargando `CR3` —más de lo necesario, pero pasa una vez por aparato—, y en aarch64 con la secuencia entera de cuatro instrucciones (`kernel-aarch64/src/paging.rs:121#dsb ishst`). El comentario del código dice explícitamente que **las barreras no son adorno**.
+1. **Al extender el identity map en caliente.** Cuando el agente reclama un rango que cae más arriba de lo que las tablas cubren, el kernel lo mapea y reintenta (P1). Antes de eso la traducción guardada dice "acá no hay nada", así que hay que tirarla: en x86 recargando `CR3` —más de lo necesario, pero pasa una vez por [[Aparato|aparato]]—, y en aarch64 con la secuencia entera de cuatro instrucciones (`kernel-aarch64/src/paging.rs:121#dsb ishst`). El comentario del código dice explícitamente que **las barreras no son adorno**.
 2. **Al prender o apagar el bit de usuario de un bloque.** D27 hace que `mem.claim` marque los bloques del agente como alcanzables sin privilegio. Eso es un cambio de **permiso**, y el permiso viaja adentro de la entrada del TLB, así que también hay que invalidar (`kernel-x86_64/src/paging.rs:310#Lo que el CPU se acuerde de antes ya no vale`, `kernel-aarch64/src/paging.rs:336#Lo que el CPU se acuerde de antes ya no vale.`). Que este caso exista es la mejor demostración de que el TLB no cachea direcciones: cachea entradas.
 
 > [!question] Duda para anotar si te queda picando
@@ -126,10 +126,10 @@ El TLB es traicionero porque **casi todos sus síntomas son intermitentes**: la 
 | Síntoma | Causa |
 |---|---|
 | Cambiaste una entrada de la tabla y el procesador sigue usando la vieja. | No invalidaste. El silicio no observa las escrituras a la tabla. |
-| Reclamaste memoria y `exec supervised` igual da fault de permiso ahí. | Cambió el bit de usuario en la tabla, pero la entrada del TLB guardó el permiso viejo. |
+| Reclamaste memoria y `exec supervised` igual da [[Fault|fault]] de permiso ahí. | Cambió el bit de usuario en la tabla, pero la entrada del TLB guardó el permiso viejo. |
 | Anda en x86_64 y falla en aarch64, a veces. | Faltan las barreras alrededor del `tlbi`. x86 serializa solo y esconde el error. |
 | Anda en el núcleo que hizo el cambio y falla en otro. | Invalidación local: en x86 falta el shootdown por IPI; en aarch64 falta el sufijo `is`. |
-| Mapeaste un BAR nuevo y leerlo devuelve basura o falla. | La traducción guardada para ese rango decía "no hay nada" y sigue diciéndolo. |
+| Mapeaste un [[BAR]] nuevo y leerlo devuelve basura o falla. | La traducción guardada para ese rango decía "no hay nada" y sigue diciéndolo. |
 | Cambiaste una entrada de nivel alto y una `invlpg` de esa página no alcanzó. | Las cachés de estructuras intermedias. Hay que tirar más que una página. |
 | El mismo programa es mucho más lento al pasar de cierto tamaño de datos. | No es un bug: te saliste de lo que cubre el TLB y cada acceso paga un recorrido. |
 

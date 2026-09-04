@@ -18,7 +18,7 @@ Es el eslabón que ningún libro de kernels puede saltear: cuando tu código emp
 
 Al soltar el botón de encendido, **la RAM no anda**. No es una figura: un chip de DDR necesita que alguien le programe voltajes, refresco y decenas de retardos, y que después *entrene* cada canal —mandar patrones y mover la ventana de muestreo hasta que los bits vuelvan enteros—. Antes de eso no hay dónde guardar una variable.
 
-Y ahí está el huevo y la gallina: **el código que enciende la RAM no puede vivir en la RAM.** Se resuelve corriendo desde el chip de flash del motherboard, con la caché del procesador configurada como si fuera memoria (*cache-as-RAM*) para tener unos KB donde apoyar una pila.
+Y ahí está el huevo y la gallina: **el código que enciende la RAM no puede vivir en la RAM.** Se resuelve corriendo desde el chip de flash del motherboard, con la [[Cache|caché]] del procesador configurada como si fuera memoria (*cache-as-RAM*) para tener unos KB donde apoyar una pila.
 
 Aparte de eso hay un segundo problema, más aburrido y más grande: **la variedad**. Cada motherboard tiene otro chipset, otros módulos de memoria, otros retardos. Si el kernel tuviera que saber todo eso, sería un kernel por motherboard. El firmware existe para que el kernel pueda empezar en una máquina que ya está prendida y **preguntarle cómo es**.
 
@@ -34,7 +34,7 @@ flowchart TD
     H["Entregar: mapa de memoria + tablas<br/>y hacerse a un lado"] --> K[Kernel]
 ```
 
-Los cuatro pasos del medio son los que el kernel **no repite**. Sobre todo el tercero: un aparato PCIe no elige su dirección, se la asignan escribiéndole los [[BAR|BARs]], y quien la asigna es el firmware. El kernel se entera leyendo.
+Los cuatro pasos del medio son los que el kernel **no repite**. Sobre todo el tercero: un [[Aparato|aparato]] PCIe no elige su dirección, se la asignan escribiéndole los [[BAR|BARs]], y quien la asigna es el firmware. El kernel se entera leyendo.
 
 ### Dos cosas distintas que se llaman igual
 
@@ -43,7 +43,7 @@ Los cuatro pasos del medio son los que el kernel **no repite**. Sobre todo el te
 | **Firmware de la máquina** | Un chip de flash en el motherboard. Es [[UEFI]] hoy, BIOS antes, y también coreboot o U-Boot. | Corre, entrega la máquina y se aparta. El kernel lo trata como un servicio con horario de atención. |
 | **Firmware de un aparato** | Adentro del aparato: la controladora del SSD, la placa de red, la GPU, el Intel ME. | **Nunca se aparta.** Corre en paralelo al kernel, todo el tiempo, y el kernel no lo puede inspeccionar. |
 
-Y hay un tercer caso que confunde a propósito: **firmware que el kernel le carga al aparato en cada arranque**, porque el aparato viene con la memoria vacía para abaratarlo. En Linux eso es `/lib/firmware`, y son archivos binarios que el driver empuja al aparato antes de usarlo. Se los llama "blobs", igual que el `blob.bin` de Kornelia, y **no tienen nada que ver**: ver [[51-El-blob-y-la-ventana-de-rescate]].
+Y hay un tercer caso que confunde a propósito: **firmware que el kernel le carga al aparato en cada arranque**, porque el aparato viene con la memoria vacía para abaratarlo. En Linux eso es `/lib/firmware`, y son archivos binarios que el [[Driver|driver]] empuja al aparato antes de usarlo. Se los llama "blobs", igual que el `blob.bin` de Kornelia, y **no tienen nada que ver**: ver [[51-El-blob-y-la-ventana-de-rescate]].
 
 ## Por qué no se le puede creer todo
 
@@ -88,7 +88,7 @@ Todo el trato con el firmware está en un solo crate, `boot-uefi/`, que **no lle
 
 Cuatro cosas que hace, y las cuatro son desconfianza aplicada:
 
-1. **Traduce en vez de copiar.** Los quince tipos de memoria de UEFI se pasan a un vocabulario chico y propio (`classify`): libre, del kernel, del firmware, MMIO, rota, tablas de ACPI. El comentario al lado de `BootServicesCode/Data` deja anotado que son libres *porque ya salimos*, y que la pila del arranque sale de ahí.
+1. **Traduce en vez de copiar.** Los quince tipos de memoria de UEFI se pasan a un vocabulario chico y propio (`classify`): libre, del kernel, del firmware, [[MMIO]], rota, tablas de ACPI. El comentario al lado de `BootServicesCode/Data` deja anotado que son libres *porque ya salimos*, y que la pila del arranque sale de ahí.
 2. **La cacheabilidad la toma del atributo, no de la clase.** UEFI informa región por región qué modos de caché soporta, y eso es más preciso que deducirlo (`boot-uefi/src/lib.rs:711#fn caching_of`).
 3. **Corrige el mapa donde el firmware calló.** La ventana de configuración de PCIe se agrega al mapa desde la MCFG cuando el firmware no la informó, **antes de que nadie lo lea**. Sin eso, el kernel publicaba una dirección que él mismo hacía inalcanzable —o sea, el kernel era la razón por la que no se podía usar un aparato, que es exactamente lo que prohíbe P1.
 4. **Se reserva lo que necesita, en el mapa.** La página baja por la que pasa el trampolín que arranca los otros núcleos está marcada libre por el firmware (`boot-uefi/src/lib.rs:544#pub unsafe fn reserve_for_kernel`). Se arregla en el mapa y **no** con un chequeo al reclamar, porque un chequeo haría que `describe memory` diga "libre" sobre algo que `mem.claim` rechaza: dos respuestas distintas a la misma pregunta.
@@ -101,7 +101,7 @@ Y lo que cae en un hueco del mapa no se disfraza: se entrega con la clase `unrep
 
 | Síntoma | Causa |
 |---|---|
-| El aparato aparece en el bus pero su BAR es inalcanzable. | El firmware no puso ese rango en el mapa. En aarch64 pasaba con la ventana de configuración entera. |
+| El aparato aparece en el [[Bus|bus]] pero su BAR es inalcanzable. | El firmware no puso ese rango en el mapa. En aarch64 pasaba con la ventana de configuración entera. |
 | `mem.claim` entrega memoria que el kernel estaba usando. | El mapa la informa libre y lo es *para el firmware*: la pila del arranque, o la página del trampolín. |
 | Anda en tu máquina y no en la de al lado, con el mismo binario. | Otro firmware. Otra versión del mismo firmware alcanza. Es la razón de ser de los quirks. |
 | Un rango responde valores raros y no está en el mapa. | Es un hueco donde vive un BAR. Alcanzarlo no es enterarse de qué es: por eso existe `unreported`. |

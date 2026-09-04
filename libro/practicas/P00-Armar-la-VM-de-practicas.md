@@ -118,7 +118,7 @@ EOF
 cloud-localds seed.img seed.yaml
 ```
 
-`linux-headers-amd64` y `build-essential` son lo que hace falta para **compilar un módulo de kernel**, que es la práctica de [[49-Escribir-un-driver]].
+`linux-headers-amd64` y `build-essential` son lo que hace falta para **compilar un [[Modulo-de-kernel|módulo de kernel]]**, que es la práctica de [[49-Escribir-un-driver]].
 
 ## Arrancarla
 
@@ -134,7 +134,7 @@ qemu-system-x86_64 \
 
 | Pedazo | Para qué |
 |---|---|
-| `-machine q35` | **Obligatorio acá.** Es la máquina virtual que QEMU emula: por omisión usa `pc` (el chipset i440fx de 1996), y ahí el IOMMU de Intel **no existe**. Sin esto QEMU se niega a arrancar. Es lo mismo que hace `scripts/run-x86_64.sh` (`scripts/run-x86_64.sh:76#-machine q35`). |
+| `-machine q35` | **Obligatorio acá.** Es la [[Maquina-virtual|máquina virtual]] que [[QEMU]] emula: por omisión usa `pc` (el chipset i440fx de 1996), y ahí el IOMMU de Intel **no existe**. Sin esto QEMU se niega a arrancar. Es lo mismo que hace `scripts/run-x86_64.sh` (`scripts/run-x86_64.sh:76#-machine q35`). |
 | `-enable-kvm -cpu host` | Que el silicio corra el código en vez de emularlo. Sin esto va diez veces más lento, y no verías las capacidades reales de tu procesador. |
 | `-smp 2` | Dos núcleos: hace falta para todo lo de la **Parte IX**. |
 | `-device intel-iommu` | Un IOMMU emulado, para las prácticas de [[47-IOMMU-VT-d-y-SMMUv3]]. Igual que hacen los `scripts/run-*.sh` de Kornelia. |
@@ -147,7 +147,7 @@ El primer arranque tarda un par de minutos (cloud-init instala los paquetes). De
 > Esta VM usa el multiplexor de QEMU, así que `Ctrl-A X` la cierra. Los scripts de Kornelia usan `-serial stdio` **crudo** a propósito (D26), porque el multiplexor se come el byte `0x01` y por ahí viaja CBOR: de Kornelia se sale con `Ctrl-C`. Dos máquinas, dos formas de salir; es fácil confundirse.
 
 > [!note] Si más adelante hace falta el IOMMU completo
-> Lo de arriba alcanza para traducir DMA, que es lo que se mira en las prácticas del [[IOMMU]]. Para **remapeo de interrupciones** —lo que hace falta para pasarle un aparato real a la VM— son dos cambios más:
+> Lo de arriba alcanza para traducir [[DMA]], que es lo que se mira en las prácticas del [[IOMMU]]. Para **remapeo de [[Interrupcion|interrupciones]]** —lo que hace falta para pasarle un [[Aparato|aparato]] real a la VM— son dos cambios más:
 >
 > ```bash
 > -machine q35,kernel-irqchip=split \
@@ -185,7 +185,7 @@ qemu-img snapshot -a limpia practicas.qcow2   # volver
 Y para una prueba de la que **no** querés que quede nada, agregá `-snapshot` a la línea de QEMU: todo lo que escriba la VM se descarta al apagarla.
 
 > [!tip] Esto es lo que un kernel no puede hacer
-> Poder volver a un estado anterior con un comando es un lujo de las máquinas virtuales. Adentro de un kernel **el rollback real es imposible, no caro** (D7/D11): cuando el código del agente escribió en un registro de un aparato, no hay snapshot que lo deshaga. Por eso Kornelia devuelve el fault con lo que pasó en vez de prometer que va a arreglarlo. Tenerlo claro acá, donde sí se puede volver, hace más entendible por qué allá no.
+> Poder volver a un estado anterior con un comando es un lujo de las máquinas virtuales. Adentro de un kernel **el rollback real es imposible, no caro** (D7/D11): cuando el código del agente escribió en un registro de un aparato, no hay snapshot que lo deshaga. Por eso Kornelia devuelve el [[Fault|fault]] con lo que pasó en vez de prometer que va a arreglarlo. Tenerlo claro acá, donde sí se puede volver, hace más entendible por qué allá no.
 
 ## Un script para no repetir todo esto
 

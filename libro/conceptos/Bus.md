@@ -18,7 +18,7 @@ Un procesador solo sabe leer y escribir direcciones. Que algunas terminen en un 
 
 La MMU termina su trabajo con una dirección física, que **no es un chip**: es un número que sale del núcleo. Alguien tiene que resolver tres cosas que el procesador no puede:
 
-1. **Cuál de los muchos aparatos de la máquina se hace cargo de ese número.**
+1. **Cuál de los muchos [[Aparato|aparatos]] de la máquina se hace cargo de ese número.**
 2. **Cómo se le agregan aparatos a una máquina sin cambiar el procesador.** Si cada aparato necesitara su propio cable y su propia instrucción, la máquina sería fija.
 3. **Qué hacer cuando no se hace cargo nadie.** Un número siempre se puede emitir; no siempre hay alguien escuchando.
 
@@ -40,8 +40,8 @@ flowchart TD
 Tres hechos de ese dibujo:
 
 - **Se rutea por rango, no por identificador.** Nadie le pregunta a los aparatos quién es quién en cada acceso: cada puente compara la dirección contra sus ventanas. Es rápido y es la razón de que un aparato no pueda elegir su dirección.
-- **Las ventanas las programa el software.** El firmware (o el kernel) recorre el árbol, reparte rangos y los escribe en los **BARs** de cada aparato y en los registros de ventana de cada puente. Ver [[17-PCIe-buses-funciones-y-BARs]].
-- **Hay un problema de huevo y gallina**, y se resuelve con una ventana especial: la de **configuración**. Un aparato recién encontrado todavía no tiene dirección, así que `bus:dispositivo:función` se convierte aritméticamente en un desplazamiento dentro de esa ventana, y ahí viven sus BARs. En PCIe moderno eso es **ECAM**, y dónde empieza lo dice la tabla `MCFG` de ACPI (o el nodo `pci-host-ecam-generic` del device tree). Ver [[15-Enumerar-sin-adivinar-ACPI]].
+- **Las ventanas las programa el software.** El [[Firmware|firmware]] (o el kernel) recorre el árbol, reparte rangos y los escribe en los **[[BAR|BARs]]** de cada aparato y en los registros de ventana de cada puente. Ver [[17-PCIe-buses-funciones-y-BARs]].
+- **Hay un problema de huevo y gallina**, y se resuelve con una ventana especial: la de **configuración**. Un aparato recién encontrado todavía no tiene dirección, así que `bus:dispositivo:función` se convierte aritméticamente en un desplazamiento dentro de esa ventana, y ahí viven sus BARs. En [[PCIe]] moderno eso es **ECAM**, y dónde empieza lo dice la tabla `MCFG` de [[ACPI]] (o el nodo `pci-host-ecam-generic` del [[Device-tree|device tree]]). Ver [[15-Enumerar-sin-adivinar-ACPI]].
 
 ## Cuando no responde nadie
 
@@ -54,13 +54,13 @@ Lo notable de la rama de x86 es que ese silencio **se volvió un protocolo**: en
 
 ## El otro espacio: los puertos de I/O de x86
 
-x86 tiene un **segundo espacio de direcciones**, anterior al MMIO y completamente separado: 65.536 puertos de 16 bits, alcanzables solo con dos instrucciones propias, `in` y `out`.
+x86 tiene un **segundo [[Espacio-de-direcciones|espacio de direcciones]]**, anterior al MMIO y completamente separado: 65.536 puertos de 16 bits, alcanzables solo con dos instrucciones propias, `in` y `out`.
 
 | | Memoria / MMIO | Puertos de I/O |
 |---|---|---|
 | Cómo se accede | cualquier instrucción de memoria | solo `in` / `out` |
 | Pasa por la MMU | sí | **no** |
-| Quién da el permiso | la tabla de páginas | `IOPL` y el bitmap del TSS |
+| Quién da el permiso | la [[Tabla-de-paginas|tabla de páginas]] | `IOPL` y el bitmap del TSS |
 | Se puede cachear | según el atributo | nunca |
 | Tamaño del espacio | 2⁶⁴ | 65.536 |
 | Existe en ARM / RISC-V | — | **nunca existió** |
@@ -82,7 +82,7 @@ sudo lspci -vvv | grep -E "Memory behind bridge|Region [0-9]"
 
 La indentación de `/proc/iomem` **es** el árbol del dibujo de arriba: un rango indentado dentro de otro es un aparato detrás de un puente. Y `Memory behind bridge` de `lspci -vvv` es literalmente la ventana que ese puente decodifica.
 
-Del lado del kernel, un driver no toca una dirección sin reclamarla primero: `request_mem_region()` para memoria y `request_region()` para puertos. Lo que muestran `/proc/iomem` y `/proc/ioports` es justamente ese registro de reclamos, y su función es que dos drivers no se peleen el mismo rango. Después vienen `ioremap()` y `readl`/`writel` para memoria, o `inb`/`outb` (`<asm/io.h>`) para puertos. Desde el espacio de usuario, los puertos se abren con `ioperm(2)` o `iopl(2)`.
+Del lado del kernel, un [[Driver|driver]] no toca una dirección sin reclamarla primero: `request_mem_region()` para memoria y `request_region()` para puertos. Lo que muestran `/proc/iomem` y `/proc/ioports` es justamente ese registro de reclamos, y su función es que dos drivers no se peleen el mismo rango. Después vienen `ioremap()` y `readl`/`writel` para memoria, o `inb`/`outb` (`<asm/io.h>`) para puertos. Desde el espacio de usuario, los puertos se abren con `ioperm(2)` o `iopl(2)`.
 
 Cuando el bus rechaza algo, el rastro queda acá:
 
@@ -102,10 +102,10 @@ En x86 casi siempre **no hay rastro**, que es el punto de la sección anterior.
 El kernel **no enumera aparatos ni asigna BARs**: eso es trabajo de driver, y los drivers los escribe el agente (D4). Lo que hace es lo que el agente no puede hacer solo:
 
 1. **Publicar dónde está la ventana de configuración.** `describe {what:["pcie"]}` informa la base, el segmento y el rango de buses, sacados de la `MCFG` de ACPI o del nodo `pci-host-ecam-generic` del device tree. Con eso el agente recorre el árbol él mismo.
-2. **Hacer que esa ventana sea alcanzable.** El mapa de memoria de UEFI **no informa la ventana de configuración en aarch64**; la MCFG sí, así que se suma al mapa donde el mapa se arma. Antes de eso el kernel publicaba una dirección que él mismo hacía inalcanzable.
+2. **Hacer que esa ventana sea alcanzable.** El mapa de memoria de [[UEFI]] **no informa la ventana de configuración en aarch64**; la MCFG sí, así que se suma al mapa donde el mapa se arma. Antes de eso el kernel publicaba una dirección que él mismo hacía inalcanzable.
 3. **Mapear lo que cae fuera del mapa.** En aarch64 los BARs de PCIe caen en 512 GiB y el mapa que da el firmware llega a 257, así que el controlador NVMe era **inalcanzable**: el kernel era la razón por la que no se podía usar un aparato, que es exactamente lo que prohíbe P1. Ahora el rango se mapea y se reintenta. Se mapea como dispositivo porque no se sabe qué hay.
 4. **Decir que no sabe.** Un rango que cae en un **hueco** del mapa —donde quedan los BARs que el firmware asignó sin listar— se entrega con la clase `unreported`, que **no es `mmio`**. El agente se lleva el rango *y* la advertencia de que la máquina nunca dijo qué hay ahí: alcanzarlo no es enterarse (P4). Ver [[18-Lo-que-la-maquina-no-dice]].
-5. **Sobrevivir a un rechazo.** `mem.read` y `mem.write` van con un punto de recuperación armado alrededor de **una sola instrucción** —cuanto más corta la ventana, menos chance de capturar un fault que no era—, y el rechazo vuelve como `access-refused` con la dirección que cortó y los números crudos de la máquina (P5). Ver [[33-Recuperar-un-acceso-que-el-bus-rechaza]].
+5. **Sobrevivir a un rechazo.** `mem.read` y `mem.write` van con un punto de recuperación armado alrededor de **una sola instrucción** —cuanto más corta la ventana, menos chance de capturar un [[Fault|fault]] que no era—, y el rechazo vuelve como `access-refused` con la dirección que cortó y los números crudos de la máquina (P5). Ver [[33-Recuperar-un-acceso-que-el-bus-rechaza]].
 
 **Qué se quitó:** no hay `request_mem_region`. Reservar un rango para que dos drivers no se peleen no tiene sentido cuando hay **un** agente (D13); el reclamo del agente es `mem.claim`, y el árbitro de verdad —del lado de los aparatos, que es donde el daño es silencioso— es el [[47-IOMMU-VT-d-y-SMMUv3|IOMMU]], que hace cumplir lo que el agente declaró con `dma.allow` (D8, P6). El kernel no impone una política de quién toca qué: hace cumplir la declarada.
 
@@ -118,7 +118,7 @@ El kernel **no enumera aparatos ni asigna BARs**: eso es trabajo de driver, y lo
 | La máquina se queda muda al tocar un aparato. | Abort externo del bus, en aarch64. Sin punto de recuperación no vuelve nadie. |
 | El mismo código anda en x86_64 y mata la máquina en aarch64. | Es el mismo acceso inválido: una arquitectura miente y la otra mata. |
 | `lspci` muestra el aparato pero su BAR es inalcanzable. | La ventana de configuración o el BAR no están en el mapa de memoria que dio el firmware. |
-| El aparato responde por MMIO pero el DMA que pide no llega. | Son dos caminos distintos: el MMIO va del procesador al aparato; el DMA va del aparato a la memoria, y pasa por el IOMMU. Ver [[Falsos-amigos]]. |
+| El aparato responde por MMIO pero el [[DMA]] que pide no llega. | Son dos caminos distintos: el MMIO va del procesador al aparato; el DMA va del aparato a la memoria, y pasa por el [[IOMMU]]. Ver [[Falsos-amigos]]. |
 | Un `in`/`out` da una excepción de protección general. | Los puertos tienen su propio permiso (`IOPL`, bitmap del TSS), que no es el de la tabla de páginas. |
 | El rango existe en `/proc/iomem` y tu driver no lo puede mapear. | Otro driver ya lo reclamó. `request_mem_region` falló; ese archivo es el registro de reclamos. |
 

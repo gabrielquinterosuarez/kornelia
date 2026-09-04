@@ -12,7 +12,7 @@ capitulos: [02-Registros-y-RAM-no-son-lo-mismo, 05-Caches-y-la-primera-mentira-u
 
 > Registros, cachés, RAM, disco, red: cada escalón es mucho más grande y mucho más lento que el de arriba. **Casi todo lo que hace un kernel se deduce de esa tabla.**
 
-Esta nota es corta en mecanismo y larga en consecuencias. El mecanismo es una tabla de números; lo que importa es que las decisiones de diseño de un kernel —interrupciones, DMA, colas, dormir— dejan de parecer arbitrarias cuando se leen contra ella.
+Esta nota es corta en mecanismo y larga en consecuencias. El mecanismo es una tabla de números; lo que importa es que las decisiones de diseño de un kernel —interrupciones, [[DMA]], colas, dormir— dejan de parecer arbitrarias cuando se leen contra ella.
 
 ## Qué problema resuelve
 
@@ -65,9 +65,9 @@ Esta es la sección por la que existe la nota.
 
 **1 · Interrupciones en vez de sondear.** A 115.200 baudios, un byte del cable serie tarda unos 87 µs en llegar: **más de 170.000 ciclos**. Girar preguntando "¿ya llegó?" quema esos ciclos enteros por byte. Por eso el cable tiene timbre y el núcleo duerme. Ver [[38-Dormir-en-vez-de-girar]] e [[Interrupcion]].
 
-**2 · DMA.** Si el procesador copiara del disco palabra por palabra, pagaría la latencia del aparato **y** ocuparía el núcleo el tiempo entero. Que el aparato escriba solo en la RAM convierte una espera de 200.000 ciclos en un aviso al final. Ver [[46-DMA-el-aparato-lee-memoria-solo]].
+**2 · DMA.** Si el procesador copiara del disco palabra por palabra, pagaría la latencia del [[Aparato|aparato]] **y** ocuparía el núcleo el tiempo entero. Que el aparato escriba solo en la RAM convierte una espera de 200.000 ciclos en un aviso al final. Ver [[46-DMA-el-aparato-lee-memoria-solo]].
 
-**3 · Colas en memoria en vez de registros.** Cada escritura a un registro MMIO es un viaje al bus, sin caché que la amortigüe. Un aparato manejado a razón de un registro por operación está limitado por eso. NVMe deja los comandos en RAM —barata— y toca **un** registro para avisar. Ver [[48-Colas-en-memoria-el-patron-de-NVMe]] y [[NVMe]].
+**3 · Colas en memoria en vez de registros.** Cada escritura a un registro MMIO es un viaje al [[Bus|bus]], sin caché que la amortigüe. Un aparato manejado a razón de un registro por operación está limitado por eso. NVMe deja los comandos en RAM —barata— y toca **un** registro para avisar. Ver [[48-Colas-en-memoria-el-patron-de-NVMe]] y [[NVMe]].
 
 **4 · Buzones e IPI en vez de que el otro núcleo pregunte.** Mandarle trabajo a otro núcleo se hace dejando el pedido en memoria y despertándolo con una interrupción, no haciendo que gire leyendo una variable — girar cuesta tráfico de coherencia sobre esa línea, en cada vuelta, en todos los núcleos que miran. Ver [[44-Mandar-trabajo-buzones-e-IPI]].
 
@@ -88,9 +88,9 @@ blockdev --getra /dev/nvme0n1      # readahead: cuánto trae de más "por si aca
 numactl -H                         # la RAM también tiene escalones: NUMA
 ```
 
-La distinción entre **fault menor** y **fault mayor** es exactamente esta tabla: el menor se resuelve en RAM (cientos de ciclos), el mayor va al disco (decenas de millones). Un programa con muchos `maj_flt` no está lento por el procesador.
+La distinción entre **[[Fault|fault]] menor** y **fault mayor** es exactamente esta tabla: el menor se resuelve en RAM (cientos de ciclos), el mayor va al disco (decenas de millones). Un programa con muchos `maj_flt` no está lento por el procesador.
 
-Arriba de la RAM, Linux no administra casi nada porque no puede: la caché y el TLB los maneja el hardware. Lo que sí hace es **acomodarse a ellos** — `____cacheline_aligned` para no sufrir false sharing, huge pages para bajar la presión del TLB, y el `vDSO` para que leer el reloj no cueste una syscall.
+Arriba de la RAM, Linux no administra casi nada porque no puede: la caché y el TLB los maneja el hardware. Lo que sí hace es **acomodarse a ellos** — `____cacheline_aligned` para no sufrir false sharing, huge pages para bajar la presión del TLB, y el `vDSO` para que leer el reloj no cueste una [[Syscall|syscall]].
 
 Y para medir de arriba abajo, la misma herramienta:
 
@@ -102,7 +102,7 @@ perf stat -e cycles,instructions,cache-misses,LLC-load-misses,dTLB-load-misses .
 
 | | |
 |---|---|
-| **Decisiones** | D12 (identity map, bloques de 1 GiB), D5 (el UART es el cordón, no el transporte), D18 (el blob) |
+| **Decisiones** | D12 (identity map, bloques de 1 GiB), D5 (el [[UART]] es el cordón, no el transporte), D18 (el blob) |
 | **Dónde vive** | `kernel-x86_64/src/irq.rs:533#sti; hlt; cli` y `kernel-aarch64/src/irq.rs:209#Duerme hasta que suene algun timbre.` |
 
 Escalón por escalón, qué hay y qué no:
@@ -112,7 +112,7 @@ Escalón por escalón, qué hay y qué no:
 | Registros | Los publica `describe`: la máquina informa **cuáles se pueden poner**, sin nombres horneados (P4, regla 3). Ver [[Registro]]. |
 | Cachés | Un atributo por bloque de 1 GiB, con dos valores: normal o dispositivo (D12). Ver [[Cache]]. |
 | RAM | Identity map de toda la RAM, y `mem.claim` para llevarse un pedazo. No hay asignador. |
-| NVMe | **El kernel no tiene driver** (D4). El que hay está escrito con los once verbos, del lado del cliente: `scripts/client.py:1733#Le habla a un controlador NVMe`. Ver [[NVMe]]. |
+| NVMe | **El kernel no tiene [[Driver|driver]]** (D4). El que hay está escrito con los once verbos, del lado del cliente: `scripts/client.py:1733#Le habla a un controlador NVMe`. Ver [[NVMe]]. |
 | Disco / swap | No hay, y por eso no hay demand paging: no existe el escalón de abajo al que ir a buscar una página. |
 | Red | Tampoco. El transporte rápido que D5 le deja al agente **no lo escribió nadie todavía**; hoy el único camino es el cordón umbilical. |
 

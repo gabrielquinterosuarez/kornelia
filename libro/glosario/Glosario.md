@@ -22,6 +22,7 @@ Si dos términos te suenan iguales, el lugar es [[Falsos-amigos]].
 - **AML** — Un lenguaje de programación entero embebido dentro de ACPI. Interpretarlo es lo que hace caro averiguar qué cable le toca a un aparato, y es por qué [[35-MSI-interrupciones-sin-cable|MSI]] lo vuelve innecesario.
 - **Anillo** (*ring*) — Tres cosas distintas. Ver [[Falsos-amigos#3]].
 - **APIC** — El controlador de interrupciones moderno de x86: reparte interrupciones entre núcleos y deja que un núcleo le toque el timbre a otro. Ver [[34-Del-cable-al-numero-PIC-APIC-GIC]].
+- **Aparato** — Todo lo que hay en la máquina que **no es el procesador ni la memoria** y con lo que el procesador puede hablar. Se define por cuatro canales: registros, avisos, DMA y descubrimiento. Ver [[Aparato]].
 - **Atómico** — Una operación que ocurre entera o no ocurre; ningún otro núcleo la ve a mitad de camino.
 
 ## B
@@ -29,22 +30,27 @@ Si dos términos te suenan iguales, el lugar es [[Falsos-amigos]].
 - **BAR** (*Base Address Register*) — Un registro de un aparato PCIe que dice **en qué dirección aparecen sus registros**. El aparato no elige: el firmware o el kernel le escriben la dirección. Ver [[BAR]].
 - **Barrera** (*fence*, *barrier*) — Instrucción que le prohíbe al procesador (o al compilador) reordenar accesos a memoria de un lado al otro. Ver [[42-Ordenamiento-de-memoria]].
 - **Big-endian** — Guardar el byte más significativo primero. El device tree es big-endian; las dos arquitecturas de este kernel no.
+- **Bit** — Un cable con corriente (1) o sin corriente (0). No hay nada más: un bit **es un voltaje**. Cómo se guarda uno: [[Flip-flop]].
 - **Blob** — Un pedazo de código o datos que el sistema trata como opaco: lo carga y lo ejecuta sin entenderlo. Acá, [[51-El-blob-y-la-ventana-de-rescate|`blob.bin`]].
 - **Bus** — El camino por el que el procesador alcanza algo que no es memoria. Ver [[Bus]].
 
 ## C
 
+- **Cable** — En este proyecto, el cable serie por el que el kernel habla: el **cordón umbilical** (D5). El aparato es el [[UART]], y `describe {what:["cable"]}` informa su estado, incluidos los bytes que perdió.
 - **Caché** — Copia rápida de memoria lenta. Miente cuando la dirección es un registro de aparato. Ver [[Cache]].
 - **CBOR** — Formato binario de datos, parecido a JSON pero en bytes. El protocolo de Kornelia va en CBOR porque transporta código máquina y volcados (D6).
 - **Ciclo** — Un tic del reloj del procesador. La unidad de tiempo del silicio. Ver [[01-El-reloj-y-el-transistor]].
 - **`cli`** — La instrucción de x86 que dice "no me interrumpan". Lo único de lo que un kernel no puede volver por su cuenta, y por eso existe el [[39-Plazos-y-cortes|segundo escalón]].
 - **CNTPCT_EL0** — El contador que ya viene andando en aarch64. El reloj sin driver. Ver [[37-El-reloj-contadores-y-no-saber-la-frecuencia]].
+- **Controlador** — En español significa **dos cosas**: el chip (*controller*) y el código que le habla (*driver*). Ver [[Falsos-amigos#13]].
 - **Coherencia** — La garantía de que dos núcleos que miran la misma dirección ven lo mismo. La da el silicio, con esfuerzo.
 
 ## D
 
 - **Descriptor** — Una estructura en memoria con un formato que **define el silicio**, no tu programa: entradas de tablas de páginas, de la GDT, de las colas del IOMMU. Los bits importan de a uno.
 - **Device tree** (*DT*, *FDT*) — El otro dialecto con que una máquina se describe, usado donde no hay ACPI: placas ARM y RISC-V. Un árbol de nodos, en big-endian. Ver [[Device-tree]].
+- **Dirección** — Un número que apunta a algo. Hay **cuatro clases** —virtual, física, de bus e IOVA— y confundirlas es la causa clásica de que un [[DMA]] escriba en el lugar equivocado. Ver [[Falsos-amigos#4]].
+- **Dispositivo** — Sinónimo de [[Aparato|aparato]], más formal. Es la traducción habitual de *device* en la literatura en español.
 - **DMA** (*Direct Memory Access*) — Que el aparato lea o escriba memoria **por su cuenta**, sin que el procesador copie byte por byte. Ver [[DMA]].
 - **Driver** — El código que sabe hablarle a un aparato. En Kornelia no lo tiene el kernel: lo escribe el agente (D4). Ver [[Driver]].
 - **Doble fallo** (*double fault*) — Una excepción que ocurre mientras se atiende otra. Si eso también falla, la máquina se reinicia sin decir nada.
@@ -81,6 +87,7 @@ Si dos términos te suenan iguales, el lugar es [[Falsos-amigos]].
 
 - **Identity map** — Mapear cada dirección virtual a la misma física. La mentira más simple que sirve, y la que elige Kornelia (D12). Ver [[22-Identity-map-la-mentira-mas-simple]].
 - **IDT** (*Interrupt Descriptor Table*) — La tabla de x86 donde se anota qué función atiende cada uno de los 256 vectores. Ver [[30-Capturar-un-fault-IDT-y-vectores]].
+- **Instrucción** — Un puñado de bytes en memoria que el procesador trae, decodifica y ejecuta. **No es una idea: son bytes**, y se pueden mirar con `objdump -d`. Ver [[03-Que-hace-realmente-una-instruccion]].
 - **IOMMU** — Una MMU para los aparatos: traduce y **filtra** lo que un aparato pide de la memoria. En Kornelia arranca encendido y vacío (D8). Ver [[IOMMU]].
 - **Interrupción** — El aparato avisa en vez de que el procesador pregunte. Ver [[Interrupcion]] y [[Falsos-amigos#2]].
 - **IOVA** — La dirección virtual de un aparato, la que el IOMMU traduce. Ver [[Falsos-amigos#4]].
@@ -140,6 +147,7 @@ Si dos términos te suenan iguales, el lugar es [[Falsos-amigos]].
 
 - **Setup y hold** — El tiempo que un dato tiene que estar quieto antes y después del flanco. De ahí sale el techo de la frecuencia, y de violarlo sale el overclocking inestable. Ver [[Flip-flop]].
 - **SGI** (*Software Generated Interrupt*) — El IPI de ARM.
+- **Silicio** — El hardware mismo, en oposición a lo que hace el software. Cuando el libro dice "lo hace cumplir el silicio" quiere decir que **no hay forma de esquivarlo escribiendo código**. Ver [[Modo-privilegiado]].
 - **SMMU** — El IOMMU de ARM. Se le habla por **colas en memoria**, no por registros como al de Intel. Ver [[IOMMU]].
 - **SMP** (*Symmetric MultiProcessing*) — Varios núcleos iguales, todos capaces de correr el kernel. Ver [[40-Arrancar-el-segundo-nucleo]].
 - **SPCR** — La tabla de ACPI que dice dónde está la consola serie. Kornelia arranca con una dirección horneada y se **muda** a la que dice SPCR (P4). Ver [[ACPI]].

@@ -20,7 +20,7 @@ El BIOS entregaba la máquina de la forma más cruda posible: leía 512 bytes de
 
 UEFI corta eso por lo sano con dos decisiones:
 
-1. **El firmware ya sabe leer discos.** Trae drivers de bloque, FAT32 y red. No hace falta volver a escribirlos por cuarta vez.
+1. **El firmware ya sabe leer discos.** Trae [[Driver|drivers]] de bloque, FAT32 y red. No hace falta volver a escribirlos por cuarta vez.
 2. **Lo que carga es un archivo ejecutable normal**, con nombre y todo, en 64 bits, con memoria plana. `kernel.efi` es un programa, no un sector.
 
 El costo es el que da nombre a la mitad de esta nota: durante ese rato, **la máquina no es tuya**. Y los servicios que te presta viven en memoria que se va a liberar.

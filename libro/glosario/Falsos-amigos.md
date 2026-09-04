@@ -34,8 +34,8 @@ Cinco palabras para cosas que se parecen. Se distinguen por **quién las causa**
 | **Interrupción** | Algo **de afuera**, asincrónico. No tiene relación con la instrucción que estabas ejecutando. | Sí: se atiende y se vuelve a la misma instrucción. | Llegó un byte por el cable serie. |
 | **Excepción** | La instrucción misma, sincrónico. Es el término paraguas de las tres que siguen. | Depende. | — |
 | **Trap** | Una instrucción que **pide** ser interrumpida a propósito. | Sí, y se vuelve a la **siguiente**. | `syscall`, `int 0x80`, `svc`, un breakpoint. |
-| **Fault** | Una instrucción que **no se pudo completar**, pero el estado quedó como antes de intentarla. | Sí, si arreglás la causa: se reintenta **la misma** instrucción. | Fallo de página: la dirección no está mapeada. El kernel la mapea y reintenta. |
-| **Abort** | Algo se rompió y **no se sabe dónde quedó**. | No de forma confiable. | Error del bus, corrupción de memoria, doble fallo. |
+| **[[Fault]]** | Una instrucción que **no se pudo completar**, pero el estado quedó como antes de intentarla. | Sí, si arreglás la causa: se reintenta **la misma** instrucción. | Fallo de página: la dirección no está mapeada. El kernel la mapea y reintenta. |
+| **Abort** | Algo se rompió y **no se sabe dónde quedó**. | No de forma confiable. | Error del [[Bus|bus]], corrupción de memoria, doble fallo. |
 
 > [!important] La diferencia entre fault y abort es de qué se puede recuperar
 > Un fault se puede reintentar porque el silicio garantiza que no alcanzó a cambiar nada. Un abort no. Por eso [[32-Los-faults-como-datos|P5 dice "los faults son datos"]] y no "los aborts son datos": no es una elección de diseño, es lo que el silicio permite.
@@ -54,14 +54,14 @@ Detalle histórico que confunde: en x86 el **número** que identifica una excepc
 |---|---|
 | **Anillo de privilegio** (*ring 0…3*) | El nivel de permiso del código en x86. Anillo 0 es el kernel, anillo 3 es el usuario. Los anillos 1 y 2 existen y casi nadie los usa. |
 | **Buffer circular** (*ring buffer*) | Una estructura de datos: un arreglo donde el final vuelve al principio. El buzón del cable serie de Kornelia es uno, y [[UART|ser más chico que el pedido más grande le costó caro al proyecto]]. |
-| **Anillo de colas** | En aparatos modernos (NVMe, tarjetas de red), la cola en memoria por la que el driver y el aparato se hablan. Es un buffer circular, pero se lo nombra distinto. Ver [[48-Colas-en-memoria-el-patron-de-NVMe]]. |
+| **Anillo de colas** | En aparatos modernos ([[NVMe]], tarjetas de red), la cola en memoria por la que el [[Driver|driver]] y el aparato se hablan. Es un buffer circular, pero se lo nombra distinto. Ver [[48-Colas-en-memoria-el-patron-de-NVMe]]. |
 
 Y el equivalente del primero en otras arquitecturas, que **no se llama anillo**:
 
 | Arquitectura | Cómo se llama | Niveles |
 |---|---|---|
 | x86_64 | Anillo (*ring*) | 0 (kernel) … 3 (usuario) — **el número baja al subir el privilegio** |
-| aarch64 | Nivel de excepción (*EL*) | EL0 (usuario) … EL3 (firmware) — **el número sube al subir el privilegio** |
+| aarch64 | Nivel de excepción (*EL*) | EL0 (usuario) … EL3 ([[Firmware|firmware]]) — **el número sube al subir el privilegio** |
 | RISC-V | Modo | U (usuario), S (supervisor), M (máquina) |
 
 Que en x86 el privilegio alto sea el número **bajo** y en ARM el **alto** es una fuente inagotable de errores al leer código de las dos. Ver [[06-El-silicio-tiene-modos]].
@@ -75,9 +75,9 @@ Cuatro nombres para "un número que apunta a algo", y confundirlos es la causa c
 | Nombre | Quién la usa | Qué significa |
 |---|---|---|
 | **Virtual** | El código, siempre. | El número que pone tu programa. La [[20-Tablas-de-paginas-de-verdad|MMU]] la traduce. |
-| **Física** | La MMU, después de traducir. | Dónde está de verdad en los chips de RAM. |
-| **De bus** / **DMA** | El **aparato**, no el procesador. | Lo que el aparato tiene que escribir en su registro para apuntar a esa memoria. En PCs suele coincidir con la física; en placas embebidas, a veces no. |
-| **IOVA** | El aparato, cuando hay [[47-IOMMU-VT-d-y-SMMUv3|IOMMU]]. | Una dirección virtual **del aparato**. El IOMMU la traduce igual que la MMU traduce la del procesador. |
+| **Física** | La [[MMU]], después de traducir. | Dónde está de verdad en los chips de RAM. |
+| **De bus** / **[[DMA]]** | El **aparato**, no el procesador. | Lo que el aparato tiene que escribir en su registro para apuntar a esa memoria. En PCs suele coincidir con la física; en placas embebidas, a veces no. |
+| **IOVA** | El aparato, cuando hay [[47-IOMMU-VT-d-y-SMMUv3|IOMMU]]. | Una dirección virtual **del aparato**. El [[IOMMU]] la traduce igual que la MMU traduce la del procesador. |
 
 > [!warning] Un aparato no ve la memoria como la ve el procesador
 > Es la idea que más cuesta y la que hace falta para entender el IOMMU. El aparato tiene su propia vista, con su propia tabla de traducción, y por omisión en Kornelia **está vacía**: sin declarar nada, ningún aparato llega a la memoria (D8).
@@ -89,7 +89,7 @@ Cuatro nombres para "un número que apunta a algo", y confundirlos es la causa c
 | Se dice | Es |
 |---|---|
 | **Segmento de x86** | Un registro (`CS`, `DS`, `SS`, `FS`, `GS`) que apunta a una entrada de la GDT. En 64 bits casi no se usa para direccionar, pero **sigue mandando el privilegio**: los bits bajos de `CS` son el anillo. Kornelia lo usa así en [[25-Como-se-baja-de-privilegio]]. |
-| **Segmento de un ejecutable** | Un pedazo de un archivo ELF o PE que se carga en memoria con ciertos permisos (código, datos, solo lectura). No tiene ninguna relación con el anterior. |
+| **Segmento de un ejecutable** | Un pedazo de un archivo [[ELF-y-PE|ELF]] o [[ELF-y-PE|PE]] que se carga en memoria con ciertos permisos (código, datos, solo lectura). No tiene ninguna relación con el anterior. |
 | **Segmentación** (el concepto viejo) | Un esquema de memoria previo a la paginación, donde la memoria se dividía en segmentos de tamaño variable. Muerto en la práctica. La palabra sobrevive en `SIGSEGV`. |
 
 `SIGSEGV` —"violación de segmento"— casi nunca tiene que ver con segmentos: es un fallo de página que el kernel decidió no arreglar. El nombre quedó del esquema viejo.
@@ -114,7 +114,7 @@ En Kornelia no hay ninguna de las tres (D13): hay **un** agente, que se multipli
 
 | Se dice | Se quiere decir |
 |---|---|
-| **Memoria virtual**, en un libro de sistemas | El mecanismo de traducción de direcciones. Existe aunque tengas RAM de sobra. |
+| **[[Memoria-virtual|Memoria virtual]]**, en un libro de sistemas | El mecanismo de traducción de direcciones. Existe aunque tengas RAM de sobra. |
 | **Memoria virtual**, en el Panel de Control de Windows | El archivo de intercambio (*swap*): usar disco cuando falta RAM. |
 | **Memoria volátil** | Que se borra al cortar la luz. No tiene nada que ver con `volatile`. |
 | **`volatile`** (en C o Rust) | "No optimices este acceso": el compilador no puede reordenarlo ni suprimirlo, porque la dirección es un [[45-Un-registro-no-es-RAM|registro de un aparato]] y leerla dos veces **no** da lo mismo que leerla una. |
@@ -129,8 +129,8 @@ Los tres guardan algo para no ir a buscarlo, y se rompen distinto.
 
 | | Qué guarda | Cuándo miente |
 |---|---|---|
-| **Caché de datos/instrucciones** | Copias de memoria, por línea (típico: 64 bytes). | Cuando escribís un registro de aparato y la escritura se queda en la caché. Por eso el MMIO se marca **no-cacheable** (D12). |
-| **TLB** | Traducciones ya hechas de virtual a física. | Cuando cambiás la tabla de páginas: el procesador **no se entera**. Hay que invalidarlo a mano. Ver [[21-TLB-invalidacion-y-barreras]]. |
+| **[[Cache|Caché]] de datos/instrucciones** | Copias de memoria, por línea (típico: 64 bytes). | Cuando escribís un registro de aparato y la escritura se queda en la caché. Por eso el [[MMIO]] se marca **no-cacheable** (D12). |
+| **[[TLB]]** | Traducciones ya hechas de virtual a física. | Cuando cambiás la [[Tabla-de-paginas|tabla de páginas]]: el procesador **no se entera**. Hay que invalidarlo a mano. Ver [[21-TLB-invalidacion-y-barreras]]. |
 | **Buffer de escritura** | Escrituras que todavía no llegaron a destino. | Cuando el orden importa: le escribís a un aparato "arrancá" antes de que llegue el dato. Se arregla con una **barrera**. |
 
 Los tres son invisibles cuando andan y muy difíciles de ver cuando no. Y **x86 los esconde mejor que ARM**, que es exactamente por qué este proyecto insiste en compilar las dos (D22/D23): x86 tiene modelo de memoria fuerte y perdona barreras faltantes que ARM castiga.
@@ -143,7 +143,7 @@ Los tres son invisibles cuando andan y muy difíciles de ver cuando no. Y **x86 
 |---|---|---|
 | **Driver** | El código que sabe hablarle a un aparato. | El kernel (o, en Kornelia, el agente). |
 | **Módulo** | Un pedazo de kernel que se carga y descarga sin reiniciar. Un mecanismo, no un contenido: la mayoría de los módulos son drivers, pero un driver puede estar compilado adentro del kernel y no ser módulo. | El kernel. |
-| **Firmware** | Código que ya venía en la máquina o en el aparato. UEFI es firmware. | Antes del kernel, o adentro del aparato. |
+| **Firmware** | Código que ya venía en la máquina o en el aparato. [[UEFI]] es firmware. | Antes del kernel, o adentro del aparato. |
 | **Blob** | Un pedazo de código o datos que el sistema trata como opaco: no lo entiende, lo carga y lo ejecuta o se lo pasa a alguien. En Kornelia es [[51-El-blob-y-la-ventana-de-rescate|`blob.bin`]]: lo que el agente dejó para que corra en el próximo arranque. |
 
 Peyorativamente, "blob binario" es un driver sin código fuente. En este proyecto la palabra **no** tiene ese sentido: el blob es *lo que el agente escribió*.
@@ -190,11 +190,37 @@ flowchart LR
 - **Línea** es física: un cable que sube o baja.
 - **IRQ** es el número que el sistema le puso a esa línea. En un PC viejo eran 16 y estaban repartidos por convención (IRQ 0 = reloj, IRQ 4 = serie).
 - **Vector** es el índice en la tabla del procesador. El mapeo IRQ→vector lo decide el sistema, y es donde se confunde todo al leer código.
-- **MSI** rompe el modelo: no hay cable. El aparato **escribe un dato en una dirección**, y eso se convierte en interrupción. Ver [[35-MSI-interrupciones-sin-cable]].
+- **[[MSI]]** rompe el modelo: no hay cable. El aparato **escribe un dato en una dirección**, y eso se convierte en interrupción. Ver [[35-MSI-interrupciones-sin-cable]].
 
 ---
 
+---
+
+## 13. Aparato, dispositivo, periférico, controlador
+
+Los tres primeros son sinónimos con distinto registro. El cuarto es un falso amigo de verdad.
+
+| Se dice | Es |
+|---|---|
+| **Aparato** | Lo que este libro dice. Ver [[Aparato]]. |
+| **Dispositivo** | Lo mismo, más formal. Es la traducción habitual de *device* en la literatura en español, y lo que usa Linux en español (`/sys/bus/pci/devices`). |
+| **Periférico** | Históricamente, lo que estaba **afuera** del gabinete: teclado, impresora, cintas. Hoy no significa nada: el controlador de disco está en el mismo silicio que el procesador y sigue siendo un aparato. Palabra en desuso. |
+| **Controlador** | **Acá está el problema.** En español traduce *dos* cosas del inglés que no tienen nada que ver. |
+
+El caso de **controlador**:
+
+| En inglés | En español se dice | Qué es |
+|---|---|---|
+| *controller* | controlador | **Hardware.** El chip que maneja un aparato: el controlador NVMe, el controlador de [[Interrupcion|interrupciones]], el controlador de memoria. |
+| *driver* | controlador | **Software.** El código que le habla a ese chip. Ver [[Driver]]. |
+
+O sea que "el controlador del disco falló" puede querer decir dos cosas opuestas: que se quemó el chip, o que hay un bug en el código. **Por eso este libro nunca dice "controlador" para el software: dice `driver`, en inglés y en cursiva.** Y dice "controlador" solo para el chip — *controlador de interrupciones*, *controlador NVMe*.
+
+Es la misma clase de decisión que la regla 6 del proyecto: una palabra que significa dos cosas es peor que un anglicismo.
+
 ## Recordar #flashcards/falsos-amigos
+
+¿Qué significa "controlador" en español?::Dos cosas sin relación: el *chip* que maneja un aparato (*controller*) y el *código* que le habla (*driver*). Por eso este libro dice `driver` en inglés para el software y reserva "controlador" para el hardware.
 
 ¿Diferencia entre un fault y un abort?::El fault no alcanzó a cambiar nada, así que la misma instrucción se puede reintentar. El abort dejó el estado incierto y no se puede volver de forma confiable. Por eso P5 dice "los faults son datos": es lo que el silicio permite.
 

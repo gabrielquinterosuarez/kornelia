@@ -15,7 +15,7 @@ conceptos: [Flip-flop, Registro]
 > 2. Un latch SR que se acuerda, y al que se le puede escribir.
 > 3. El estado prohibido: una combinación que el circuito acepta y de la que **no se puede salir de forma predecible**. En la simulación se ve literalmente como un bucle que no se asienta.
 
-Esta práctica no toca hardware ni kernel: es cuarenta líneas de Python. Está acá porque el [[Flip-flop]] es el único concepto del libro que **no se puede mirar** con `/proc` ni con QEMU —está abajo de todo lo observable— y simularlo es la única forma de que deje de ser una frase.
+Esta práctica no toca hardware ni kernel: es cuarenta líneas de Python. Está acá porque el [[Flip-flop]] es el único concepto del libro que **no se puede mirar** con `/proc` ni con [[QEMU]] —está abajo de todo lo observable— y simularlo es la única forma de que deje de ser una frase.
 
 ## Correrla
 

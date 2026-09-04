@@ -10,7 +10,7 @@ capitulos: [17-PCIe-buses-funciones-y-BARs, 18-Lo-que-la-maquina-no-dice, 45-Un-
 
 # BAR
 
-> El registro donde un aparato dice **cuánto espacio de direcciones necesita**, y donde el sistema le contesta **dónde se lo puso**. El aparato no elige: se la asignan.
+> El registro donde un [[Aparato|aparato]] dice **cuánto [[Espacio-de-direcciones|espacio de direcciones]] necesita**, y donde el sistema le contesta **dónde se lo puso**. El aparato no elige: se la asignan.
 
 *Base Address Register.* Son seis campos del [[PCIe|espacio de configuración]], en los desplazamientos `0x10` a `0x24`. La confusión típica es leerlos como "la dirección del aparato", como si fuera un dato del fabricante. Es al revés: es una casilla vacía que el aparato sabe cuán grande tiene que ser, y que alguien más llena.
 
@@ -54,7 +54,7 @@ Es un procedimiento **destructivo**: entre el paso 3 y el 6 el aparato está res
 
 ### Quién lo asigna
 
-Normalmente el firmware, antes de que arranque el sistema. El kernel puede aceptar lo que encontró o rehacerlo (en Linux, `pci=realloc`). Y **escribir un BAR no prende el aparato**: para que empiece a contestar en esa dirección hay que prender el bit 1 del registro *command*. Son dos pasos y confundirlos es la causa más común de "el aparato está pero no responde".
+Normalmente el [[Firmware|firmware]], antes de que arranque el sistema. El kernel puede aceptar lo que encontró o rehacerlo (en Linux, `pci=realloc`). Y **escribir un BAR no prende el aparato**: para que empiece a contestar en esa dirección hay que prender el bit 1 del registro *command*. Son dos pasos y confundirlos es la causa más común de "el aparato está pero no responde".
 
 ## Cómo lo hace Linux
 
@@ -67,7 +67,7 @@ cat /sys/bus/pci/devices/0000:00:01.0/resource   # start, end, flags por línea
 grep -i nvme /proc/iomem                          # dónde quedó, en el mapa global
 ```
 
-Un driver **no** lee el BAR a mano: pide el recurso ya resuelto y lo mapea.
+Un [[Driver|driver]] **no** lee el BAR a mano: pide el recurso ya resuelto y lo mapea.
 
 ```c
 pci_request_regions(pdev, "mi-driver");        // reservar, para que nadie más lo tome
@@ -104,7 +104,7 @@ El kernel no sabe qué es un BAR. Lo que sabe es entregar un rango que el agente
 | La dirección del BAR apunta a cualquier lado. | Se leyó de 32 bits un BAR de 64. La mitad de arriba está en la ranura siguiente: hay que mirar los bits 2:1. |
 | `mem.claim` sobre el BAR devuelve `unmapped`. | El rango cae más arriba de lo que cubren las tablas. Es el bug de aarch64 de arriba; hoy el kernel lo mapea y reintenta. |
 | El reclamo sale con clase `unreported` y parece un error. | No lo es: la máquina nunca informó ese rango. Es la respuesta honesta, no una falla (P4). |
-| El aparato aparece en el bus pero no contesta en su BAR. | Falta prender el bit 1 del *command*. Escribir el BAR no prende nada. |
+| El aparato aparece en el [[Bus|bus]] pero no contesta en su BAR. | Falta prender el bit 1 del *command*. Escribir el BAR no prende nada. |
 | Después de medir el tamaño, el aparato desapareció. | Se escribió `0xFFFFFFFF` y no se restauró el valor original. |
 | La máquina se cuelga al medir un BAR. | Se lo midió con el aparato respondiendo: durante la medición está mapeado en otra dirección. |
 | Los registros se leen bien pero las escrituras no tienen efecto. | El rango quedó cacheable. Un BAR de registros va no cacheable (D12). Ver [[MMIO]]. |

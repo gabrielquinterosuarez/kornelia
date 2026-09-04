@@ -46,19 +46,19 @@ flowchart TD
 Tres cosas de ese dibujo son las que importan:
 
 - **La traducción la hace el hardware, pero las tablas las escribe el software.** La MMU no inventa nada: sigue punteros que puso el kernel, en memoria común. Un kernel no "le pide" a la MMU que mapee algo; escribe una estructura de datos y le pasa la dirección de la raíz.
-- **Un recorrido cuesta cuatro lecturas de memoria.** Por eso existe el [[TLB]], que es la caché de traducciones ya hechas. Sin él, cada acceso costaría cinco.
+- **Un recorrido cuesta cuatro lecturas de memoria.** Por eso existe el [[TLB]], que es la [[Cache|caché]] de traducciones ya hechas. Sin él, cada acceso costaría cinco.
 - **Los niveles se pueden cortar antes.** Si una entrada intermedia dice "yo *soy* la página", el recorrido termina ahí y esa entrada mapea 2 MiB o 1 GiB de una. Menos lecturas y menos presión sobre el TLB.
 
 Cuando el recorrido no llega a ningún lado —una entrada sin el bit de presente, o un permiso que no da— la MMU no devuelve basura: **levanta una excepción**, el [[32-Los-faults-como-datos|page fault]], y ahí el kernel decide qué hacer.
 
 > [!info] La MMU no es la única
-> Un aparato que hace [[46-DMA-el-aparato-lee-memoria-solo|DMA]] no pasa por la MMU del procesador. Para eso hay un **segundo** traductor, el [[47-IOMMU-VT-d-y-SMMUv3|IOMMU]], con sus propias tablas y sus propios recorridos. Misma idea, otro silicio, otro formato.
+> Un [[Aparato|aparato]] que hace [[46-DMA-el-aparato-lee-memoria-solo|DMA]] no pasa por la MMU del procesador. Para eso hay un **segundo** traductor, el [[47-IOMMU-VT-d-y-SMMUv3|IOMMU]], con sus propias tablas y sus propios recorridos. Misma idea, otro silicio, otro formato.
 
 ## Cómo lo hace Linux
 
 Linux mantiene una tabla por proceso y cambia el registro raíz en cada cambio de contexto (`switch_mm_irqs_off`, en `arch/x86/mm/tlb.c`). El recorrido en C está escrito con una función por nivel: `pgd_offset`, `p4d_offset`, `pud_offset`, `pmd_offset`, `pte_offset_map` — los mismos cinco niveles del dibujo, con nombres propios.
 
-El page fault entra por `do_user_addr_fault` (`arch/x86/mm/fault.c`) y termina casi siempre en `handle_mm_fault` (`mm/memory.c`), que **arregla el fault y reanuda**: trae la página del disco, la asigna por primera vez, o copia una página compartida. Un page fault en Linux es, la mayoría de las veces, funcionamiento normal.
+El page [[Fault|fault]] entra por `do_user_addr_fault` (`arch/x86/mm/fault.c`) y termina casi siempre en `handle_mm_fault` (`mm/memory.c`), que **arregla el fault y reanuda**: trae la página del disco, la asigna por primera vez, o copia una página compartida. Un page fault en Linux es, la mayoría de las veces, funcionamiento normal.
 
 Para mirarlo desde afuera:
 
@@ -82,7 +82,7 @@ La MMU está prendida y las tablas son propias, pero la traducción es **identit
 Tres cosas concretas:
 
 1. **La raíz se relee del registro.** Cargarla y no comprobarla sería suponer: `kernel-x86_64/src/paging.rs:190#let read_back` . Un `install` que no hiciera nada se vería igual que uno que anduvo, y el síntoma llegaría mucho después.
-2. **El identity map se puede extender en caliente.** Si el agente reclama un rango que cae más arriba de lo que las tablas cubren, el kernel lo mapea y reintenta (`kernel-core/src/platform.rs:146#unsafe fn map_device`). No es comodidad: en aarch64 los BARs de PCIe caen en 512 GiB y el mapa del firmware llega a 257, así que sin esto el kernel era la razón por la que no se podía usar un aparato — justo lo que prohíbe P1.
+2. **El identity map se puede extender en caliente.** Si el agente reclama un rango que cae más arriba de lo que las tablas cubren, el kernel lo mapea y reintenta (`kernel-core/src/platform.rs:146#unsafe fn map_device`). No es comodidad: en aarch64 los [[BAR|BARs]] de [[PCIe]] caen en 512 GiB y el mapa del [[Firmware|firmware]] llega a 257, así que sin esto el kernel era la razón por la que no se podía usar un aparato — justo lo que prohíbe P1.
 3. **Un page fault no mata la máquina.** Vuelve como dato, con la causa y la dirección: `kernel-core/src/fault.rs:32#PageFault` (P5).
 
 **Qué NO hace la MMU acá, y es lo que más se nota:** no hay una tabla por proceso, porque no hay procesos (D13); no hay reubicación, porque el agente pone su código donde reclamó; y no hay demand paging, porque no hay disco de dónde traer. El mecanismo está entero y lo que se le pide es una fracción. Ver [[Espacio-de-direcciones]] y [[23-Asignadores-y-por-que-aca-no-hay]].
@@ -93,14 +93,14 @@ Tres cosas concretas:
 |---|---|
 | La máquina se reinicia justo después de cargar el registro raíz. | Las tablas nuevas no mapean el código que está corriendo. La instrucción siguiente se busca en una dirección que no existe. |
 | Todo anda pero `mem.claim` entrega memoria del kernel. | El `install` falló y se siguió con las tablas del firmware, que viven en memoria que el mapa informa como libre. Por eso la raíz **se relee**. |
-| Un aparato responde por MMIO pero el DMA que pide no llega. | Ese acceso no pasa por la MMU sino por el IOMMU: son dos traductores distintos con dos tablas distintas. |
+| Un aparato responde por [[MMIO]] pero el [[DMA]] que pide no llega. | Ese acceso no pasa por la MMU sino por el [[IOMMU]]: son dos traductores distintos con dos tablas distintas. |
 | El SMMU lee ceros una página más abajo de donde escribiste. | Pediste una alineación mayor que la página y el cargador no la cumplió. Ver [[24-Alineacion-la-promesa-que-el-cargador-no-cumple]]. |
 | Las direcciones que pide un aparato se recortan en silencio. | Se le pidió a la etapa 2 del SMMU un tamaño de entrada **menor** que el de salida. No se rechaza: se reinterpreta. Un límite que sobra puede ser tan inválido como uno que falta. |
 | Cambiaste una entrada y el procesador sigue usando la vieja. | El [[TLB]]. La MMU no releé la tabla si ya tiene la traducción guardada. |
 
 ## Práctica
 
-- [[P03-Ver-las-tablas-de-paginas]] — *(mirar/construir)* recorrer a mano una traducción en Linux con `/proc/self/pagemap`, y mirar el identity map de Kornelia desde el monitor de QEMU.
+- [[P03-Ver-las-tablas-de-paginas]] — *(mirar/construir)* recorrer a mano una traducción en Linux con `/proc/self/pagemap`, y mirar el identity map de Kornelia desde el monitor de [[QEMU]].
 - [[P01-Preguntarle-a-Linux-que-maquina-es]] — *(mirar)* el otro lado del mismo mapa: las direcciones **físicas** que la máquina informa.
 
 ## Recordar #flashcards/conceptos

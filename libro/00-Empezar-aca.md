@@ -52,7 +52,7 @@ Acá no hay kernel todavía. Hay silicio, y hace falta entender qué le pide un 
 
 - [[15-Enumerar-sin-adivinar-ACPI]] — las tablas donde el firmware cuenta qué hay.
 - [[16-El-otro-dialecto-device-tree]] — el mismo problema resuelto distinto, en big-endian y sin ACPI.
-- [[17-PCIe-buses-funciones-y-BARs]] — cómo se encuentra un aparato y dónde aparecen sus registros.
+- [[17-PCIe-buses-funciones-y-BARs]] — cómo se encuentra un [[Aparato|aparato]] y dónde aparecen sus registros.
 - [[18-Lo-que-la-maquina-no-dice]] — huecos, rangos `unreported`, y alcanzar algo sin enterarse de qué es (P4).
 
 ## Parte V · Memoria
@@ -139,7 +139,7 @@ El libro se lee por capítulos; **se consulta por conceptos**. Cada uno es una f
 
 #### Aparatos
 
-[[MMIO]] · [[PCIe]] · [[BAR]] · [[DMA]] · [[IOMMU]] · [[NVMe]] · [[UART]] · [[Driver]]
+[[Aparato]] · [[MMIO]] · [[PCIe]] · [[BAR]] · [[DMA]] · [[IOMMU]] · [[NVMe]] · [[UART]] · [[Driver]]
 
 #### Interrupciones y fallos
 

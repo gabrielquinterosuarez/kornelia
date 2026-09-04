@@ -10,7 +10,7 @@ capitulos: [17-PCIe-buses-funciones-y-BARs, 15-Enumerar-sin-adivinar-ACPI, 18-Lo
 
 # PCIe
 
-> El bus donde vive casi todo el hardware de una máquina moderna, y sobre todo: **el acuerdo por el que un aparato que nadie conoce puede contar quién es**.
+> El [[Bus|bus]] donde vive casi todo el hardware de una máquina moderna, y sobre todo: **el acuerdo por el que un [[Aparato|aparato]] que nadie conoce puede contar quién es**.
 
 *Peripheral Component Interconnect Express.* Lo importante para un kernel no es la electrónica —líneas serie punto a punto, paquetes, un conmutador en el medio— sino que **todos los aparatos contestan las mismas preguntas en los mismos lugares**. Eso es lo que hace posible un kernel que no tenga horneado nada de la máquina (P4).
 
@@ -22,7 +22,7 @@ Eso tiene tres agujeros y ninguno se arregla arriba:
 
 1. **No hay forma de enterarse de qué hay conectado.** Solo se puede probar direcciones a ver si alguien contesta, y probar direcciones al azar cuelga máquinas.
 2. **Dos aparatos pueden querer el mismo rango**, y el que pierde no avisa: contesta a medias.
-3. **Un driver no puede saber si el aparato que tiene enfrente es el suyo.**
+3. **Un [[Driver|driver]] no puede saber si el aparato que tiene enfrente es el suyo.**
 
 PCI resuelve las tres con la misma idea: cada aparato tiene un **espacio de configuración** —chico, de formato fijo, en un lugar que no depende del aparato— donde declara quién es y qué necesita. Recién después se le asignan direcciones. Ver [[17-PCIe-buses-funciones-y-BARs]].
 
@@ -71,7 +71,7 @@ dirección = base + (bus << 20) + (dispositivo << 15) + (función << 12) + offse
 
 Cada función ocupa 4 KiB —los 256 bytes de PCI más 3840 de espacio extendido— así que cada bus ocupa 1 MiB. Un `mem.read` en esa ventana es una lectura de configuración.
 
-**¿Y de dónde sale `base`?** No se adivina: la máquina lo dice. Donde hay ACPI, en la tabla **MCFG** (`kernel-core/src/acpi.rs:660#unsafe fn read_mcfg`); donde no la hay, en el nodo `pci-host-ecam-generic` del [[Device-tree|device tree]] (`kernel-core/src/fdt.rs:382#pci-host-ecam-generic`). Dos dialectos, el mismo dato.
+**¿Y de dónde sale `base`?** No se adivina: la máquina lo dice. Donde hay [[ACPI]], en la tabla **MCFG** (`kernel-core/src/acpi.rs:660#unsafe fn read_mcfg`); donde no la hay, en el nodo `pci-host-ecam-generic` del [[Device-tree|device tree]] (`kernel-core/src/fdt.rs:382#pci-host-ecam-generic`). Dos dialectos, el mismo dato.
 
 ## Cómo lo hace Linux
 
@@ -92,7 +92,7 @@ En `/sys/bus/pci/devices/*/` está todo lo que se lee del formato fijo, un archi
 
 | | |
 |---|---|
-| **Decisiones** | D4 (el agente escribe sus drivers), D25 (al firmware se le pide todo antes de `ExitBootServices`) |
+| **Decisiones** | D4 (el agente escribe sus drivers), D25 (al [[Firmware|firmware]] se le pide todo antes de `ExitBootServices`) |
 | **El verbo** | `describe {what:["pcie"]}` → `base`, `segment`, `bus_start`, `bus_end` |
 | **Dónde vive** | `kernel-core/src/protocol.rs:596#if q.pcie`, `kernel-core/src/acpi.rs:660#unsafe fn read_mcfg`, `boot-uefi/src/lib.rs:497#unsafe fn add_pcie_window` |
 
@@ -101,7 +101,7 @@ En `/sys/bus/pci/devices/*/` está todo lo que se lee del formato fijo, un archi
 **Qué se quitó:** el emparejamiento driver-aparato, `probe()`, los ids de módulo, la reasignación de recursos y `sysfs` entero. La capa no se reemplazó por otra más chica: se dejó vacía (P2). Lo que queda es una dirección y once verbos.
 
 > [!warning] El caso real: publicar una dirección inalcanzable
-> El mapa de memoria de UEFI **no es lo único que la máquina dice de sí misma**. En x86_64 el firmware informa la ventana ECAM en el mapa, como reservada; en **aarch64 no la informa**, y la MCFG sí. Con lo cual el kernel servía por `describe pcie` una dirección que él mismo hacía inalcanzable: fuera del mapa, `mem.claim` la rechaza, y fuera del alcance del identity map, ni siquiera está mapeada. El kernel siendo la razón por la que no se puede usar un aparato es exactamente lo que prohíbe **P1**. La ventana se suma al mapa **donde el mapa se arma**, dentro de la ventana de D25 y antes de que nadie lo lea, así entra sola en todo lo que se calcula a partir de él —empezando por hasta dónde llega el identity map. Y como el dato no sale de UEFI sino de la MCFG, quien lo agrega es quien sabe qué es: se marca no cacheable, porque son registros (P4).
+> El mapa de memoria de [[UEFI]] **no es lo único que la máquina dice de sí misma**. En x86_64 el firmware informa la ventana ECAM en el mapa, como reservada; en **aarch64 no la informa**, y la MCFG sí. Con lo cual el kernel servía por `describe pcie` una dirección que él mismo hacía inalcanzable: fuera del mapa, `mem.claim` la rechaza, y fuera del alcance del identity map, ni siquiera está mapeada. El kernel siendo la razón por la que no se puede usar un aparato es exactamente lo que prohíbe **P1**. La ventana se suma al mapa **donde el mapa se arma**, dentro de la ventana de D25 y antes de que nadie lo lea, así entra sola en todo lo que se calcula a partir de él —empezando por hasta dónde llega el identity map. Y como el dato no sale de UEFI sino de la MCFG, quien lo agrega es quien sabe qué es: se marca no cacheable, porque son registros (P4).
 
 ## Cómo se ve roto
 
@@ -117,7 +117,7 @@ En `/sys/bus/pci/devices/*/` está todo lo que se lee del formato fijo, un archi
 
 ## Práctica
 
-- [[P13-Recorrer-el-bus-PCIe]] — *(construir)* enumerar el bus a mano en Kornelia con `describe`, `mem.claim` y `mem.read`, y comparar la lista con la que da `lspci` en la misma máquina de QEMU.
+- [[P13-Recorrer-el-bus-PCIe]] — *(construir)* enumerar el bus a mano en Kornelia con `describe`, `mem.claim` y `mem.read`, y comparar la lista con la que da `lspci` en la misma máquina de [[QEMU]].
 - [[P01-Preguntarle-a-Linux-que-maquina-es]] — *(mirar)* `lspci -v`, `sudo lspci -xxx` y `/sys/bus/pci/devices/`: encontrar los mismos 256 bytes desde tres lados.
 
 ## Recordar #flashcards/conceptos

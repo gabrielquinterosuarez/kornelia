@@ -12,7 +12,7 @@ conceptos: [Registro, Ciclo, Jerarquia-de-memoria]
 > [!success] Qué vas a ver si funciona
 > Dos cosas, y las dos son números tuyos, no del libro:
 > 1. La frecuencia de tu contador de ciclos, medida por vos con una instrucción.
-> 2. Una tabla de latencias con **escalones**, y cada escalón cayendo exactamente en el tamaño de una de tus cachés — que vas a poder verificar contra `lscpu -C`. El segundo resultado es el que importa: vas a **deducir el tamaño de tus cachés midiendo**, sin preguntárselo a nadie.
+> 2. Una tabla de latencias con **escalones**, y cada escalón cayendo exactamente en el tamaño de una de tus [[Cache|cachés]] — que vas a poder verificar contra `lscpu -C`. El segundo resultado es el que importa: vas a **deducir el tamaño de tus cachés midiendo**, sin preguntárselo a nadie.
 
 De solo lectura, sin `sudo`, sin riesgo. El código está en `libro/practicas/codigo/`.
 
@@ -35,7 +35,7 @@ un ciclo dura   : 0.502 ns
 en un ciclo la senal recorre unos 10.0 cm de cobre
 ```
 
-**Qué estás viendo:** `__rdtsc()` es **una instrucción** que devuelve el valor de un contador que el silicio mantiene solo. No hay driver, no hay llamada al sistema, no hay kernel en el medio. Es lo más cerca del hardware que se puede estar desde un programa normal, y es exactamente lo que hace Kornelia (`kernel-x86_64/src/main.rs:505#"lfence",`).
+**Qué estás viendo:** `__rdtsc()` es **una instrucción** que devuelve el valor de un contador que el silicio mantiene solo. No hay [[Driver|driver]], no hay [[Syscall|llamada al sistema]], no hay kernel en el medio. Es lo más cerca del hardware que se puede estar desde un programa normal, y es exactamente lo que hace Kornelia (`kernel-x86_64/src/main.rs:505#"lfence",`).
 
 Fijate en la última línea: en un ciclo, la señal recorre diez centímetros de cobre. Tu RAM está a más que eso. Ver [[01-El-reloj-y-el-transistor]].
 
@@ -173,7 +173,7 @@ export PATH="$HOME/.cargo/bin:$PATH"
 | | Kornelia (x86_64) | Kornelia (aarch64) | Tu Linux |
 |---|---|---|---|
 | Qué contador usa | `tsc` | `cntpct` | `tsc` (y `CLOCK_MONOTONIC` encima) |
-| Cómo sabe la frecuencia | La **mide** contra el contador de ACPI | La **lee** de `CNTFRQ_EL0` | La mide, con más ceremonia |
+| Cómo sabe la frecuencia | La **mide** contra el contador de [[ACPI]] | La **lee** de `CNTFRQ_EL0` | La mide, con más ceremonia |
 | Si no la sabe | Dice que no la sabe | — | Descarta el TSC y usa otra fuente |
 
 ```bash

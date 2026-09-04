@@ -10,15 +10,15 @@ capitulos: [00-Como-mirar-una-maquina, 11-Reset-vector-firmware-BIOS-y-UEFI]
 
 # QEMU
 
-> El programa que arma la máquina donde corre este kernel: procesador, RAM y una lista de aparatos que vos elegís. Es la herramienta, no el concepto.
+> El programa que arma la máquina donde corre este kernel: procesador, RAM y una lista de [[Aparato|aparatos]] que vos elegís. Es la herramienta, no el concepto.
 
 La teoría —emulación contra virtualización, atrapar y emular, VT-x y EL2, virtio, passthrough— está en [[Maquina-virtual]] y no se repite acá. **Leela primero.** Esta nota es sobre *usar* QEMU: qué banderas importan, cómo se mira una máquina que se murió, y qué aparatos lleva a propósito la máquina de prueba de este proyecto.
 
 ## Qué problema resuelve
 
-Escribir un kernel es escribir el programa que manda en la máquina, y **el programa que manda en la máquina no se puede depurar desde adentro**: cuando se rompe, se lleva puesto al depurador. QEMU corre el kernel **como un proceso normal de tu Debian**, así que lo que adentro es "la máquina se colgó", desde afuera es un proceso al que le podés preguntar todo: los registros, la memoria física, el mapa del bus.
+Escribir un kernel es escribir el programa que manda en la máquina, y **el programa que manda en la máquina no se puede depurar desde adentro**: cuando se rompe, se lleva puesto al depurador. QEMU corre el kernel **como un proceso normal de tu Debian**, así que lo que adentro es "la máquina se colgó", desde afuera es un proceso al que le podés preguntar todo: los registros, la memoria física, el mapa del [[Bus|bus]].
 
-Y arma la máquina **por partes**. Que el IOMMU y el motor de DMA sean dos banderas de línea de comandos es lo que hace posible probar contra hardware que no tenés.
+Y arma la máquina **por partes**. Que el [[IOMMU]] y el motor de [[DMA]] sean dos banderas de línea de comandos es lo que hace posible probar contra hardware que no tenés.
 
 ## Cómo funciona
 
@@ -35,7 +35,7 @@ Una invocación de QEMU es una lista de piezas. Las que importan:
 | `-serial` | A dónde sale el puerto serie. | Ver D26 más abajo: `stdio` **crudo**. |
 | `-accel kvm` | Que el silicio ejecute de verdad. | Solo misma arquitectura. Ver [[Maquina-virtual]]. |
 | `-display none` | Sin ventana. | Sin esto se abre una ventana vacía. |
-| `-no-reboot` | Que un triple fault **apague** en vez de reiniciar. | Sin esto, un kernel roto reinicia para siempre y no se ve el error. |
+| `-no-reboot` | Que un triple [[Fault|fault]] **apague** en vez de reiniciar. | Sin esto, un kernel roto reinicia para siempre y no se ve el error. |
 | `-s -S` | Servidor de gdb en el puerto 1234, **congelado antes de la primera instrucción**. | Ver abajo. |
 
 La forma normal de `-drive` + `-device` engaña la primera vez: son **dos** piezas, el medio y el controlador. El archivo se declara sin conexión y después se le enchufa un controlador NVMe, o SATA, o virtio. Es exactamente cómo está armado en una máquina real, y por eso `-drive file=...,if=none,id=payload` y `-device nvme,...,drive=payload` son dos líneas y no una.
@@ -49,10 +49,10 @@ Se llega con `-monitor stdio`, `-monitor telnet:127.0.0.1:5555,server,nowait`, o
 | Comando | Qué muestra |
 |---|---|
 | `info registers` | Todos los registros, incluidos los de control: `CR3`, `CR0`, `TTBR0_EL1`, `SCTLR_EL1`. Es lo primero que se mira. |
-| `info mem` | Qué rangos virtuales están mapeados y con qué permisos, **leyendo las tablas de páginas de verdad**. Ver [[MMU]]. |
+| `info mem` | Qué rangos virtuales están mapeados y con qué permisos, **leyendo las [[Tabla-de-paginas|tablas de páginas]] de verdad**. Ver [[MMU]]. |
 | `info mtree` | El árbol de ruteo del bus: qué dirección física llega a quién. Es `/proc/iomem` desde afuera. Ver [[MMIO]]. |
-| `info pci` | Los aparatos del bus, con sus BARs asignados. |
-| `info irq` / `info pic` | Cuántas interrupciones se entregaron por vector. |
+| `info pci` | Los aparatos del bus, con sus [[BAR|BARs]] asignados. |
+| `info irq` / `info pic` | Cuántas [[Interrupcion|interrupciones]] se entregaron por vector. |
 | `x/16xb 0x1000` | Volcar memoria. `x` toma direcciones **virtuales**, `xp` toma **físicas**. |
 | `stop` / `cont` | Congelar y seguir. |
 | `system_reset` / `quit` | Reiniciar, salir. |
@@ -60,9 +60,9 @@ Se llega con `-monitor stdio`, `-monitor telnet:127.0.0.1:5555,server,nowait`, o
 Dos que valen por sí solas:
 
 - **`info mtree` contesta "¿por qué mi lectura devuelve ceros?"** sin tocar el kernel. Si la dirección no aparece en el árbol, no hay nadie del otro lado.
-- **`info registers` con la máquina muda** dice si el procesador está girando en un handler, esperando en `hlt`/`wfi`, o parado en una dirección que no es de tu código.
+- **`info registers` con la máquina muda** dice si el procesador está girando en un [[Handler|handler]], esperando en `hlt`/`wfi`, o parado en una dirección que no es de tu código.
 
-Y para lo pesado, `-s -S`: QEMU levanta un servidor de gdb y **no ejecuta ni una instrucción** hasta que alguien se conecte. Del otro lado, `gdb -ex 'target remote :1234'`. Así se puede poner un breakpoint en la primerísima instrucción del firmware, mucho antes de que exista tu kernel — que es la única forma de depurar el arranque.
+Y para lo pesado, `-s -S`: QEMU levanta un servidor de gdb y **no ejecuta ni una instrucción** hasta que alguien se conecte. Del otro lado, `gdb -ex 'target remote :1234'`. Así se puede poner un breakpoint en la primerísima instrucción del [[Firmware|firmware]], mucho antes de que exista tu kernel — que es la única forma de depurar el arranque.
 
 > [!warning] gdb necesita símbolos y tu kernel es un PE
 > `target remote` funciona sin nada, pero solo da direcciones. Para ver nombres de funciones hay que cargarle los símbolos aparte, y ahí aparece que el binario es `.efi`, no un ELF: ver [[ELF-y-PE]].
@@ -94,9 +94,9 @@ Las dos máquinas de prueba están en `scripts/run-x86_64.sh` y `scripts/run-aar
 | `scripts/run-x86_64.sh:80#-cpu max` | El default `qemu64` **no tiene páginas de 1 GiB**, que es lo que D12 usa para el identity map. El default de QEMU es más austero que el hardware real, no al revés. |
 | `scripts/run-x86_64.sh:84#-device intel-iommu` y `scripts/run-aarch64.sh:40#MACHINE=virt,iommu=smmuv3` | D8: el IOMMU va encendido. Sin él, `dma.allow` no se puede probar contra nada. Los dos hacen lo mismo y no se parecen: ver [[47-IOMMU-VT-d-y-SMMUv3]]. |
 | `scripts/run-x86_64.sh:90#-device edu,dma_mask=0xffffffffffff` | `edu` es un **motor de DMA que se maneja con cuatro escrituras**: es el aparato que hace el DMA que el IOMMU tiene que bloquear. El `dma_mask` no es opcional — ver abajo. |
-| `scripts/run-x86_64.sh:95#-device nvme,serial=kornelia,drive=payload` | Un disco NVMe de verdad: es de donde D19 dice que el cargador se trae el resto, y es el aparato contra el que se prueba PCIe entero, BARs incluidos. Ver [[NVMe]]. |
+| `scripts/run-x86_64.sh:95#-device nvme,serial=kornelia,drive=payload` | Un disco NVMe de verdad: es de donde D19 dice que el cargador se trae el resto, y es el aparato contra el que se prueba [[PCIe]] entero, BARs incluidos. Ver [[NVMe]]. |
 | `scripts/run-aarch64.sh:87#-cpu cortex-a57 -m 512` | Un modelo concreto de ARM, con RAM explícita: en `virt` el default no alcanza. |
-| `NO_ACPI=1` → `virt,...,acpi=off` | Arranca **sin tablas de ACPI**, así el firmware deja un device tree en su lugar. Es la única forma de ejercitar el otro dialecto, y el portón lo exige. Ver [[16-El-otro-dialecto-device-tree]]. |
+| `NO_ACPI=1` → `virt,...,acpi=off` | Arranca **sin tablas de [[ACPI]]**, así el firmware deja un [[Device-tree|device tree]] en su lugar. Es la única forma de ejercitar el otro dialecto, y el portón lo exige. Ver [[16-El-otro-dialecto-device-tree]]. |
 | `"$@"` al final de las dos | Todo lo que le pases al script se le pasa a QEMU. Ahí van `-smp 4`, `-s -S`, `-monitor telnet:...`. |
 
 ### D26: el serie va crudo

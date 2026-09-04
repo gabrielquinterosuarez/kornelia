@@ -12,7 +12,7 @@ capitulos: [01-El-reloj-y-el-transistor, 02-Registros-y-RAM-no-son-lo-mismo]
 
 > Un puñado de celdas adentro del procesador. La única memoria que no cuesta ciclos alcanzar, y la única que las instrucciones pueden nombra directamente.
 
-Ojo con la palabra: **"registro" también se dice de los registros de un aparato**, que son una cosa completamente distinta —una dirección de memoria que no es memoria— y viven en [[45-Un-registro-no-es-RAM]]. Esta nota es sobre los del procesador.
+Ojo con la palabra: **"registro" también se dice de los registros de un [[Aparato|aparato]]**, que son una cosa completamente distinta —una dirección de memoria que no es memoria— y viven en [[45-Un-registro-no-es-RAM]]. Esta nota es sobre los del procesador.
 
 ## Qué problema resuelve
 
@@ -74,7 +74,7 @@ Y la razón por la que `ARGUMENTS` **se publica en vez de deducirse** es un bug 
 ## Práctica
 
 - [[P02-Medir-el-reloj-y-las-latencias]] — leer un registro de contador con una instrucción.
-- [[P04-Ver-los-registros-de-una-maquina-congelada]] — `info registers` en el monitor de QEMU, contra Kornelia.
+- [[P04-Ver-los-registros-de-una-maquina-congelada]] — `info registers` en el monitor de [[QEMU]], contra Kornelia.
 
 ## Recordar #flashcards/conceptos
 
@@ -84,7 +84,7 @@ Y la razón por la que `ARGUMENTS` **se publica en vez de deducirse** es un bug 
 
 ¿Por qué el protocolo de Kornelia no nombra `rax`?::Porque sería x86 disfrazado de genérico (D3, P4). La máquina informa qué registros tiene y el agente los nombra como los nombra esa máquina.
 
-¿Qué hace `cr3` / `ttbr0_el1`?::Apunta a la tabla de páginas activa. Cambiarlo cambia el mundo entero de direcciones que ve el código.
+¿Qué hace `cr3` / `ttbr0_el1`?::Apunta a la [[Tabla-de-paginas|tabla de páginas]] activa. Cambiarlo cambia el mundo entero de direcciones que ve el código.
 
 ## Ver también
 

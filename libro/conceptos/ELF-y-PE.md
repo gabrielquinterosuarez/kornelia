@@ -10,7 +10,7 @@ capitulos: [13-Cargar-una-imagen-PE-ELF-y-el-entry-point, 27-La-ABI-la-pone-el-t
 
 # ELF y PE
 
-> Los dos formatos con los que un archivo dice **dónde va cada pedazo en memoria, con qué permisos y por dónde se empieza**. ELF es el de Unix; PE es el de Windows — y el de UEFI.
+> Los dos formatos con los que un archivo dice **dónde va cada pedazo en memoria, con qué permisos y por dónde se empieza**. ELF es el de Unix; PE es el de Windows — y el de [[UEFI]].
 
 *Executable and Linkable Format* y *Portable Executable*. Se parecen mucho más de lo que sugiere la enemistad de sus dueños: los dos resuelven el mismo problema y con las mismas piezas.
 
@@ -23,7 +23,7 @@ Un archivo con código es un montón de bytes. Para que corra, alguien tiene que
 3. **¿Por dónde empiezo?** La primera instrucción rara vez es el primer byte.
 4. **¿Qué le falta al archivo?** Si el programa no sabe todavía en qué dirección lo van a cargar, hay direcciones adentro suyo que están **mal hasta que alguien las arregle**.
 
-Los formatos viejos no contestaban ninguna: un `.COM` de DOS se cargaba en `0x100` y se saltaba ahí. Eso funciona mientras haya un solo programa, sin MMU y sin permisos. Las cuatro preguntas aparecen todas juntas cuando aparece la memoria virtual.
+Los formatos viejos no contestaban ninguna: un `.COM` de DOS se cargaba en `0x100` y se saltaba ahí. Eso funciona mientras haya un solo programa, sin MMU y sin permisos. Las cuatro preguntas aparecen todas juntas cuando aparece la [[Memoria-virtual|memoria virtual]].
 
 ## Cómo funciona
 
@@ -146,7 +146,7 @@ Y lo único que el agente no puede saber por adelantado —dónde quedó— no s
 | Síntoma | Causa |
 |---|---|
 | La función correcta ve **punteros nulos**. | La ABI. El target UEFI usa la convención de Windows: los argumentos están en RCX/RDX, no en RDI/RSI. |
-| Se corrompe la pila al llamar a algo del firmware. | Faltan los 32 bytes de sombra que la ABI de Windows exige antes de la llamada. |
+| Se corrompe la pila al llamar a algo del [[Firmware|firmware]]. | Faltan los 32 bytes de sombra que la ABI de Windows exige antes de la llamada. |
 | `readelf -l` no muestra nada. | Es un archivo objeto (`.o`) o una biblioteca estática: todavía no tiene segmentos, solo secciones. |
 | El binario arranca aunque le hiciste `strip`. | Normal: `strip` saca secciones, y el cargador mira segmentos. |
 | El archivo pesa 12 KB y el proceso ocupa 4 MB. | `.bss`: ocupa cero en el archivo y lo que diga en memoria. |

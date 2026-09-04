@@ -19,19 +19,19 @@ Cuando encuentres uno nuevo, agregalo. Esta nota crece con la experiencia, no co
 
 | Causa | Cómo se confirma |
 |---|---|
-| El cable no está donde el kernel cree. | La dirección del UART está horneada para el primer byte, pero cambia según la máquina y el firmware. Kornelia arranca con una horneada y se muda a la que dice la tabla SPCR de ACPI (P4). Ver [[15-Enumerar-sin-adivinar-ACPI]]. |
-| QEMU se come los bytes. | `-serial mon:stdio` usa `0x01` como escape y por ahí viaja CBOR. **Tiene que ser `-serial stdio`** (D26). |
+| El cable no está donde el kernel cree. | La dirección del [[UART]] está horneada para el primer byte, pero cambia según la máquina y el [[Firmware|firmware]]. Kornelia arranca con una horneada y se muda a la que dice la tabla SPCR de [[ACPI]] (P4). Ver [[15-Enumerar-sin-adivinar-ACPI]]. |
+| [[QEMU]] se come los bytes. | `-serial mon:stdio` usa `0x01` como escape y por ahí viaja CBOR. **Tiene que ser `-serial stdio`** (D26). |
 | El kernel se murió antes del primer `write_byte`. | No hay forma de saberlo desde afuera: hay que poner la letra más temprano posible y ver si sale. |
-| Bucle de faults. | El handler de la excepción provoca la misma excepción. No alcanza a avisar nunca. Ver abajo. |
+| Bucle de [[Fault|faults]]. | El [[Handler|handler]] de la excepción provoca la misma excepción. No alcanza a avisar nunca. Ver abajo. |
 
 ### La máquina imprimía y se quedó muda de golpe
 
 | Causa | Cómo se confirma |
 |---|---|
 | Bucle de faults en el handler. | Si el handler de excepciones toca algo que vuelve a fallar, no sale nada. Caso real: **un núcleo arrancado por PSCI viene con los registros SIMD atrapados** (`CPACR_EL1` en cero), el compilador usa registros anchos para copiar structs, la primera copia es una excepción, y el handler la repite al copiar la suya. Silencio total. Se arregla en el trampolín, antes de saltar a Rust. |
-| Un acceso que el bus rechazó. | En aarch64, leer un registro de aparato con el **ancho equivocado** provoca un abort externo que dejaba la máquina muda. En x86 la misma lectura devuelve **ceros en silencio**. El mismo pedido: en una arquitectura miente, en la otra mata. Ver [[45-Un-registro-no-es-RAM]] y [[33-Recuperar-un-acceso-que-el-bus-rechaza]]. |
+| Un acceso que el [[Bus|bus]] rechazó. | En aarch64, leer un registro de [[Aparato|aparato]] con el **ancho equivocado** provoca un abort externo que dejaba la máquina muda. En x86 la misma lectura devuelve **ceros en silencio**. El mismo pedido: en una arquitectura miente, en la otra mata. Ver [[45-Un-registro-no-es-RAM]] y [[33-Recuperar-un-acceso-que-el-bus-rechaza]]. |
 | La pila se destruyó. | Si la excepción se atiende en la misma pila que se rompió, no se puede atender. Por eso hay una pila aparte: IST en x86_64, `SP_EL1` en aarch64. Ver [[31-La-pila-que-sobrevive]]. |
-| El código enmascaró las interrupciones y no volvió. | `cli` / `msr daifset`. Sin un segundo escalón (NMI) no hay forma de recuperarlo. Ver [[39-Plazos-y-cortes]]. |
+| El código enmascaró las [[Interrupcion|interrupciones]] y no volvió. | `cli` / `msr daifset`. Sin un segundo escalón (NMI) no hay forma de recuperarlo. Ver [[39-Plazos-y-cortes]]. |
 
 ### Se cuelga esperando algo que ya no viene
 
@@ -51,7 +51,7 @@ Cuando encuentres uno nuevo, agregalo. Esta nota crece con la experiencia, no co
 
 | Causa | Cómo se confirma |
 |---|---|
-| "Bloqueado" y "nunca pasó nada" se ven **idénticos** desde afuera. | Antes de creerle a un bloqueo, comprobá que **la cosa bloqueada ocurre**: corré lo mismo sin el bloqueo y mirá. **Caso real:** el aparato `edu` recorta la dirección de DMA a 28 bits si no se le dice otra cosa, y en aarch64 la RAM arranca en 1 GiB — ningún destino podía llegar nunca. El IOMMU parecía estar bloqueando perfectamente. En x86 no se veía porque la RAM arranca en cero. |
+| "Bloqueado" y "nunca pasó nada" se ven **idénticos** desde afuera. | Antes de creerle a un bloqueo, comprobá que **la cosa bloqueada ocurre**: corré lo mismo sin el bloqueo y mirá. **Caso real:** el aparato `edu` recorta la dirección de [[DMA]] a 28 bits si no se le dice otra cosa, y en aarch64 la RAM arranca en 1 GiB — ningún destino podía llegar nunca. El [[IOMMU]] parecía estar bloqueando perfectamente. En x86 no se veía porque la RAM arranca en cero. |
 | El sistema se está probando a sí mismo. | Si la prueba solo comprueba lo que el kernel *dice* de sí mismo, no prueba nada. La versión buena: que **el código del agente** informe en qué núcleo está; que ejecute `cli` y el fault vuelva; que un aparato de verdad intente escribir y la memoria quede intacta. Ver [[58-Una-prueba-que-no-puede-pasar-por-accidente]]. |
 
 ### El IOMMU deja pasar todo
@@ -64,22 +64,22 @@ Cuando encuentres uno nuevo, agregalo. Esta nota crece con la experiencia, no co
 
 | Causa | Cómo se confirma |
 |---|---|
-| Una alineación mayor que la página. | `#[repr(align(8192))]` queda alineado adentro de la imagen, pero UEFI la carga a 4 KiB y ahí se pierde. Lo caro no es la tabla desalineada: el compilador, **dando por cierto que los bits de abajo son cero, simplifica las máscaras** con las que se arma la dirección. El síntoma fue un SMMU leyendo ceros una página más abajo. Con más de 4 KiB: pedir de más y alinear a mano en runtime. Ver [[24-Alineacion-la-promesa-que-el-cargador-no-cumple]]. |
-| Escrituras que no salieron de la caché o del buffer. | Falta una barrera, o la memoria no está marcada no-cacheable. En x86 casi nunca se nota; en ARM sí. |
+| Una alineación mayor que la página. | `#[repr(align(8192))]` queda alineado adentro de la imagen, pero [[UEFI]] la carga a 4 KiB y ahí se pierde. Lo caro no es la tabla desalineada: el compilador, **dando por cierto que los bits de abajo son cero, simplifica las máscaras** con las que se arma la dirección. El síntoma fue un SMMU leyendo ceros una página más abajo. Con más de 4 KiB: pedir de más y alinear a mano en runtime. Ver [[24-Alineacion-la-promesa-que-el-cargador-no-cumple]]. |
+| Escrituras que no salieron de la [[Cache|caché]] o del buffer. | Falta una barrera, o la memoria no está marcada no-cacheable. En x86 casi nunca se nota; en ARM sí. |
 
 ### Un registro de aparato devuelve ceros
 
 | Causa | Cómo se confirma |
 |---|---|
 | Se leyó con el ancho equivocado. | Muchos registros solo aceptan accesos de su ancho exacto y **descartan los más angostos sin avisar**. Por eso `mem.read`/`mem.write` toman `width`. |
-| El rango no está mapeado, o está mapeado como cacheable. | En aarch64 los BARs de PCIe caen en 512 GiB y el mapa del firmware llega a 257: el aparato era literalmente inalcanzable. Ver [[18-Lo-que-la-maquina-no-dice]]. |
+| El rango no está mapeado, o está mapeado como cacheable. | En aarch64 los [[BAR|BARs]] de [[PCIe]] caen en 512 GiB y el mapa del firmware llega a 257: el aparato era literalmente inalcanzable. Ver [[18-Lo-que-la-maquina-no-dice]]. |
 | La ventana de configuración de PCIe no está en el mapa. | UEFI no la informa en aarch64; la tabla MCFG de ACPI sí. Publicar una dirección que uno mismo hace inalcanzable es lo que prohíbe P1. |
 
 ### La interrupción no llega nunca
 
 | Causa | Cómo se confirma |
 |---|---|
-| Llega como pulso y el controlador la trata como nivel. | El frame que convierte una escritura en interrupción (MSI) **no sostiene la línea**: la sube y la baja. Por omisión el GIC trata las de aparato como sensibles a nivel, así que el pulso se perdía. Hay que configurarla **por flanco** en `GICD_ICFGR`. Se encontró **separando las dos mitades**: hacerla sonar a mano con lo que el kernel publica, sin aparato. |
+| Llega como pulso y el controlador la trata como nivel. | El frame que convierte una escritura en interrupción ([[MSI]]) **no sostiene la línea**: la sube y la baja. Por omisión el GIC trata las de aparato como sensibles a nivel, así que el pulso se perdía. Hay que configurarla **por flanco** en `GICD_ICFGR`. Se encontró **separando las dos mitades**: hacerla sonar a mano con lo que el kernel publica, sin aparato. |
 | Está pendiente pero no se puede reconocer. | En el GICv2 de QEMU, una interrupción del Grupo 1 queda pendiente y `GICC_IAR` devuelve **1022**: "es del Grupo 1, reconocela por `GICC_AIAR`" — y `GICC_AIAR` lee cero, porque ese registro existe solo con extensiones de seguridad que este GIC no tiene. El GIC manda a una puerta que no está construida. |
 | El grupo no está habilitado. | El error tonto que conviene no repetir: mover interrupciones al Grupo 1 **sin habilitar el Grupo 1**. Con eso nada se entrega, y parece que el problema es otro. |
 | El IOMMU bloqueó la escritura del MSI. | Un MSI **es** un DMA: una escritura del aparato a memoria. Si no está declarada, no llega. |

@@ -27,7 +27,7 @@ Vas a trabajar contra tres cosas distintas, y confundirlas es la primera fuente 
 
 |                      | Qué es                                                   | Para qué                                                      |
 | -------------------- | -------------------------------------------------------- | ------------------------------------------------------------- |
-| **Tu Debian**        | Hardware de verdad, con tu [[NVMe]], tu [[IOMMU]], tus aparatos. | Mirar. Nunca romper.                                          |
+| **Tu Debian**        | Hardware de verdad, con tu [[NVMe]], tu [[IOMMU]], tus [[Aparato|aparatos]]. | Mirar. Nunca romper.                                          |
 | **Una VM de Linux**  | Un Linux chico en [[QEMU]], desechable.                      | Romper: cargar [[Modulo-de-kernel|módulos]], provocar un `oops`, colgar el kernel. |
 | **Kornelia en QEMU** | El kernel de este libro.                                 | Ver la otra respuesta al mismo problema.                      |
 
@@ -203,7 +203,7 @@ Y en el monitor:
 |---|---|
 | `info registers` | **Todos los registros del procesador**, congelados. |
 | `info mem` | Las traducciones activas: qué virtual apunta a qué física. |
-| `info mtree` | El árbol de memoria de la máquina emulada: RAM, MMIO, cada aparato. |
+| `info mtree` | El árbol de memoria de la máquina emulada: RAM, [[MMIO]], cada aparato. |
 | `info pci` | Los aparatos y sus [[BAR|BARs]]. |
 | `info irq` | Cuántas interrupciones se entregaron. |
 | `x/16xb 0x1000` | Volcar memoria física cruda. |
@@ -315,7 +315,7 @@ Conviene ponerlo en `~/.bashrc` de una vez.
 
 ¿Cuál es el riesgo de depurar escribiendo letras por el cable?::Que cambia los tiempos y puede hacer aparecer o desaparecer el bug, y que las letras salen después del marcador del protocolo, así que el cliente las lee como CBOR.
 
-Si un aparato hace DMA y la interrupción no llega, ¿cuál es la primera técnica?::Separar las dos mitades: hacer sonar la interrupción a mano, sin aparato. Una de las dos mitades anda y así se sabe cuál.
+Si un aparato hace [[DMA]] y la interrupción no llega, ¿cuál es la primera técnica?::Separar las dos mitades: hacer sonar la interrupción a mano, sin aparato. Una de las dos mitades anda y así se sabe cuál.
 
 ## Qué sigue
 

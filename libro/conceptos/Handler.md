@@ -14,7 +14,7 @@ capitulos: [34-Del-cable-al-numero-PIC-APIC-GIC, 49-Escribir-un-driver]
 
 ## Qué problema resuelve
 
-Ninguno por sí sola: un handler es lo que hay **del otro lado** del timbre. El problema que resuelve es más específico: cuando el aparato avisa, alguien tiene que atenderlo, y ese alguien no puede ser el programa que estaba corriendo, porque el programa no sabe nada del aparato ni pidió que lo molesten.
+Ninguno por sí sola: un handler es lo que hay **del otro lado** del timbre. El problema que resuelve es más específico: cuando el [[Aparato|aparato]] avisa, alguien tiene que atenderlo, y ese alguien no puede ser el programa que estaba corriendo, porque el programa no sabe nada del aparato ni pidió que lo molesten.
 
 Así que el handler es código que corre **prestado**: se mete en el medio, hace lo mínimo, y devuelve el control como si nada hubiera pasado.
 
@@ -45,7 +45,7 @@ Linux resuelve "no puedo tardar" partiendo el handler en dos, y le puso nombre a
 Las formas concretas de bottom half, de más vieja a más nueva:
 
 - **softirq** — fija en tiempo de compilación, hay diez y pico. Se ven en `/proc/softirqs`, y el hilo que las corre cuando se acumulan es `ksoftirqd/N` (aparece en `top` cuando la máquina está bajo carga de red).
-- **tasklet** — una softirq genérica que un driver puede pedir. En camino de deprecación.
+- **tasklet** — una softirq genérica que un [[Driver|driver]] puede pedir. En camino de deprecación.
 - **workqueue** — corre en un hilo del kernel de verdad, así que **sí puede dormir**. Los hilos se llaman `kworker/...`.
 - **threaded IRQ** — `request_threaded_irq(irq, top, hilo, ...)`: el top half decide con `IRQ_WAKE_THREAD` y Linux despierta un hilo dedicado. Es lo que usa `PREEMPT_RT` para *todo*, porque un handler que corre en un hilo se puede desalojar y planificar.
 
@@ -88,7 +88,7 @@ Dos cosas del `Handler` que valen por sí solas:
 | `irq NN: nobody cared` en `dmesg`. | Ningún handler de la cadena reconoció la interrupción como suya. Casi siempre: el aparato equivocado, o un `IRQ_NONE` mal devuelto. |
 | El handler corre pero el aparato sigue levantando la mano. | No se leyó el registro que **limpia** la bandera del aparato. Ver [[MMIO]]: leer tiene efecto. |
 | Se pierden eventos bajo carga. | El buffer donde el handler deja lo que llegó es más chico que la ráfaga. **Pasó acá:** el anillo del cable serie tenía 4 KiB y el protocolo acepta pedidos de 64 KiB. El síntoma no se parecía a la causa — un `mem.write` colgaba la máquina esperando el resto de un CBOR que ya se había perdido. Ver [[Indice-de-sintomas]]. |
-| Silencio total, ni una letra por el cable. | **Bucle de faults**: el handler provoca la misma excepción que vino a atender. Caso real en aarch64: un núcleo arrancado por PSCI viene con los registros SIMD atrapados (`CPACR_EL1` en cero), el compilador usa registros anchos para copiar structs, y el handler repite la falla al copiar la suya. |
+| Silencio total, ni una letra por el cable. | **Bucle de [[Fault|faults]]**: el handler provoca la misma excepción que vino a atender. Caso real en aarch64: un núcleo arrancado por PSCI viene con los registros SIMD atrapados (`CPACR_EL1` en cero), el compilador usa registros anchos para copiar structs, y el handler repite la falla al copiar la suya. |
 | Instrumentar el handler hace desaparecer el bug. | Escribir una letra por el cable desde un handler del reloj movió el timing lo suficiente. Para algo que depende de tiempos: dejar el dato en un estático y publicarlo por `describe`. |
 
 ## Práctica

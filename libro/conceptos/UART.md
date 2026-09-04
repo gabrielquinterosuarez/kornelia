@@ -10,7 +10,7 @@ capitulos: [04-El-bus-tocar-algo-que-no-es-memoria, 38-Dormir-en-vez-de-girar, 3
 
 # UART
 
-> El chip que convierte un byte en pulsos por un cable. Es el único aparato con el que un kernel puede hablar **antes de saber nada de la máquina**.
+> El chip que convierte un byte en pulsos por un cable. Es el único [[Aparato|aparato]] con el que un kernel puede hablar **antes de saber nada de la máquina**.
 
 *Universal Asynchronous Receiver/Transmitter.* Cuatro registros, ninguna enumeración, ningún descubrimiento: por eso es lo primero que se hace andar en un kernel y lo último que se apaga.
 
@@ -18,7 +18,7 @@ capitulos: [04-El-bus-tocar-algo-que-no-es-memoria, 38-Dormir-en-vez-de-girar, 3
 
 El problema no es la comunicación: es el **huevo y la gallina** del arranque.
 
-Para usar cualquier aparato moderno hay que recorrer el bus, leer tablas, mapear [[MMIO|registros]], instalar handlers. Todo eso es código que puede fallar. Y si falla, hay que **contarlo por algún lado** — que es exactamente el aparato que todavía no se hizo andar.
+Para usar cualquier aparato moderno hay que recorrer el [[Bus|bus]], leer tablas, mapear [[MMIO|registros]], instalar handlers. Todo eso es código que puede fallar. Y si falla, hay que **contarlo por algún lado** — que es exactamente el aparato que todavía no se hizo andar.
 
 El UART rompe el círculo porque no hay que descubrir nada:
 
@@ -61,7 +61,7 @@ Hay dos formas de recibir, y la diferencia es un núcleo entero:
 El timbre trae una obligación que no se ve venir: **el que atiende tiene que vaciar la cola del UART**. El chip mantiene el timbre sonando mientras haya un byte sin leer, así que un [[Handler|handler]] que solo diga "ya te oí" hace que suene de nuevo, inmediatamente, para siempre. La máquina no se cuelga: avanza cero.
 
 > [!info] El `0x3F8` no es MMIO
-> En x86 el UART vive en el **espacio de puertos de E/S**, un espacio de direcciones aparte con instrucciones propias (`in`, `out`) y 65.536 direcciones. Es anterior al MMIO y sobrevive por compatibilidad. ARM y RISC-V nunca lo tuvieron: ahí el UART **es** memoria. Ver [[MMIO]].
+> En x86 el UART vive en el **espacio de puertos de E/S**, un [[Espacio-de-direcciones|espacio de direcciones]] aparte con instrucciones propias (`in`, `out`) y 65.536 direcciones. Es anterior al MMIO y sobrevive por compatibilidad. ARM y RISC-V nunca lo tuvieron: ahí el UART **es** memoria. Ver [[MMIO]].
 
 ## Cómo lo hace Linux
 
@@ -93,11 +93,11 @@ earlyprintk=serial,ttyS0,115200   # la version vieja de x86, con la direccion ho
 
 **Es el único driver que el kernel lleva adentro**, y el comentario lo dice con todas las letras: `kernel-x86_64/src/uart.rs:4#y por eso es el único que el kernel lleva adentro (D4)`. Todo lo demás lo escribe el agente ([[Driver]]).
 
-**Es lo primero que se hace, antes de pedirle la máquina al firmware:** `kernel-x86_64/src/main.rs:273#uart::init();`, con el comentario *"si lo que sigue falla, hace falta poder contarlo"*.
+**Es lo primero que se hace, antes de pedirle la máquina al [[Firmware|firmware]]:** `kernel-x86_64/src/main.rs:273#uart::init();`, con el comentario *"si lo que sigue falla, hace falta poder contarlo"*.
 
 ### Arranca con una dirección horneada y se muda
 
-Acá está la aplicación más limpia de P4 que tiene el proyecto. Hay una dirección escrita a mano porque **hay que poder hablar antes de leer ninguna tabla**: si el arranque se cuelga leyendo ACPI, lo único que queda para contarlo es el cable.
+Acá está la aplicación más limpia de P4 que tiene el proyecto. Hay una dirección escrita a mano porque **hay que poder hablar antes de leer ninguna tabla**: si el arranque se cuelga leyendo [[ACPI]], lo único que queda para contarlo es el cable.
 
 Pero es el punto de partida, no la respuesta. Apenas la tabla SPCR (`kernel-core/src/acpi.rs:579#unsafe fn read_spcr`) dice dónde tiene la máquina su consola, el kernel **se muda** ahí: `kernel-aarch64/src/uart.rs:49#pub unsafe fn move_to`. La mudanza va temprano y con la menor cantidad posible de cosas ya hechas (`kernel-core/src/lib.rs:74#move_to_reported_serial(p, &machine, &hw);`), porque si la dirección nueva fuera mala el cordón se pierde ahí mismo.
 
@@ -122,7 +122,7 @@ Cuántos bytes aguanta ese anillo y **cuántos se perdieron** son estado de la m
 ## Cómo se ve roto
 
 > [!danger] El anillo más chico que el pedido más grande
-> El protocolo dice aceptar pedidos de 64 KiB; el buzón donde el handler dejaba los bytes tenía 4 KiB. El razonamiento escrito era que los bytes llegan de a poco y el bucle los saca enseguida — cierto **hasta que el kernel empezó a hacer cosas lentas** (programar el IOMMU espera a que se vacíe una cola de comandos) con bytes llegando mientras tanto. **El síntoma no se parece a la causa:** un `mem.write` de 4 KiB colgaba la máquina. Se perdían bytes en el medio, el pedido quedaba incompleto, y el kernel esperaba para siempre el resto de un CBOR que ya no venía. Y el contador de bytes perdidos existía pero **nadie podía verlo**. Ahora se publica, y el portón exige que sea cero. Está en el [[Indice-de-sintomas]].
+> El protocolo dice aceptar pedidos de 64 KiB; el buzón donde el handler dejaba los bytes tenía 4 KiB. El razonamiento escrito era que los bytes llegan de a poco y el bucle los saca enseguida — cierto **hasta que el kernel empezó a hacer cosas lentas** (programar el [[IOMMU]] espera a que se vacíe una cola de comandos) con bytes llegando mientras tanto. **El síntoma no se parece a la causa:** un `mem.write` de 4 KiB colgaba la máquina. Se perdían bytes en el medio, el pedido quedaba incompleto, y el kernel esperaba para siempre el resto de un CBOR que ya no venía. Y el contador de bytes perdidos existía pero **nadie podía verlo**. Ahora se publica, y el portón exige que sea cero. Está en el [[Indice-de-sintomas]].
 
 | Síntoma | Causa |
 |---|---|
@@ -132,7 +132,7 @@ Cuántos bytes aguanta ese anillo y **cuántos se perdieron** son estado de la m
 | Un `mem.write` grande cuelga la máquina. | El anillo se llenó y se perdieron bytes: el pedido queda incompleto y el kernel espera el resto para siempre. |
 | El núcleo gira al 100% y no atiende nada. | El handler no vació la cola del UART. El chip sostiene el timbre mientras quede un byte sin leer. |
 | Llega el principio de un pedido y nunca el resto. | Se pidió solo "llegó un byte" y no "llegó algo y dejó de llegar": un pedido que no llena la cola espera un byte que no viene. |
-| Se pierde el byte `0x01` y el CBOR se rompe. | QEMU con `mon:stdio` se lo come como escape. **El serie va crudo** (D26): `-serial stdio`, y se sale con `Ctrl-C`. |
+| Se pierde el byte `0x01` y el CBOR se rompe. | [[QEMU]] con `mon:stdio` se lo come como escape. **El serie va crudo** (D26): `-serial stdio`, y se sale con `Ctrl-C`. |
 | Un test que dependía de tiempos deja de andar al instrumentarlo. | Escribir una letra **desde un handler** mueve el timing lo suficiente para cambiar el fenómeno. Para eso conviene dejar el dato en un estático y publicarlo por `describe`. |
 
 ## Práctica
@@ -142,7 +142,7 @@ Cuántos bytes aguanta ese anillo y **cuántos se perdieron** son estado de la m
 
 ## Recordar #flashcards/conceptos
 
-¿Por qué el UART es lo primero que se hace andar en un kernel?::Porque es el único aparato que se usa **sin descubrir nada**: registros en direcciones conocidas, sin enumeración, sin DMA, sin interrupciones si no se quieren. Todo lo demás que se haga andar después necesita un lugar donde contar que falló.
+¿Por qué el UART es lo primero que se hace andar en un kernel?::Porque es el único aparato que se usa **sin descubrir nada**: registros en direcciones conocidas, sin enumeración, sin [[DMA]], sin interrupciones si no se quieren. Todo lo demás que se haga andar después necesita un lugar donde contar que falló.
 
 ¿Qué significa la "A" de UART?::Asincrónico: no hay cable de reloj entre los dos lados. La velocidad (*baud*) se acuerda de antemano en un registro de control, y si no coinciden lo que llega es basura.
 

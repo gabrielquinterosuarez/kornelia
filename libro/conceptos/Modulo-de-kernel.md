@@ -16,14 +16,14 @@ capitulos: [50-initramfs-modulos-y-el-huevo-y-la-gallina, 39-Plazos-y-cortes, 32
 
 Un kernel monolítico con todo adentro tiene dos incomodidades, y ninguna se arregla escribiendo mejor código.
 
-1. **La imagen es enorme y la mayoría no se usa.** Debian tiene que arrancar en máquinas que todavía no existen, así que trae drivers para miles de aparatos. Ninguna máquina tiene más que un puñado.
+1. **La imagen es enorme y la mayoría no se usa.** Debian tiene que arrancar en máquinas que todavía no existen, así que trae drivers para miles de [[Aparato|aparatos]]. Ninguna máquina tiene más que un puñado.
 2. **Cambiar cualquier cosa cuesta un reinicio.** Recompilar el kernel para probar veinte líneas de un driver, y reiniciar para probarlas, es un ciclo de minutos donde debería ser de segundos.
 
 Y hay un tercero que es el más interesante: **el huevo y la gallina del arranque**. El driver del disco raíz tiene que estar disponible *antes* de poder leer el disco raíz. La salida es un sistema de archivos chiquito en memoria que el arrancador carga junto al kernel —el `initramfs`— con los pocos módulos que hacen falta para llegar al disco de verdad. Ver [[50-initramfs-modulos-y-el-huevo-y-la-gallina]].
 
 ## Cómo funciona
 
-Un módulo (`.ko`, *kernel object*) es un ELF **relocalizable**: no está enlazado todavía. Al cargarlo, el kernel hace de enlazador en caliente.
+Un módulo (`.ko`, *kernel object*) es un [[ELF-y-PE|ELF]] **relocalizable**: no está enlazado todavía. Al cargarlo, el kernel hace de enlazador en caliente.
 
 ```mermaid
 flowchart TD
@@ -40,7 +40,7 @@ Tres cosas de ahí valen por todo el resto:
 
 - **`EXPORT_SYMBOL`.** Un módulo no ve todos los símbolos del kernel: solo los que el kernel **exportó** a propósito. Es una superficie declarada, igual que los once verbos de Kornelia. `EXPORT_SYMBOL_GPL` restringe además la licencia de quien puede usarlos.
 - **La cuenta de usuarios.** `rmmod` falla si alguien lo está usando. Es la columna *Used by* de `lsmod`, y es lo que impide sacarle el piso a algo que está corriendo.
-- **Una vez cargado, no es un invitado.** Corre en anillo 0 / EL1, en el mismo espacio de direcciones que el kernel, sin límite de tiempo y sin nadie mirando. Un módulo **es** el kernel.
+- **Una vez cargado, no es un invitado.** Corre en anillo 0 / EL1, en el mismo [[Espacio-de-direcciones|espacio de direcciones]] que el kernel, sin límite de tiempo y sin nadie mirando. Un módulo **es** el kernel.
 
 ## Cómo lo hace Linux
 
@@ -77,7 +77,7 @@ Cuatro razones, y ninguna tiene arreglo dentro del modelo:
 
 | | |
 |---|---|
-| **Privilegio** | Corre en anillo 0 / EL1. Puede apagar las interrupciones, escribir registros de control, cambiar la tabla de páginas. |
+| **Privilegio** | Corre en anillo 0 / EL1. Puede apagar las [[Interrupcion|interrupciones]], escribir registros de control, cambiar la [[Tabla-de-paginas|tabla de páginas]]. |
 | **Mismo espacio de direcciones** | Un puntero mal calculado no pisa "su" memoria: pisa la del kernel, o la de otro módulo. |
 | **Sin red debajo** | Un `oops` en un módulo mata el hilo, pero el kernel queda en estado desconocido: candados tomados que nadie va a soltar, memoria a medio liberar. Por eso `oops` suele terminar en `panic`. |
 | **Sin plazo** | Nadie mira el reloj. Un `while (1)` con las interrupciones enmascaradas es la máquina muerta: ni siquiera el temporizador entra. |
@@ -124,7 +124,7 @@ Un módulo colgado, no. No hay `deadline_ms` en `insmod`.
 
 ### La excepción honesta: los handlers y el blob
 
-D27 **solo cubre `exec`**. Un handler instalado con `irq.install` corre **siempre privilegiado**, y no por comodidad: el hardware no sabe entregar una interrupción a un nivel sin privilegio. En x86_64 la entrada de la IDT exige anillo 0; en aarch64 la excepción entra en EL1. Un handler del agente es, en este sentido, tan `raw` como un módulo.
+D27 **solo cubre `exec`**. Un [[Handler|handler]] instalado con `irq.install` corre **siempre privilegiado**, y no por comodidad: el hardware no sabe entregar una interrupción a un nivel sin privilegio. En x86_64 la entrada de la IDT exige anillo 0; en aarch64 la excepción entra en EL1. Un handler del agente es, en este sentido, tan `raw` como un módulo.
 
 Y el blob de arranque (D18, `kernel-core/src/lib.rs:224#fn run_blob`) es lo más parecido que hay a un módulo cargado al arrancar: corre privilegiado, en el mismo espacio de direcciones, antes de que exista el protocolo. Con el mismo riesgo — y por eso hay algo que Linux no tiene: **antes de saltar, avisa y espera dos segundos, y cualquier byte lo cancela** (`kernel-core/src/lib.rs:285#cancelled: someone is on the other side`). Sin esa ventana, un blob malo dejaría la máquina inútil en cada arranque y habría que sacarle el disco. La respuesta de Linux a un módulo que cuelga al arrancar es reiniciar en modo rescate; la de Kornelia es una ventana en **cada** arranque.
 
@@ -166,4 +166,4 @@ Y el blob de arranque (D18, `kernel-core/src/lib.rs:224#fn run_blob`) es lo más
 - [[Driver]] — el contenido más común de un módulo, y por qué acá no hay ninguno (D4).
 - [[Modo-privilegiado]] · [[Fault]] · [[Oops-y-panic]] · [[Syscall]]
 - [[50-initramfs-modulos-y-el-huevo-y-la-gallina]] · [[51-El-blob-y-la-ventana-de-rescate]] · [[39-Plazos-y-cortes]]
-- [[Falsos-amigos#9]] — driver, módulo, firmware y blob no son lo mismo.
+- [[Falsos-amigos#9]] — driver, módulo, [[Firmware|firmware]] y blob no son lo mismo.

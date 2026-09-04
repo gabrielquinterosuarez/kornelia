@@ -47,7 +47,7 @@ Todo concepto tiene las mismas seis piezas, porque lo que hace didáctico a un l
 2. **Cómo lo hace Linux** — el camino normal, con archivos y funciones reales.
 3. **Cómo lo hace Kornelia** — y sobre todo **qué se quitó**, con la decisión (`D*`) y el principio (`P*`) que lo justifican.
 4. **Cómo se ve roto** — el síntoma antes de la causa. Esta es la sección que hace que se aprenda.
-5. **Práctica** — contra Linux, y contra Kornelia en QEMU cuando se pueda.
+5. **Práctica** — contra Linux, y contra Kornelia en [[QEMU]] cuando se pueda.
 6. **Recordar** — preguntas para el mazo.
 
 La pieza 4 es la que otros libros no tienen, porque lo que se aprende depurando no se escribe. Acá sí: este proyecto viene anotando sus propios bugs caros desde el principio (§ *Cosas que ya costaron caras* en `CLAUDE.md`), y cada uno es material de enseñanza que no se puede inventar.
@@ -97,8 +97,8 @@ Cada práctica dice a qué clase pertenece, porque el riesgo no es el mismo.
 | Clase | Qué hace | Dónde corre |
 |---|---|---|
 | **mirar** | Solo lee: `/proc`, `/sys`, `lspci`, `perf`, `bpftrace`. | Tu Debian. No puede romper nada. |
-| **romper** | Carga módulos, cuelga la máquina, toca el IOMMU a propósito. | **VM de QEMU.** Nunca tu máquina. |
-| **construir** | Escribís código: un módulo, un blob, un driver. | Tu Debian para compilar, VM o Kornelia para correr. |
+| **romper** | Carga módulos, cuelga la máquina, toca el [[IOMMU]] a propósito. | **VM de QEMU.** Nunca tu máquina. |
+| **construir** | Escribís código: un módulo, un blob, un [[Driver|driver]]. | Tu Debian para compilar, VM o Kornelia para correr. |
 
 Y toda práctica declara **qué vas a ver si funciona** antes de los pasos. Es la misma regla que sigue el portón del kernel: una prueba que solo comprueba lo que el sistema dice de sí mismo no prueba nada.
 
@@ -136,7 +136,7 @@ Esto no es gusto. Obsidian, con su configuración por omisión (`strictLineBreak
     ...es el mismo patrón que este proyecto ya pagó con el SMMU: un límite que sobra puede ser
     tan inválido como uno que falta...
 
-Se podría arreglar del otro lado, prendiendo *Strict line breaks* en la configuración. **No alcanza**: el vault se sincroniza a otros dispositivos, se lee en el celular, y una regla que depende de un toggle del lector es una intención, no una regla. Se arregla en el archivo.
+Se podría arreglar del otro lado, prendiendo *Strict line breaks* en la configuración. **No alcanza**: el vault se sincroniza a otros [[Aparato|dispositivos]], se lee en el celular, y una regla que depende de un toggle del lector es una intención, no una regla. Se arregla en el archivo.
 
 Donde el salto **sí** significa algo, se usa estructura explícita en vez de un salto suelto: un encabezado, una lista, o una línea en blanco. Un rótulo seguido de su lista no va como `**Rótulo**` y salto — va como `#### Rótulo` y línea en blanco.
 

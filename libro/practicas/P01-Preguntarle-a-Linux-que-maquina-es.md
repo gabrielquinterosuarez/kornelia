@@ -10,7 +10,7 @@ conceptos: [MMIO, Registro]
 # P01 · Preguntarle a Linux qué máquina es
 
 > [!success] Qué vas a ver si funciona
-> La misma información, dos veces: una vez como Linux la publica y otra como Kornelia la contesta. Al final vas a tener una tabla llena con **los números de tu máquina**, y vas a poder señalar en `/proc/iomem` un rango que no es memoria sino un aparato.
+> La misma información, dos veces: una vez como Linux la publica y otra como Kornelia la contesta. Al final vas a tener una tabla llena con **los números de tu máquina**, y vas a poder señalar en `/proc/iomem` un rango que no es memoria sino un [[Aparato|aparato]].
 
 Todo esto es de solo lectura. Corre en tu Debian sin riesgo.
 
@@ -38,7 +38,7 @@ grep -c ^processor /proc/cpuinfo      # nucleos logicos
 lscpu -C                              # las caches, en una tabla
 ```
 
-**Qué estás viendo:** la columna `COHERENCY-SIZE` de `lscpu -C` es el tamaño de la línea de caché, casi siempre 64 bytes. Ese número es la unidad real en la que tu máquina mueve memoria: no existe leer un byte. Ver [[05-Caches-y-la-primera-mentira-util]].
+**Qué estás viendo:** la columna `COHERENCY-SIZE` de `lscpu -C` es el tamaño de la línea de [[Cache|caché]], casi siempre 64 bytes. Ese número es la unidad real en la que tu máquina mueve memoria: no existe leer un byte. Ver [[05-Caches-y-la-primera-mentira-util]].
 
 ---
 
@@ -55,10 +55,10 @@ sudo cat /proc/iomem | grep -iE "0000:[0-9a-f]{2}:"    # los rangos que son apar
 | ¿Dónde arranca el primer `System RAM`? | |
 | ¿Es la RAM un bloque continuo o hay huecos? | |
 | Un rango marcado `Reserved` | |
-| Un rango que pertenece a un aparato PCIe | |
+| Un rango que pertenece a un aparato [[PCIe]] | |
 
 > [!question] La pregunta de esta parte
-> Sumá los rangos de `System RAM`. ¿Da lo que dice `free -h`? **No va a dar**, y la diferencia es lo que se quedó el firmware, lo que reserva el kernel y los agujeros del mapa. Un kernel no puede suponer que "la RAM" es un número: tiene que leer el mapa. Es la razón de ser de `describe {what:["memory"]}` y de que en Kornelia el agente [[23-Asignadores-y-por-que-aca-no-hay|reclame rangos]] en vez de pedir cantidades.
+> Sumá los rangos de `System RAM`. ¿Da lo que dice `free -h`? **No va a dar**, y la diferencia es lo que se quedó el [[Firmware|firmware]], lo que reserva el kernel y los agujeros del mapa. Un kernel no puede suponer que "la RAM" es un número: tiene que leer el mapa. Es la razón de ser de `describe {what:["memory"]}` y de que en Kornelia el agente [[23-Asignadores-y-por-que-aca-no-hay|reclame rangos]] en vez de pedir cantidades.
 
 ---
 
@@ -69,7 +69,7 @@ lspci
 lspci -v | head -30
 ```
 
-Elegí uno que te interese (la placa de red, el controlador NVMe) y anotá su dirección de bus, del estilo `00:1f.6`:
+Elegí uno que te interese (la placa de red, el controlador [[NVMe]]) y anotá su dirección de [[Bus|bus]], del estilo `00:1f.6`:
 
 ```bash
 DEV=00:1f.6                          # cambialo por el tuyo
@@ -82,7 +82,7 @@ cat /sys/bus/pci/devices/0000:$DEV/resource
 | | Tu aparato |
 |---|---|
 | Qué es | |
-| Su `Memory at ...` *(el BAR)* | |
+| Su `Memory at ...` *(el [[BAR]])* | |
 | Cuántos bytes ocupa | |
 | Su IRQ, y si dice `MSI` | |
 
@@ -127,7 +127,7 @@ sudo cp /sys/firmware/acpi/tables/DSDT /tmp/dsdt.dat
 iasl -d /tmp/dsdt.dat && wc -l /tmp/dsdt.dsl && head -40 /tmp/dsdt.dsl
 ```
 
-**Qué estás viendo:** el `DSDT` decompilado son **miles de líneas de un lenguaje de programación** (AML) embebido en las tablas de tu firmware. Mirá el tamaño: eso es lo que un kernel tendría que interpretar para averiguar, por ejemplo, qué cable de interrupción le toca a un aparato. Es exactamente la razón por la que Kornelia **no implementa INTx** y usa MSI, que lo hace innecesario.
+**Qué estás viendo:** el `DSDT` decompilado son **miles de líneas de un lenguaje de programación** (AML) embebido en las tablas de tu firmware. Mirá el tamaño: eso es lo que un kernel tendría que interpretar para averiguar, por ejemplo, qué cable de interrupción le toca a un aparato. Es exactamente la razón por la que Kornelia **no implementa INTx** y usa [[MSI]], que lo hace innecesario.
 
 Y las que sí lee Kornelia:
 
@@ -140,9 +140,9 @@ ls /sys/firmware/acpi/tables/ | grep -E "APIC|MCFG|SPCR|DMAR"
 | `APIC` (MADT) | Cuántos núcleos hay y cómo despertarlos | |
 | `MCFG` | Dónde está la ventana de configuración de PCIe | |
 | `SPCR` | Dónde está la consola serie | |
-| `DMAR` | Dónde está el IOMMU de Intel | |
+| `DMAR` | Dónde está el [[IOMMU]] de Intel | |
 
-`SPCR` es la que hace que Kornelia **se mude** del UART horneado al que dice la máquina (P4). Si tu máquina no la tiene, es porque tiene pantalla y no le hace falta.
+`SPCR` es la que hace que Kornelia **se mude** del [[UART]] horneado al que dice la máquina (P4). Si tu máquina no la tiene, es porque tiene pantalla y no le hace falta.
 
 ---
 
@@ -168,7 +168,7 @@ Y la comparación, que es el punto de la práctica:
 | Mapa de memoria | `/proc/iomem` | `--what memory` | |
 | Núcleos | `lscpu` | `--what cpus` | |
 | Aparatos | `lspci` | `--what pcie` | |
-| Interrupciones | `/proc/interrupts` | `--what interrupts` | |
+| [[Interrupcion|Interrupciones]] | `/proc/interrupts` | `--what interrupts` | |
 | Tablas del firmware | `/sys/firmware/acpi/tables/` | `--what tables` | |
 
 > [!question] Las dos preguntas para las que **no hay** equivalente
@@ -191,9 +191,9 @@ Eso trae, entre otras cosas, **el contador de bytes que el cable perdió**. Exis
 |---|---|
 | `/proc/iomem` sale todo en ceros | Falta `sudo`. Sin permiso el kernel te da la estructura pero no las direcciones. |
 | `iasl: command not found` | `sudo apt install acpica-tools`. |
-| `client.py` no contesta | ¿Está el kernel corriendo? Necesita `./scripts/run-x86_64.sh` en otra terminal, o dejá que `client.py` arranque su propio QEMU. |
+| `client.py` no contesta | ¿Está el kernel corriendo? Necesita `./scripts/run-x86_64.sh` en otra terminal, o dejá que `client.py` arranque su propio [[QEMU]]. |
 | `cargo: command not found` | `export PATH="$HOME/.cargo/bin:$PATH"`. |
-| `/sys/firmware/acpi` no existe | La máquina arrancó por BIOS legacy, o es una VM sin ACPI. Ahí la descripción vendría por [[16-El-otro-dialecto-device-tree|device tree]]. |
+| `/sys/firmware/acpi` no existe | La máquina arrancó por BIOS legacy, o es una VM sin [[ACPI]]. Ahí la descripción vendría por [[16-El-otro-dialecto-device-tree|device tree]]. |
 
 ## Anotaciones
 

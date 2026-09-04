@@ -56,11 +56,11 @@ Un árbol. Nodos con nombre, cada uno con propiedades, cada propiedad con un nom
 
 Una propiedad **no lleva su nombre**: lleva un desplazamiento al bloque de cadenas. Así `compatible`, que aparece en cada nodo, se guarda una sola vez.
 
-**3. Cuánto mide una dirección lo dice el nodo padre.** En `#address-cells` y `#size-cells`, contando en celdas de 32 bits. Un `reg` es una lista de pares (dirección, tamaño) medidos en esas unidades. **Dar por sentado que son dos y dos anda en QEMU y falla en la mitad de las placas reales**, que es exactamente la clase de suposición que P4 viene a sacar.
+**3. Cuánto mide una dirección lo dice el nodo padre.** En `#address-cells` y `#size-cells`, contando en celdas de 32 bits. Un `reg` es una lista de pares (dirección, tamaño) medidos en esas unidades. **Dar por sentado que son dos y dos anda en [[QEMU]] y falla en la mitad de las placas reales**, que es exactamente la clase de suposición que P4 viene a sacar.
 
 ### Cómo se reconoce un aparato
 
-Por la propiedad `compatible`, que es una lista de cadenas pegadas, de la más específica a la más genérica: `"arm,pl011", "arm,primecell"`. El driver dice con qué cadenas es compatible y el kernel las cruza. Una placa nueva que reusa un bloque conocido anda sin tocar el kernel.
+Por la propiedad `compatible`, que es una lista de cadenas pegadas, de la más específica a la más genérica: `"arm,pl011", "arm,primecell"`. El [[Driver|driver]] dice con qué cadenas es compatible y el kernel las cruza. Una placa nueva que reusa un bloque conocido anda sin tocar el kernel.
 
 ## Cuál de los dos dialectos se usa **no lo elige el kernel**
 
@@ -94,7 +94,7 @@ Un x86 no tiene nada de esto: `/sys/firmware/devicetree/` no existe. Y muchas m�
 | **Decisiones** | D24 (es formato de la máquina, no del arranque), D8 (el SMMU sale del árbol), D22/D23 (las dos arquitecturas siempre en verde, y verificado) |
 | **Dónde vive** | `kernel-core/src/fdt.rs:168#pub unsafe fn read`, `kernel-core/src/tables.rs:122#pub unsafe fn describe` |
 
-El parser es propio y chico, y saca del árbol exactamente lo mismo que `acpi.rs` saca de las tablas, en el mismo vocabulario normalizado: núcleos, controlador de interrupciones, puerto serie, ventana de PCIe, IOMMU.
+El parser es propio y chico, y saca del árbol exactamente lo mismo que `acpi.rs` saca de las tablas, en el mismo vocabulario normalizado: núcleos, controlador de [[Interrupcion|interrupciones]], puerto serie, ventana de PCIe, [[IOMMU]].
 
 - El número mágico se verifica antes de creerle a nada (`kernel-core/src/fdt.rs:43#const MAGIC`).
 - `#address-cells` y `#size-cells` **se leen del padre**, no se suponen (`kernel-core/src/fdt.rs:266#"#address-cells"`).
@@ -107,7 +107,7 @@ La elección entre los dos dialectos está escrita **en un solo lugar** (`kernel
 
 ### Y se comprueba, que es lo que lo hace distinto de una intención
 
-El portón bootea aarch64 **una segunda vez, sin ACPI** (`scripts/run-aarch64.sh:42#acpi=off`): entonces el firmware pasa un device tree en su lugar. Y no se conforma con que arranque — le exige llegar hasta el IOMMU contra un aparato que hace DMA de verdad (`scripts/check.sh:355#--no-acpi`).
+El portón bootea aarch64 **una segunda vez, sin ACPI** (`scripts/run-aarch64.sh:42#acpi=off`): entonces el firmware pasa un device tree en su lugar. Y no se conforma con que arranque — le exige llegar hasta el IOMMU contra un [[Aparato|aparato]] que hace [[DMA]] de verdad (`scripts/check.sh:355#--no-acpi`).
 
 Está elegido así a propósito: **el DMA es la prueba que usa todo lo que sale de la descripción junto** —los núcleos, el controlador de interrupciones, dónde se configura PCIe y dónde está el IOMMU—, y encima contra hardware. Si algo saliera mal del árbol, eso no cierra. Es D23 aplicado: una regla que no se comprueba es una intención.
 
@@ -119,9 +119,9 @@ Está elegido así a propósito: **el DMA es la prueba que usa todo lo que sale 
 |---|---|
 | Todos los números salen enormes o absurdos. | Se leyó en little-endian. El device tree es big-endian aunque la máquina no lo sea. |
 | Anda en QEMU y falla en una placa real. | Se supusieron dos celdas de dirección y dos de tamaño en vez de leer `#address-cells` y `#size-cells` del padre. |
-| La máquina arranca muda en una placa sin ACPI. | No se leyó el nodo del UART: quedó la dirección horneada, que es de otra placa. |
+| La máquina arranca muda en una placa sin ACPI. | No se leyó el nodo del [[UART]]: quedó la dirección horneada, que es de otra placa. |
 | El kernel no encuentra el controlador de interrupciones que sí está. | Se buscó una sola cadena `compatible`. GICv2 aparece como `arm,cortex-a15-gic` o `arm,gic-400`, y GICv3 como `arm,gic-v3`. |
-| Se encuentra un solo bus PCIe en la máquina que tiene 256. | La cuenta de buses se recortó a un byte **antes** de restarle uno, y 256 no entra: daba cero (`kernel-core/src/fdt.rs:390#clamp(1, 256)`). El síntoma aparece justo en la máquina más grande. |
+| Se encuentra un solo [[Bus|bus]] PCIe en la máquina que tiene 256. | La cuenta de buses se recortó a un byte **antes** de restarle uno, y 256 no entra: daba cero (`kernel-core/src/fdt.rs:390#clamp(1, 256)`). El síntoma aparece justo en la máquina más grande. |
 | El parser recorre memoria sin fin. | Un blob corrupto sin fichas de cierre. Por eso hay un tope de profundidad. |
 | En Linux, `/sys/firmware/devicetree/` no existe. | La máquina usa ACPI. No es un error: es el otro dialecto. |
 

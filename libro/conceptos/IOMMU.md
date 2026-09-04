@@ -10,15 +10,15 @@ capitulos: [47-IOMMU-VT-d-y-SMMUv3, 46-DMA-el-aparato-lee-memoria-solo, 58-Una-p
 
 # IOMMU
 
-> Una [[MMU]] para los aparatos: se mete entre el aparato y la RAM, **traduce** la dirección que el aparato pide y **niega** la que nadie declaró.
+> Una [[MMU]] para los [[Aparato|aparatos]]: se mete entre el aparato y la RAM, **traduce** la dirección que el aparato pide y **niega** la que nadie declaró.
 
-*Input/Output Memory Management Unit.* La idea es la misma que la de la MMU del procesador —un nivel de indirección por acceso, hecho por hardware, que además puede decir que no— pero del otro lado del bus, con otras tablas y otro formato.
+*Input/Output Memory Management Unit.* La idea es la misma que la de la MMU del procesador —un nivel de indirección por acceso, hecho por hardware, que además puede decir que no— pero del otro lado del [[Bus|bus]], con otras tablas y otro formato.
 
 ## Qué problema resuelve
 
 Un [[DMA]] no pasa por la MMU. Eso deja tres cosas sin resolver, y ninguna se puede arreglar en el software del procesador, porque el procesador no participa del acceso:
 
-1. **Un puntero mal puesto en un registro de aparato es corrupción silenciosa.** No hay fault: el DMA ocurre en el lugar equivocado y la máquina sigue. El síntoma aparece lejos de la causa, y horas después.
+1. **Un puntero mal puesto en un registro de aparato es corrupción silenciosa.** No hay [[Fault|fault]]: el DMA ocurre en el lugar equivocado y la máquina sigue. El síntoma aparece lejos de la causa, y horas después.
 2. **Cualquier aparato puede leer toda la RAM.** No hace falta que sea malicioso de fábrica: alcanza con que alguien enchufe algo en un puerto que hable PCIe.
 3. **Un aparato de 32 bits no alcanza la RAM alta.** Sin traducción, la única salida es copiar (los *bounce buffers* de Linux).
 
@@ -39,7 +39,7 @@ Tres cosas de ese dibujo:
 
 - **La identidad del aparato viene en el pedido.** El bus le pone un número a cada transacción, y ese número es el índice de la primera tabla. En PCIe es el mismo BDF de siempre. Un aparato no puede hacerse pasar por otro porque no es él quien pone el número.
 - **Cada aparato puede tener su propia vista de la memoria.** Dos aparatos que piden la dirección `0x1000` pueden terminar en dos lugares distintos, o uno pasar y el otro no.
-- **Lo negado queda anotado.** No se pierde: el silicio lo cuenta y guarda la dirección. Eso es lo que hace que el IOMMU sea tanto instrumentación como protección — un agente que depura su propio driver se entera de a dónde apuntó mal.
+- **Lo negado queda anotado.** No se pierde: el silicio lo cuenta y guarda la dirección. Eso es lo que hace que el IOMMU sea tanto instrumentación como protección — un agente que depura su propio [[Driver|driver]] se entera de a dónde apuntó mal.
 
 ### VT-d y SMMUv3: hacen lo mismo y no se parecen en nada
 
@@ -49,9 +49,9 @@ Este es el mejor argumento concreto de D22 —las dos arquitecturas siempre en v
 |---|---|---|
 | Cómo se le habla | **Por registros.** Se escribe y se espera a que un bit de estado confirme. | **Por colas en memoria.** Se deja un comando en un anillo y se toca el registro que dice hasta dónde escribimos. Hay un productor y un consumidor. |
 | Cómo se lo indexa | Tabla raíz **por bus** → tabla de contexto **por función** → tablas de traducción. | Tabla de **streams** en dos niveles, indexada por el `StreamID` que el bus le pone al aparato. Cada entrada son 64 bytes. |
-| Invalidar la caché | Una escritura a un registro y esperar. | Un comando en el anillo, más uno de sincronización. |
+| Invalidar la [[Cache|caché]] | Una escritura a un registro y esperar. | Un comando en el anillo, más uno de sincronización. |
 | Qué se enteró de lo que negó | Registros de fault. | Una **cola de eventos** en memoria. |
-| Dónde lo dice la máquina | Tabla `DMAR` de ACPI. | Tabla `IORT` de ACPI, o el device tree. |
+| Dónde lo dice la máquina | Tabla `DMAR` de [[ACPI]]. | Tabla `IORT` de ACPI, o el [[Device-tree|device tree]]. |
 | En este repo | `kernel-x86_64/src/iommu.rs:213#pub unsafe fn install` | `kernel-aarch64/src/smmu.rs:460#pub unsafe fn install` |
 
 Un detalle del lado de ARM que no es un capricho: se usa la traducción de **etapa 2**, la que existe para virtualizar. No porque haya máquinas virtuales, sino porque es la única de las dos etapas cuya entrada de stream lleva **directo** la raíz de las tablas del aparato, sin un descriptor de contexto en el medio.
@@ -116,7 +116,7 @@ Lo que `describe {what:["iommu"]}` publica, y por qué cada campo:
 
 ## Práctica
 
-- [[P15-Ver-un-DMA-bloqueado-por-el-IOMMU]] — *(romper)* en QEMU con `-device edu`: bloqueado sin declarar, permitido al declararlo, bloqueado otra vez al soltar — y sin IOMMU para comprobar que la escritura sí ocurre.
+- [[P15-Ver-un-DMA-bloqueado-por-el-IOMMU]] — *(romper)* en [[QEMU]] con `-device edu`: bloqueado sin declarar, permitido al declararlo, bloqueado otra vez al soltar — y sin IOMMU para comprobar que la escritura sí ocurre.
 - [[P16-Mirar-los-grupos-de-IOMMU-en-Linux]] — *(mirar)* `/sys/kernel/iommu_groups/`, encontrar dos aparatos que comparten grupo y entender por qué.
 
 ## Recordar #flashcards/conceptos

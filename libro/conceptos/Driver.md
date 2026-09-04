@@ -10,7 +10,7 @@ capitulos: [49-Escribir-un-driver, 17-PCIe-buses-funciones-y-BARs, 56-Cada-capa-
 
 # Driver
 
-> El código que sabe hablarle a **un** aparato: encontrarlo, configurarlo, alcanzar sus registros, atender sus avisos y moverle datos.
+> El código que sabe hablarle a **un** [[Aparato|aparato]]: encontrarlo, configurarlo, alcanzar sus registros, atender sus avisos y moverle datos.
 
 No es una capa de abstracción: es un **traductor**. Arriba, una interfaz que se parece a la de todos los demás aparatos de su clase; abajo, el dialecto privado de un chip.
 
@@ -26,13 +26,13 @@ Todo driver, de cualquier aparato, hace las mismas cinco cosas. Vale la pena ten
 
 | # | Qué | Por qué no es trivial |
 |---|---|---|
-| 1 | **Encontrarlo** | El aparato no avisa. Hay que recorrer un bus, o leer una tabla, y reconocerlo por algo. |
+| 1 | **Encontrarlo** | El aparato no avisa. Hay que recorrer un [[Bus|bus]], o leer una tabla, y reconocerlo por algo. |
 | 2 | **Configurarlo** | Prenderlo, resetearlo, decirle que puede responder a accesos de memoria y que puede iniciar accesos él mismo. |
 | 3 | **Alcanzar sus registros** | Mapearlos como no-cacheables y acceder con el **ancho exacto** ([[MMIO]]). |
 | 4 | **Atender sus avisos** | Instalar un [[Handler|handler]] para su [[Interrupcion|interrupción]] — o sondear. |
 | 5 | **Moverle datos** | Que el aparato alcance la memoria del sistema por [[46-DMA-el-aparato-lee-memoria-solo|DMA]], que hoy casi siempre es [[NVMe|colas en RAM]]. |
 
-Los pasos 2 y 5 tienen una trampa que aparece siempre: un aparato PCIe no puede leer memoria hasta que alguien le prende el bit de **bus master** en su espacio de configuración. Sin eso el driver arma las colas perfectas y el aparato no las lee nunca.
+Los pasos 2 y 5 tienen una trampa que aparece siempre: un aparato [[PCIe]] no puede leer memoria hasta que alguien le prende el bit de **bus master** en su espacio de configuración. Sin eso el driver arma las colas perfectas y el aparato no las lee nunca.
 
 ## Cómo lo hace Linux
 
@@ -65,7 +65,7 @@ Las cinco cosas de arriba, con sus nombres reales:
 | Configurarlo | `pci_enable_device`, `pci_set_master` |
 | Registros | `pci_iomap` / `devm_ioremap_resource`, después `readl`/`writel` |
 | Interrupciones | `pci_alloc_irq_vectors` (MSI-X) + `request_irq` |
-| DMA | `dma_alloc_coherent`, `dma_map_single`, `dma_set_mask_and_coherent` |
+| [[DMA]] | `dma_alloc_coherent`, `dma_map_single`, `dma_set_mask_and_coherent` |
 | Soltarlo | `remove`, o automático con las variantes `devm_` |
 
 Para mirarlo desde afuera:
@@ -86,7 +86,7 @@ En placas sin PCIe el intermediario es otro (`platform_driver` con un `of_match_
 
 | | |
 |---|---|
-| **Decisiones** | D4 (el kernel no tiene ningún driver salvo el UART), D8 (IOMMU encendido y vacío), D19/D20 (la distribución es reemplazable) |
+| **Decisiones** | D4 (el kernel no tiene ningún driver salvo el UART), D8 ([[IOMMU]] encendido y vacío), D19/D20 (la distribución es reemplazable) |
 | **Principios** | P1 (el kernel nunca es la razón por la que no se puede usar un aparato), P2 (la capa que se saca se deja vacía), P6 (el hardware hace cumplir lo declarado, no una política) |
 
 **No hay modelo de drivers. No hay bus intermediario, ni `probe`, ni tabla de IDs, ni `/dev`.** El único driver que el kernel lleva adentro es el [[UART|cable serie]] — `kernel-x86_64/src/uart.rs:4#y por eso es el único que el kernel lleva adentro (D4)` — y es el único porque es el que hace falta para poder contar que todo lo demás falló.
@@ -97,7 +97,7 @@ Lo que el kernel ofrece en vez del modelo son los **once verbos**, y resulta que
 |---|---|---|
 | Encontrarlo | el bus enumera y llama a `probe` | `describe` dice **dónde se pregunta** (la ventana ECAM de PCIe); el agente recorre el bus él mismo |
 | Configurarlo | `pci_set_master` | `mem.write` sobre el espacio de configuración |
-| Registros | `pci_iomap` + `readl` | `mem.claim` sobre el BAR, `mem.read`/`mem.write` con `width` |
+| Registros | `pci_iomap` + `readl` | `mem.claim` sobre el [[BAR]], `mem.read`/`mem.write` con `width` |
 | Interrupciones | `request_irq` | `irq.install` (`{msi:true}` para los aparatos de hoy), o sondear |
 | DMA | `dma_alloc_coherent` | `dma.allow` sobre memoria que el agente ya reclamó |
 | Soltarlo | `remove` | `release` |
@@ -123,7 +123,7 @@ No hay `probe` ni `remove`, así que no hay ciclo de vida que el kernel administ
 Lo que **no** se quitó es el permiso: el IOMMU arranca encendido y vacío (D8), así que un driver del agente que se olvide de `dma.allow` no corrompe memoria, no llega. Eso no es un guardarraíl: es P6 — el hardware hace cumplir **lo que el agente declaró**.
 
 > [!warning] Del blob está el mecanismo, no el contenido
-> D19 y D20 dicen que los drivers van a vivir en `blob.bin`, la distribución reemplazable que el firmware trae de la partición. Ese mecanismo anda entero: se carga, corre, le habla al kernel y se puede cancelar. Pero **no hay un `blob.bin` en el repo**, ni un driver de red. El único blob que existe es el de prueba que genera `client.py`. Los drivers que nombran D19 y D20 son lo que *va* a ir ahí. Y por eso, hoy, el único transporte es el cordón umbilical: el transporte rápido que D5 le deja al agente todavía no lo escribió nadie.
+> D19 y D20 dicen que los drivers van a vivir en `blob.bin`, la distribución reemplazable que el [[Firmware|firmware]] trae de la partición. Ese mecanismo anda entero: se carga, corre, le habla al kernel y se puede cancelar. Pero **no hay un `blob.bin` en el repo**, ni un driver de red. El único blob que existe es el de prueba que genera `client.py`. Los drivers que nombran D19 y D20 son lo que *va* a ir ahí. Y por eso, hoy, el único transporte es el cordón umbilical: el transporte rápido que D5 le deja al agente todavía no lo escribió nadie.
 
 ## Cómo se ve roto
 

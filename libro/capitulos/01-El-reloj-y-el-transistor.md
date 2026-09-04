@@ -15,7 +15,7 @@ practicas: [P02-Medir-el-reloj-y-las-latencias, P06-Simular-un-latch-y-ver-sus-d
 > - Entender por qué la distancia física es un problema de software.
 > - Leer el reloj de tu máquina con una instrucción, en Linux y en Kornelia.
 
-Un kernel administra tres recursos: **tiempo, memoria y aparatos**. Los tres son cosas físicas antes de ser abstracciones, y este capítulo es sobre el primero, que además es el que ordena a los otros dos.
+Un kernel administra tres recursos: **tiempo, memoria y [[Aparato|aparatos]]**. Los tres son cosas físicas antes de ser abstracciones, y este capítulo es sobre el primero, que además es el que ordena a los otros dos.
 
 La pregunta con la que arranca todo: ¿por qué una computadora no puede simplemente *calcular*, y en cambio avanza a tirones sincronizados por un reloj?
 
@@ -39,7 +39,7 @@ De una llave a un número hay dos saltos:
 ![[celdas-sram-90nm.jpg|420]]
 *Celdas de SRAM en un chip de 90 nm, al microscopio. Cada celda de estas guarda un bit y usa seis transistores. Foto: [ver `CREDITOS.md`], CC BY 3.0.*
 
-Seis transistores por bit. Un [[Cache|caché]] de 32 KiB son 262.144 bits, o sea más de un millón y medio de transistores dedicados solo a **acordarse de una copia**. Guardar es caro en silicio, y esa es la razón de fondo de la jerarquía de memoria que viene más abajo.
+Seis transistores por bit. Un [[Cache|caché]] de 32 KiB son 262.144 bits, o sea más de un millón y medio de transistores dedicados solo a **acordarse de una copia**. Guardar es caro en silicio, y esa es la razón de fondo de la [[Jerarquia-de-memoria|jerarquía de memoria]] que viene más abajo.
 
 > [!note] De dónde viene "core dump"
 > ![[memoria-nucleos-ferrita-plano.jpg|300]]
@@ -164,7 +164,7 @@ Antes de tenerlo, las esperas del kernel se medían **en vueltas de un bucle** �
 
 ¿Cuántos ciclos cuesta un dato en L1 y cuántos uno en RAM?::Unos 4 contra unos 250. En escala humana (un ciclo = un segundo): 4 segundos contra 4 minutos. Y un NVMe son 3 días.
 
-¿Qué es el estado visible de un procesador?::Un puñado de números: los registros de propósito general más unos de control. Eso es todo lo que hay que guardar para congelar un programa, y es por eso que un fault se puede devolver entero como dato.
+¿Qué es el estado visible de un procesador?::Un puñado de números: los registros de propósito general más unos de control. Eso es todo lo que hay que guardar para congelar un programa, y es por eso que un [[Fault|fault]] se puede devolver entero como dato.
 
 ¿Cómo sabe Kornelia a qué ritmo sube su contador de tiempo?::En aarch64 la máquina lo informa en `CNTFRQ_EL0`. En x86_64 puede no decirlo, y entonces se **mide** contra el contador de frecuencia fija de ACPI. Si nadie lo dice, el kernel dice que no lo sabe en vez de inventar un tiempo.
 

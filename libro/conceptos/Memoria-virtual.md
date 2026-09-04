@@ -49,7 +49,7 @@ Las tres propiedades salen de ahí sin agregar nada:
 |---|---|
 | **Reubicación** | Cada programa tiene su tabla, así que la misma dirección virtual puede ir a marcos distintos. Todos pueden creer que viven en `0x400000`. |
 | **Aislamiento** | Lo que no está en tu tabla no lo podés nombrar. No es que te lo prohíban: **no existe** desde donde estás parado. |
-| **Sobrecompromiso** | Una entrada sin el bit de presente cuesta cero memoria física. El marco se asigna en el primer acceso, que llega como fault. |
+| **Sobrecompromiso** | Una entrada sin el bit de presente cuesta cero memoria física. El marco se asigna en el primer acceso, que llega como [[Fault|fault]]. |
 
 El sobrecompromiso es el que más se malinterpreta: el kernel promete direcciones y el respaldo puede no existir. Cuando el respaldo se agota **de verdad**, hay dos salidas: se saca alguna página a disco (eso es el swap) o se mata a alguien (eso es el OOM killer). La segunda existe porque la primera es opcional.
 
@@ -97,11 +97,11 @@ De las tres propiedades de arriba, Kornelia usa una:
 
 No es que falte: **falta el piso entero**. El swap necesita tres cosas que este kernel no tiene y que son decisiones, no pendientes:
 
-1. **Un disco que el kernel sepa leer.** El kernel no tiene drivers (D4). El único que existe es el del UART. Un driver de NVMe es exactamente lo que el agente escribe.
+1. **Un disco que el kernel sepa leer.** El kernel no tiene [[Driver|drivers]] (D4). El único que existe es el del [[UART]]. Un driver de [[NVMe]] es exactamente lo que el agente escribe.
 2. **Una política de reemplazo.** Qué página sacar cuando falta memoria es una opinión —LRU, clock, working set— y opinar sobre el uso de la máquina es lo que P2 dice que el kernel no hace. La capa se deja vacía.
 3. **Que el fault sea un trámite.** En Linux un page fault mayor es funcionamiento normal: el kernel lo arregla y reanuda. Acá los faults **son datos** (P5): vuelven como respuesta. El kernel no deshace ni completa nada por su cuenta.
 
-**Qué se gana con identity map:** un solo sistema de coordenadas. Los aparatos hablan en direcciones físicas —un DMA se programa con la física del buffer—, así que con cualquier otro mapeo el agente tendría que llevar dos números para cada cosa mientras escribe un driver. Y el formato de las tablas es lo menos portable que hay: si lo manejara el agente, tendría que saber de x86_64, de aarch64 y de RISC-V para hacer lo mismo.
+**Qué se gana con identity map:** un solo sistema de coordenadas. Los [[Aparato|aparatos]] hablan en direcciones físicas —un [[DMA]] se programa con la física del buffer—, así que con cualquier otro mapeo el agente tendría que llevar dos números para cada cosa mientras escribe un driver. Y el formato de las tablas es lo menos portable que hay: si lo manejara el agente, tendría que saber de x86_64, de aarch64 y de RISC-V para hacer lo mismo.
 
 **Qué se pierde:** la memoria que hay es la que hay. Nada de mapear un archivo, nada de copy-on-write, nada de que dos rangos virtuales apunten al mismo marco, nada de crecer una pila sola. Y **el mecanismo sigue disponible**: el agente que quiera tablas propias las arma y las carga desde su código, siempre que corra en modo `raw` — cargar la raíz es una instrucción privilegiada (P2, D12 enmendado por D27). La capa está vacía, no tapiada.
 
@@ -111,10 +111,10 @@ No es que falte: **falta el piso entero**. El swap necesita tres cosas que este 
 |---|---|
 | En Linux: la máquina "tiene RAM libre" y el OOM killer mata igual. | La promesa no era memoria: era espacio de direcciones. `Committed_AS` pasó el límite, o el `vm_area_struct` se quiso respaldar y no había marco. |
 | En Linux: todo se pone lentísimo y el disco no para. | *Thrashing*: el conjunto de trabajo no entra en RAM y cada acceso se va al swap. Se ve en `pswpin`/`pswpout` de `/proc/vmstat`. |
-| Kornelia arranca y avisa `mem.claim cannot be enabled like this.` | El `install` falló y se siguió con las tablas del firmware, que viven en memoria que el mapa informa como **libre**: `mem.claim` se las podría entregar al agente. |
-| Kornelia dice `the hardware does NOT enforce it`. | El bit de usuario está puesto pero SMEP no se pudo prender (QEMU lo deja apagado). El permiso se marca y no separa nada — y se dice, porque una garantía que no se cumple es peor que no tenerla: `kernel-core/src/paging.rs:158#pub struct Mapping`. |
+| Kornelia arranca y avisa `mem.claim cannot be enabled like this.` | El `install` falló y se siguió con las tablas del [[Firmware|firmware]], que viven en memoria que el mapa informa como **libre**: `mem.claim` se las podría entregar al agente. |
+| Kornelia dice `the hardware does NOT enforce it`. | El bit de usuario está puesto pero SMEP no se pudo prender ([[QEMU]] lo deja apagado). El permiso se marca y no separa nada — y se dice, porque una garantía que no se cumple es peor que no tenerla: `kernel-core/src/paging.rs:158#pub struct Mapping`. |
 | Pediste 100 bytes alcanzables sin privilegio y te dieron 2 MiB. | No es un bug: el permiso no se puede decir más fino que un bloque de la tabla, así que el pedido redondea (`kernel-core/src/claims.rs:157#pub fn claim`). Ver [[Pagina]]. |
-| Un aparato responde por MMIO pero el DMA que le pediste no llega. | Ese acceso no pasa por la MMU: pasa por el [[47-IOMMU-VT-d-y-SMMUv3|IOMMU]], que traduce aparte y con tablas propias. |
+| Un aparato responde por [[MMIO]] pero el DMA que le pediste no llega. | Ese acceso no pasa por la MMU: pasa por el [[47-IOMMU-VT-d-y-SMMUv3|IOMMU]], que traduce aparte y con tablas propias. |
 
 ## Práctica
 

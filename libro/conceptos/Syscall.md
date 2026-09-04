@@ -84,9 +84,9 @@ Y acá está lo que hace a esta nota parte de este libro:
 > [!important] Los bytes se publican, no se hornean
 > `describe exec` devuelve el campo `return` con **los bytes exactos** que abren la ventanilla. No el nombre de la instrucción —`int` en x86_64, `svc` en aarch64— sino los bytes, para que el agente los pegue al final de lo que emite **sin saber sobre qué silicio corre** (D3, P4). El kernel también publica de dónde sale la pila (`claim-end`: el final del mismo reclamo) y por qué registros pasan los argumentos.
 
-Un detalle de x86_64 que es puro sistema: la compuerta es de **interrupción**, no de trap, así que se entra con las interrupciones cerradas. Y el CPU cambia solo a la pila de anillo 0 que está en el TSS (`kernel-x86_64/src/gdt.rs:154#tss.rsp[0]`). Sin eso, la ventanilla de vuelta aterrizaría **sobre la pila del agente** — que es justo la que puede estar rota.
+Un detalle de x86_64 que es puro sistema: la compuerta es de **interrupción**, no de trap, así que se entra con las [[Interrupcion|interrupciones]] cerradas. Y el CPU cambia solo a la pila de anillo 0 que está en el TSS (`kernel-x86_64/src/gdt.rs:154#tss.rsp[0]`). Sin eso, la ventanilla de vuelta aterrizaría **sobre la pila del agente** — que es justo la que puede estar rota.
 
-Y un contraste que aclara todo el concepto: **el blob no usa ventanilla.** El blob de D18 corre con privilegio completo y en el mismo espacio de direcciones, así que para hablarle al kernel **llama a una función**: recibe su dirección en el segundo registro de argumento y la invoca como a cualquier otra (`kernel-core/src/protocol.rs:195#no le hace falta una ventanilla`). La ventanilla no existe para "hablarle al kernel": existe porque **hay una frontera de privilegio que cruzar**. Sin frontera, no hace falta.
+Y un contraste que aclara todo el concepto: **el blob no usa ventanilla.** El blob de D18 corre con privilegio completo y en el mismo [[Espacio-de-direcciones|espacio de direcciones]], así que para hablarle al kernel **llama a una función**: recibe su dirección en el segundo registro de argumento y la invoca como a cualquier otra (`kernel-core/src/protocol.rs:195#no le hace falta una ventanilla`). La ventanilla no existe para "hablarle al kernel": existe porque **hay una frontera de privilegio que cruzar**. Sin frontera, no hace falta.
 
 ## Cómo se ve roto
 

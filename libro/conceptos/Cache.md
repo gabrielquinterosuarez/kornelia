@@ -24,7 +24,7 @@ Sin caché, el procesador estaría parado la enorme mayoría del tiempo, y todo 
 
 ### 1. La unidad es la línea, no el byte
 
-**No existe leer un byte de la RAM.** El bus mueve **líneas** de 64 bytes, y pedir un byte trae los 64 que lo rodean. De ahí salen dos cosas de golpe:
+**No existe leer un byte de la RAM.** El [[Bus|bus]] mueve **líneas** de 64 bytes, y pedir un byte trae los 64 que lo rodean. De ahí salen dos cosas de golpe:
 
 - **La localidad espacial es gratis.** Recorrer un arreglo en orden paga un viaje cada 64 bytes, no cada byte. Recorrerlo salteado paga uno por elemento.
 - **La línea es la unidad de todo lo demás**: de la coherencia, de la invalidación, del desalojo. Cuando más abajo aparezca "la línea rebota", es esta línea.
@@ -52,7 +52,7 @@ En la máquina de la práctica: L1d de 8 vías, L2 de 4, L3 de 16 (`lscpu -C`, c
 | *Write-through* | escribe en la caché **y** en el nivel de abajo | poco: gasta ancho de banda |
 | *Write-back* | escribe solo en la caché y marca la línea **sucia**; baja al desalojarla | casi siempre |
 
-Con write-back, un dato escrito hace rato **puede no haber salido nunca** de la caché. Para la RAM eso no se nota. Para un aparato, sí.
+Con write-back, un dato escrito hace rato **puede no haber salido nunca** de la caché. Para la RAM eso no se nota. Para un [[Aparato|aparato]], sí.
 
 Y antes de la caché hay todavía otra cosa: el **store buffer**, donde una escritura espera sin haber llegado ni siquiera a la L1. Es lo que hace que dos núcleos vean las escrituras del otro en distinto orden, y el motivo de que existan las barreras. Eso es [[42-Ordenamiento-de-memoria]], no esta nota.
 
@@ -72,7 +72,7 @@ El protocolo clásico le da a cada línea, en cada caché, uno de cuatro estados
 Escribir exige pasar a `M`, y para eso hay que invalidársela a todos los demás. Eso es tráfico entre núcleos, y es lo que cuesta.
 
 > [!important] La caché es coherente; el [[TLB]] no
-> Este es el contraste que conviene fijar. Las cachés de datos se mantienen solas por hardware: escribís y el otro núcleo ve lo nuevo. La caché de traducciones **no**: cambiás la tabla de páginas y hay que invalidar a mano. Dos cachés del mismo chip, dos contratos opuestos.
+> Este es el contraste que conviene fijar. Las cachés de datos se mantienen solas por hardware: escribís y el otro núcleo ve lo nuevo. La caché de traducciones **no**: cambiás la [[Tabla-de-paginas|tabla de páginas]] y hay que invalidar a mano. Dos cachés del mismo chip, dos contratos opuestos.
 
 ### 5. False sharing
 
@@ -110,13 +110,13 @@ perf stat -e cache-references,cache-misses,L1-dcache-load-misses,LLC-load-misses
 perf c2c record ./programa && perf c2c report   # literalmente "cache to cache": false sharing
 ```
 
-Del lado del kernel: la constante `L1_CACHE_BYTES`, el atributo `____cacheline_aligned` y su versión `____cacheline_aligned_in_smp` —que son exactamente la defensa contra el false sharing—, `pgprot_noncached` e `ioremap` para lo que no se puede cachear, y `dma_sync_single_for_cpu`/`_for_device` en arquitecturas donde el DMA **no** es coherente con las cachés (en x86 y en el ARM de servidor sí lo es, y esas llamadas no hacen nada).
+Del lado del kernel: la constante `L1_CACHE_BYTES`, el atributo `____cacheline_aligned` y su versión `____cacheline_aligned_in_smp` —que son exactamente la defensa contra el false sharing—, `pgprot_noncached` e `ioremap` para lo que no se puede cachear, y `dma_sync_single_for_cpu`/`_for_device` en arquitecturas donde el [[DMA]] **no** es coherente con las cachés (en x86 y en el ARM de servidor sí lo es, y esas llamadas no hacen nada).
 
 ## Cómo lo hace Kornelia
 
 | | |
 |---|---|
-| **Decisiones** | D12 (identity map; MMIO no cacheable), D4 (el agente escribe sus drivers) |
+| **Decisiones** | D12 (identity map; MMIO no cacheable), D4 (el agente escribe sus [[Driver|drivers]]) |
 | **Dónde vive** | `kernel-x86_64/src/paging.rs:54#PCD: cache disable`, `kernel-aarch64/src/paging.rs:66#const ATTR_DEVICE`, `kernel-aarch64/src/exec.rs:383#dc cvau` |
 
 **No hay política de caché: hay un atributo por bloque de 1 GiB, con dos valores.** RAM normal write-back, o dispositivo. Eso es todo, y alcanza porque el kernel no administra memoria: la reclama el agente (P2).

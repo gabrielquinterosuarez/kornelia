@@ -12,17 +12,17 @@ capitulos: [48-Colas-en-memoria-el-patron-de-NVMe, 49-Escribir-un-driver, 46-DMA
 
 > El disco de hoy no se maneja con registros: se le **dejan pedidos en una cola que vive en la RAM**, se toca un timbre, y él escribe las respuestas en otra cola.
 
-*Non-Volatile Memory Express.* Lo interesante no es que sea rápido: es **el patrón**. Colas en memoria, timbres, y el aparato haciendo [[46-DMA-el-aparato-lee-memoria-solo|DMA]] a la memoria del huésped. Una placa de red moderna y una GPU se manejan igual. Si entendés NVMe, entendiste la forma del hardware de los últimos veinte años.
+*Non-Volatile Memory Express.* Lo interesante no es que sea rápido: es **el patrón**. Colas en memoria, timbres, y el [[Aparato|aparato]] haciendo [[46-DMA-el-aparato-lee-memoria-solo|DMA]] a la memoria del huésped. Una placa de red moderna y una GPU se manejan igual. Si entendés NVMe, entendiste la forma del hardware de los últimos veinte años.
 
 ## Qué problema resuelve
 
 El modelo viejo era **un registro por operación**: escribís el sector en un registro, el comando en otro, y esperás mirando un tercero. Eso tiene tres problemas que no se arreglan haciendo el aparato más rápido.
 
-1. **Cada pedido cuesta varios viajes al aparato.** Un acceso [[MMIO|MMIO]] no se cachea y no se puede reordenar: son cientos de nanosegundos cada uno. Con un SSD que responde en decenas de microsegundos, el driver empieza a ser el cuello de botella.
+1. **Cada pedido cuesta varios viajes al aparato.** Un acceso [[MMIO|MMIO]] no se cachea y no se puede reordenar: son cientos de nanosegundos cada uno. Con un SSD que responde en decenas de microsegundos, el [[Driver|driver]] empieza a ser el cuello de botella.
 2. **Hay un solo juego de registros, así que hay un pedido a la vez.** No se puede pedir mil cosas y que el aparato las ordene como le convenga.
 3. **Un solo juego de registros es un solo candado.** Ocho núcleos pidiendo al mismo disco se serializan en el driver, no en el disco.
 
-La salida es invertir quién va a buscar los datos. **El pedido no viaja al aparato: el aparato viene a buscarlo.** El driver escribe en RAM —que es barata de escribir— y lo único que cruza el bus es un aviso de una palabra.
+La salida es invertir quién va a buscar los datos. **El pedido no viaja al aparato: el aparato viene a buscarlo.** El driver escribe en RAM —que es barata de escribir— y lo único que cruza el [[Bus|bus]] es un aviso de una palabra.
 
 ## Cómo funciona
 
@@ -54,16 +54,16 @@ sequenceDiagram
 Tres detalles que no se ven en el dibujo y son los que rompen todo:
 
 - **El bit de fase.** ¿Cómo sabe el driver que una entrada de la CQ es nueva? No alcanza con "hay algo escrito", porque lo de la vuelta anterior también está escrito. Hay un bit que **alterna en cada vuelta del anillo**: si vale lo contrario que la última vez, es nueva.
-- **El aparato tiene que poder alcanzar esa memoria.** Las colas viven en la RAM del huésped y el aparato las lee por DMA — así que pasan por el [[47-IOMMU-VT-d-y-SMMUv3|IOMMU]], y si no están declaradas no llegan.
-- **La separación entre timbres la dice el aparato**, en un campo de su registro de capacidades (`CAP.DSTRD`). Suponer que es 4 anda en QEMU y falla en silencio donde no lo sea.
+- **El aparato tiene que poder alcanzar esa memoria.** Las colas viven en la RAM del huésped y el aparato las lee por [[DMA]] — así que pasan por el [[47-IOMMU-VT-d-y-SMMUv3|IOMMU]], y si no están declaradas no llegan.
+- **La separación entre timbres la dice el aparato**, en un campo de su registro de capacidades (`CAP.DSTRD`). Suponer que es 4 anda en [[QEMU]] y falla en silencio donde no lo sea.
 
-El MSI es un **opcional**: con las colas ya se puede sondear la CQ. La interrupción sirve para no gastar núcleo esperando, no para enterarse.
+El [[MSI]] es un **opcional**: con las colas ya se puede sondear la CQ. La interrupción sirve para no gastar núcleo esperando, no para enterarse.
 
 ## Cómo lo hace Linux
 
-El driver es `drivers/nvme/host/pci.c` (la parte que habla con el bus) más `drivers/nvme/host/core.c` (la parte que no depende de PCIe). Las funciones tienen los nombres del patrón: `nvme_alloc_queue`, `nvme_submit_cmd`, `nvme_process_cq`, `nvme_pci_enable`.
+El driver es `drivers/nvme/host/pci.c` (la parte que habla con el bus) más `drivers/nvme/host/core.c` (la parte que no depende de [[PCIe]]). Las funciones tienen los nombres del patrón: `nvme_alloc_queue`, `nvme_submit_cmd`, `nvme_process_cq`, `nvme_pci_enable`.
 
-**Las colas son por núcleo**, y esa es la razón de ser del diseño. Linux las cuelga de `blk-mq` (*multi-queue block layer*): una cola de hardware por CPU, así dos núcleos que piden a la vez no comparten candado ni línea de caché.
+**Las colas son por núcleo**, y esa es la razón de ser del diseño. Linux las cuelga de `blk-mq` (*multi-queue block layer*): una cola de hardware por CPU, así dos núcleos que piden a la vez no comparten candado ni línea de [[Cache|caché]].
 
 ```bash
 ls /sys/class/nvme/nvme0/            # model, serial, firmware_rev, cntlid
@@ -89,7 +89,7 @@ Un **namespace** es la división del disco que hace el propio controlador: `/dev
 
 | | |
 |---|---|
-| **Decisiones** | D4 (el agente escribe sus drivers), D8 (IOMMU encendido y vacío), D19/D20 (el cargador que trae el resto del disco) |
+| **Decisiones** | D4 (el agente escribe sus drivers), D8 ([[IOMMU]] encendido y vacío), D19/D20 (el cargador que trae el resto del disco) |
 | **Verbos que usa** | `describe`, `mem.claim`, `mem.read`, `mem.write`, `dma.allow`, `release` — y `core.claim` + `exec` para saltar a lo que cargó |
 | **Verbos que NO usa** | `irq.install`: sondea el bit de fase. La interrupción es un lujo, no un requisito |
 
@@ -149,4 +149,4 @@ En Kornelia, ¿qué verbos usa el driver de NVMe?::`describe` para dónde se con
 - [[MMIO]] — los timbres son MMIO; el resto del pedido no.
 - [[47-IOMMU-VT-d-y-SMMUv3]] — por qué una cola sin declarar no existe para el aparato.
 - [[51-El-blob-y-la-ventana-de-rescate]] — para qué se quería leer un disco (D19).
-- [[Falsos-amigos#9]] — driver, módulo, firmware y blob no son lo mismo.
+- [[Falsos-amigos#9]] — driver, módulo, [[Firmware|firmware]] y blob no son lo mismo.

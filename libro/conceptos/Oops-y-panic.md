@@ -18,7 +18,7 @@ Esta nota es el contraste central del libro: **cuando el código del kernel se r
 
 Cuando un programa de usuario se rompe, el kernel tiene una salida elegante: lo mata, avisa con una señal, y el sistema sigue como si nada. Hay alguien arriba que puede limpiar.
 
-Cuando se rompe **el kernel** no hay nadie arriba. Y el estado es incierto: puede haber un candado tomado que ya nadie va a soltar, una lista a medio enlazar, un DMA en vuelo. Así que la pregunta no es "cómo se recupera" —muchas veces no se puede— sino **"cuánto se puede seguir mintiendo sobre que la máquina anda"**.
+Cuando se rompe **el kernel** no hay nadie arriba. Y el estado es incierto: puede haber un candado tomado que ya nadie va a soltar, una lista a medio enlazar, un [[DMA]] en vuelo. Así que la pregunta no es "cómo se recupera" —muchas veces no se puede— sino **"cuánto se puede seguir mintiendo sobre que la máquina anda"**.
 
 Linux tiene dos respuestas porque el costo del error es distinto en cada dirección: parar una máquina que podía seguir es una caída innecesaria; seguir en una máquina rota es **corrupción de datos en disco**.
 
@@ -73,7 +73,7 @@ Cómo se lee, campo por campo:
 - **`[#1]`** — es el primer oops desde que arrancó. Un `[#2]` significa que ya venía roto.
 - **`Tainted: G OE`** — las letras dicen por qué. `O` = hay un módulo fuera del árbol cargado; `E` = un módulo sin firmar. Si aparece una `D`, el kernel **ya murió antes**.
 - **`RIP: 0010:mi_funcion+0x1a/0x40`** — dónde estaba: byte 0x1a de una función que mide 0x40. El `0010` es el selector `CS`, y los dos bits de abajo en cero dicen **anillo 0** ([[Modo-privilegiado]]).
-- **`Call Trace:`** — el camino de funciones, y **se lee de abajo hacia arriba**: abajo está quién empezó (una syscall), arriba quién explotó. Es al revés de lo que sugiere el orden de lectura, y es el error más común al mirar el primero.
+- **`Call Trace:`** — el camino de funciones, y **se lee de abajo hacia arriba**: abajo está quién empezó (una [[Syscall|syscall]]), arriba quién explotó. Es al revés de lo que sugiere el orden de lectura, y es el error más común al mirar el primero.
 
 Las herramientas:
 
