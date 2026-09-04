@@ -231,7 +231,8 @@ genera `client.py`. Los drivers que nombran D19 y D20 son lo que *va* a ir ahí.
 Así que hoy el único transporte es el cordón umbilical: el transporte rápido que
 D5 le deja al agente todavía no lo escribió nadie.
 
-El portón es `./scripts/check.sh`: frontera + idioma + 102 tests + compila las
+El portón es `./scripts/check.sh`: frontera + idioma + **las citas del libro** +
+los tests + compila las
 dos + las bootea en QEMU y les habla el protocolo con `scripts/client.py`, **y
 bootea aarch64 una vez más sin ACPI** para que el device tree no sea una
 intención.
@@ -394,6 +395,33 @@ respuesta. Las letras se sacan antes de commitear.
 arrancan QEMU con IOMMU (`-device intel-iommu`, `-machine virt,iommu=smmuv3`) y
 con `-device edu`, que es un motor de DMA que se maneja con cuatro escrituras.
 Sin ese aparato, `dma.allow` no se podría probar contra nada real.
+
+## El libro (`libro/`)
+
+Un **vault de Obsidian** con un libro sobre kernels en general que usa este kernel como
+caso de estudio en cada capítulo. Es material de estudio del autor, no documentación del
+proyecto: `docs/` sigue siendo la verdad sobre el diseño, y el libro **cita** a `docs/` y al
+código en vez de reemplazarlos.
+
+Vive en el repo por una sola razón: **las citas al código se pueden verificar**. El libro
+cita así, con ruta, línea y ancla:
+
+    `kernel-core/src/platform.rs:69#pub trait Platform`
+
+El número es informativo; **el ancla es lo que manda**. Lo comprueba
+`./libro/scripts/check-citas.py`, y con `--fix` reescribe los números que se corrieron. Es
+D23 aplicado al libro: sin el chequeo, en dos meses el libro miente y no hay forma de saber
+dónde. **Si tocás el kernel y una cita queda vieja, el arreglo es una línea.**
+
+- La puerta del vault es `libro/00-Empezar-aca.md`; el método, `libro/El-metodo.md`.
+- Las imágenes de `libro/historia/imagenes/` son de Wikimedia Commons y **cada una tiene su
+  licencia anotada en `CREDITOS.md`**. Si se agrega una, se agrega ahí: varias son CC BY-SA
+  y obligan a acreditar autor y licencia en el pie de foto.
+- El libro va en **español, con acentos**: no le aplica la regla 4 (el ASCII puro es para lo
+  que sale por el UART) ni la 6 (el inglés es para el código y para lo que el kernel *dice*).
+  Sí aplica a los identificadores que el libro cite, que son del código.
+- **Los nombres de archivo del vault van sin acentos ni eñes**, para no romper scripts.
+- El nombre `Kornelia` es **provisorio** también para el libro: ver `libro/_El-nombre.md`.
 
 ## Cómo correrlo
 

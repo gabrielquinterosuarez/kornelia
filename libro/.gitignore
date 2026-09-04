@@ -1,0 +1,20 @@
+# Lo que Obsidian usa para si mismo y cambia en cada sesion. La configuracion
+# del vault (que plugins, que tema) si conviene versionarla; el estado de las
+# ventanas y la caches, no.
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.obsidian/cache
+.trash/
+
+# El plugin de repeticion espaciada guarda tu historial de repaso aca. Es tuyo,
+# no del libro: versionarlo pondria en cada commit lo que estudiaste ese dia.
+.obsidian/plugins/obsidian-spaced-repetition/data.json
+
+__pycache__/
+*.pyc
+
+# Syncthing sincroniza esta carpeta. Su estado de control es de la maquina,
+# no del libro.
+.stfolder/
+.stversions/
+.stignore

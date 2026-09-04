@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 260" width="720" height="260" font-family="system-ui, sans-serif">
+  <!-- Colores elegidos para leerse igual sobre fondo claro y oscuro. -->
+  <g stroke="#4a7fd4" fill="none" stroke-width="2.5" stroke-linejoin="round">
+    <!-- La senal de reloj: sube, se mantiene, baja, se mantiene. -->
+    <path d="M40,110 V60 H160 V110 H280 V60 H400 V110 H520 V60 H640 V110 H700"/>
+  </g>
+
+  <!-- Los flancos de subida, que es donde el silicio "mira". -->
+  <g stroke="#4a7fd4" stroke-width="1" stroke-dasharray="3 4" opacity="0.55">
+    <line x1="40" y1="50" x2="40" y2="215"/>
+    <line x1="280" y1="50" x2="280" y2="215"/>
+    <line x1="520" y1="50" x2="520" y2="215"/>
+  </g>
+
+  <!-- Un ciclo, medido de flanco a flanco. -->
+  <g stroke="#7b8794" stroke-width="1.5" fill="none">
+    <path d="M40,150 H280"/>
+    <path d="M40,145 V155 M280,145 V155"/>
+  </g>
+  <text x="160" y="142" text-anchor="middle" font-size="13" fill="#7b8794">un ciclo</text>
+
+  <!-- Lo que pasa adentro del ciclo. -->
+  <rect x="40" y="170" width="190" height="30" rx="4" fill="#4a7fd4" opacity="0.18"/>
+  <rect x="230" y="170" width="50" height="30" rx="4" fill="#7b8794" opacity="0.28"/>
+  <text x="135" y="190" text-anchor="middle" font-size="12" fill="#7b8794">la logica se asienta</text>
+  <text x="255" y="190" text-anchor="middle" font-size="11" fill="#7b8794">margen</text>
+
+  <text x="284" y="236" font-size="12.5" fill="#4a7fd4">aca el resultado ya es valido: se guarda en un registro</text>
+
+  <text x="40" y="35" font-size="13" fill="#7b8794">reloj</text>
+</svg>

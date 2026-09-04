@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 740 210" width="740" height="210" font-family="system-ui, sans-serif">
+  <!-- Dos inversores en circulo: el circuito mas chico que se acuerda de algo.
+       Los colores se leen igual sobre fondo claro y oscuro. -->
+
+  <!-- ============ ESTADO A ============ -->
+  <g>
+    <text x="150" y="22" text-anchor="middle" font-size="13" fill="#7b8794">Estado A</text>
+
+    <g stroke="#4a7fd4" stroke-width="2" fill="none">
+      <path d="M20,85 H45"/>
+      <path d="M95,85 H120"/>
+      <path d="M170,85 H200"/>
+      <path d="M200,85 V155 H20 V85"/>
+    </g>
+    <g fill="none" stroke="#4a7fd4" stroke-width="2" stroke-linejoin="round">
+      <path d="M45,67 L83,85 L45,103 Z"/>
+      <path d="M120,67 L158,85 L120,103 Z"/>
+    </g>
+    <circle cx="87" cy="85" r="4" fill="none" stroke="#4a7fd4" stroke-width="2"/>
+    <circle cx="162" cy="85" r="4" fill="none" stroke="#4a7fd4" stroke-width="2"/>
+
+    <text x="107" y="76" text-anchor="middle" font-size="15" font-weight="600" fill="#c9772f">1</text>
+    <text x="185" y="76" text-anchor="middle" font-size="15" font-weight="600" fill="#3f8f5f">0</text>
+    <text x="32" y="76" text-anchor="middle" font-size="15" font-weight="600" fill="#3f8f5f">0</text>
+    <text x="110" y="172" text-anchor="middle" font-size="11.5" fill="#7b8794">el 0 que vuelve sostiene al 1</text>
+  </g>
+
+  <line x1="290" y1="30" x2="290" y2="180" stroke="#7b8794" stroke-width="1" stroke-dasharray="4 5" opacity="0.5"/>
+
+  <!-- ============ ESTADO B ============ -->
+  <g transform="translate(370,0)">
+    <text x="150" y="22" text-anchor="middle" font-size="13" fill="#7b8794">Estado B</text>
+
+    <g stroke="#4a7fd4" stroke-width="2" fill="none">
+      <path d="M20,85 H45"/>
+      <path d="M95,85 H120"/>
+      <path d="M170,85 H200"/>
+      <path d="M200,85 V155 H20 V85"/>
+    </g>
+    <g fill="none" stroke="#4a7fd4" stroke-width="2" stroke-linejoin="round">
+      <path d="M45,67 L83,85 L45,103 Z"/>
+      <path d="M120,67 L158,85 L120,103 Z"/>
+    </g>
+    <circle cx="87" cy="85" r="4" fill="none" stroke="#4a7fd4" stroke-width="2"/>
+    <circle cx="162" cy="85" r="4" fill="none" stroke="#4a7fd4" stroke-width="2"/>
+
+    <text x="107" y="76" text-anchor="middle" font-size="15" font-weight="600" fill="#3f8f5f">0</text>
+    <text x="185" y="76" text-anchor="middle" font-size="15" font-weight="600" fill="#c9772f">1</text>
+    <text x="32" y="76" text-anchor="middle" font-size="15" font-weight="600" fill="#c9772f">1</text>
+    <text x="110" y="172" text-anchor="middle" font-size="11.5" fill="#7b8794">el 1 que vuelve sostiene al 0</text>
+  </g>
+
+  <text x="370" y="200" text-anchor="middle" font-size="12" fill="#7b8794">Los dos son estables. Ninguna ley elige cuál: el circuito se queda en el que lo dejaste.</text>
+</svg>

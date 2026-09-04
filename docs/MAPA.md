@@ -34,21 +34,24 @@ Lo verifica `./scripts/check-boundary.sh`, dentro del portón.
 
 ## El portón
 
-`./scripts/check.sh` es todo lo que CI corre. Siete pasos, en orden:
+`./scripts/check.sh` es todo lo que CI corre. Ocho pasos, en orden:
 
 1. **Frontera** (`check-boundary.sh`) — que los crates portables no filtren arquitectura.
 2. **Idioma** (`check-language.py`) — identificadores en inglés. Es una lista de
    palabras: cuando se cuela una que no está, se **agrega a `FORBIDDEN`** en vez
    de solo corregir el identificador.
-3. **102 tests** de `kernel-core`.
-4. **Compilan las dos.**
-5. **Arrancan las dos en QEMU y contestan el protocolo**, con `scripts/client.py`.
-6. **El blob se carga, corre, le habla al kernel y se puede cancelar** (D18), en las dos.
-7. **Y aarch64 arranca una vez más sin ACPI**, para que se describa por device
+3. **Las citas del libro** (`libro/scripts/check-citas.py`) — que lo que el libro
+   cita del código siga estando en la línea que dice. Es el más barato: no
+   compila nada. Si falla porque el código se corrió, `--fix` lo arregla.
+4. **Los tests** de `kernel-core`.
+5. **Compilan las dos.**
+6. **Arrancan las dos en QEMU y contestan el protocolo**, con `scripts/client.py`.
+7. **El blob se carga, corre, le habla al kernel y se puede cancelar** (D18), en las dos.
+8. **Y aarch64 arranca una vez más sin ACPI**, para que se describa por device
    tree. Ahí se le exige el IOMMU contra un aparato de verdad, que es la prueba
    que usa todo lo que sale de la descripción junto.
 
-El paso 5 es el que atrapa lo que importa: que compile no prueba nada. Cada
+El paso 6 es el que atrapa lo que importa: que compile no prueba nada. Cada
 prueba del cliente está escrita para **no poder pasar por accidente** — si el
 kernel no hiciera lo que dice, la prueba se cuelga o la máquina se queda muda.
 
@@ -87,3 +90,13 @@ Si una prueba solo comprueba lo que el kernel dice de sí mismo, no prueba nada.
   con `assert!` que los atan a `gdt.rs`.
 - **El serie va crudo** (D26): `-serial stdio`, nunca `mon:stdio`. Con `mon:`,
   QEMU se come el byte `0x01` y por ahí viaja CBOR.
+- **Las citas del libro al código** (`libro/`). El libro cita `archivo.rs:línea#ancla`;
+  mover código deja la cita apuntando a otra línea. Lo atrapa el paso 3 del portón,
+  y `./libro/scripts/check-citas.py --fix` lo arregla.
+
+## El libro
+
+`libro/` es un vault de Obsidian: un libro sobre kernels que usa este kernel como caso de
+estudio. **No es documentación del proyecto** — `docs/` sigue siendo la verdad sobre el
+diseño; el libro lo cita. La puerta es `libro/00-Empezar-aca.md` y el método,
+`libro/El-metodo.md`. Detalles en `CLAUDE.md`, sección *El libro*.

@@ -30,19 +30,37 @@ else
     bad "falta python3, que es lo que corre el chequeo de idioma"
 fi
 
-# --- 3. Tests del nucleo portable -------------------------------------------
+# --- 3. Las citas del libro al codigo (D23 aplicado a `libro/`) -------------
+# El libro cita `archivo.rs:linea#ancla`, y el kernel se mueve. Una cita vieja
+# no se ve rota: se lee igual de bien y dice algo falso, que es peor que un
+# enlace muerto. Esta aca por la misma razon que los dos chequeos de arriba —
+# una regla que no se comprueba es una intencion — y es lo mas barato del
+# porton: no compila nada.
+#
+# Si falla porque el codigo se corrio de linea, el arreglo es una linea:
+#     ./libro/scripts/check-citas.py --fix
+step "citas del libro"
+if [ ! -d libro ]; then
+    echo "SALTEADO: no hay libro/ en este arbol"
+elif command -v python3 >/dev/null; then
+    python3 ./libro/scripts/check-citas.py || bad "citas del libro"
+else
+    bad "falta python3, que es lo que corre el chequeo de citas"
+fi
+
+# --- 4. Tests del nucleo portable -------------------------------------------
 # Solo kernel-core: los crates de arquitectura son binarios bare-metal y no se
 # pueden correr en la maquina de desarrollo.
 step "tests del nucleo portable"
 cargo test -p kernel-core || bad "tests"
 
-# --- 4. Las dos arquitecturas compilan (D22) --------------------------------
+# --- 5. Las dos arquitecturas compilan (D22) --------------------------------
 for arch in x86_64 aarch64; do
     step "compila $arch"
     cargo build --release -p "kernel-$arch" --target "$arch-unknown-uefi" || bad "compilar $arch"
 done
 
-# --- 5. Las dos arquitecturas ARRANCAN Y CONTESTAN (D22) --------------------
+# --- 6. Las dos arquitecturas ARRANCAN Y CONTESTAN (D22) --------------------
 # Que compile no prueba nada: un puntero mal leido compila perfecto. Se bootean
 # las dos en QEMU y se les habla en CBOR, que es como las va a usar un agente.
 #
