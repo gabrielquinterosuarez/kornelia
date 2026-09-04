@@ -141,7 +141,57 @@ qemu-system-x86_64 \
 | `hostfwd=tcp::2222-:22` | `ssh -p 2222 gabriel@localhost` desde otra terminal, cómodo para copiar archivos. |
 | `-nographic` | Sin ventana: la consola sale por esta terminal. **Se sale con `Ctrl-A` y después `X`.** |
 
-El primer arranque tarda un par de minutos (cloud-init instala los paquetes). Después arranca en unos segundos.
+### Cómo sabés que el primer arranque terminó
+
+El primer arranque tarda **unos tres minutos** —cloud-init instala los paquetes— y en el medio escupe muchísimo texto, incluidas las claves SSH de la máquina. Los siguientes arrancan en segundos.
+
+La línea que dice que salió bien es esta, y conviene buscarla en vez de interpretar el resto:
+
+```
+Cloud-init v. 25.1.4 finished at Fri, 04 Sep 2026 15:43:30 +0000.
+Datasource DataSourceNoCloud [seed=/dev/vdb].  Up 179.81 seconds
+```
+
+| Pedazo | Qué confirma |
+|---|---|
+| `DataSourceNoCloud [seed=/dev/vdb]` | Encontró tu `seed.img` y lo leyó: tu usuario, tu clave y los paquetes se aplicaron. Si dijera `DataSourceNone`, el disquito de configuración no llegó. |
+| `finished` | Terminó, sin quedarse a mitad de camino. |
+| `Up 179.81 seconds` | Cuánto tardó. La segunda vez son segundos. |
+
+Las claves SSH se generan en el primer arranque de cualquier máquina, y se imprimen en la consola **a propósito**: es para poder verificar la huella antes de conectarse por primera vez. Son las públicas; no hay nada sensible ahí.
+
+Después de eso, **Enter** y aparece el login: `gabriel` / `practicas`.
+
+> [!tip] Y mirá el log, que enseña algo
+> Las líneas salen **fuera de orden**: el `finished ... Up 179.81 seconds` aparece *antes* de los `Generating public/private rsa key pair`, que obviamente ocurrieron antes. No es un bug: son tres escritores independientes contra un único [[UART]], sin nadie coordinando.
+>
+> | Lo que ves | Por dónde salió |
+> |---|---|
+> | `-----BEGIN SSH HOST KEY KEYS-----` | cloud-init escribiendo **directo a la consola** |
+> | `<14>Sep  4 15:43:30 cloud-init:` | el mismo mensaje por **syslog** (el `<14>` es la prioridad) |
+> | `[  179.878410] cloud-init[608]:` | el mismo texto inyectado al **buffer del kernel** (`/dev/kmsg`) |
+>
+> **Un cable serie no tiene canales: tiene bytes.** Es el mismo problema que este proyecto pagó del otro lado — las letras de depuración de Kornelia salían después del marcador del protocolo y el cliente se las comía como CBOR. Ver [[Indice-de-sintomas]].
+>
+> Y los timestamps son de dos relojes distintos: `[  179.8]` es uptime del kernel, `Sep  4 15:43:30` es hora de pared. **Cuando un log se ve desordenado, la primera pregunta es quién puso ese timestamp.**
+
+### Comprobar que quedó usable
+
+Adentro de la VM, cuatro cosas:
+
+```bash
+cloud-init status --long        # tiene que decir status: done
+id                              # gabriel, y en el grupo sudo
+gcc --version                   # los paquetes se instalaron
+ls /lib/modules/$(uname -r)/build   # y los headers, que es lo que pide un modulo
+```
+
+Y desde tu Debian, en otra terminal, que el puerto reenviado ande:
+
+```bash
+ssh -p 2222 gabriel@localhost
+```
+
 
 > [!warning] Acá `Ctrl-A X` sí sirve, en Kornelia no
 > Esta VM usa el multiplexor de QEMU, así que `Ctrl-A X` la cierra. Los scripts de Kornelia usan `-serial stdio` **crudo** a propósito (D26), porque el multiplexor se come el byte `0x01` y por ahí viaja CBOR: de Kornelia se sale con `Ctrl-C`. Dos máquinas, dos formas de salir; es fácil confundirse.
@@ -212,6 +262,8 @@ chmod +x ~/vm-practicas/arrancar.sh
 | Síntoma | Causa probable |
 |---|---|
 | `-device intel-iommu: Parameter 'driver' expects a dynamic sysbus device type for the machine` | Falta `-machine q35`. El IOMMU de Intel solo existe en esa máquina; en la de omisión el aparato no se puede ni instanciar. QEMU no arranca: no es que la VM falle después. |
+| Dice `DataSourceNone` en vez de `DataSourceNoCloud` | El `seed.img` no se adjuntó, o le falta `format=raw` en el `-drive`. Sin eso no hay usuario ni clave y no podés entrar. |
+| Terminó pero `gcc` no existe | cloud-init no pudo instalar los paquetes: casi siempre no había red. Mirá `cloud-init status --long` y `/var/log/cloud-init-output.log`. |
 | `Could not access KVM kernel module` | Falta el módulo o el usuario no está en el grupo `kvm`. `sudo usermod -aG kvm $USER` y volver a entrar. En una máquina que ya es virtual, KVM anidado puede no estar. Sacá `-enable-kvm`: va lento pero anda. |
 | Arranca y no aparece la consola | Falta `-nographic`, o la imagen no es *genericcloud* (las `generic` esperan pantalla). |
 | No pide usuario nunca | `seed.img` no se adjuntó o el YAML tiene un error de indentación. cloud-init es muy quisquilloso. Mirá `sudo cloud-init status --long` adentro. |
