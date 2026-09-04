@@ -10,31 +10,19 @@ capitulos: [48-Colas-en-memoria-el-patron-de-NVMe, 49-Escribir-un-driver, 46-DMA
 
 # NVMe
 
-> El disco de hoy no se maneja con registros: se le **dejan pedidos en una cola que
-> vive en la RAM**, se toca un timbre, y él escribe las respuestas en otra cola.
+> El disco de hoy no se maneja con registros: se le **dejan pedidos en una cola que vive en la RAM**, se toca un timbre, y él escribe las respuestas en otra cola.
 
-*Non-Volatile Memory Express.* Lo interesante no es que sea rápido: es **el patrón**. Colas
-en memoria, timbres, y el aparato haciendo [[46-DMA-el-aparato-lee-memoria-solo|DMA]] a la
-memoria del huésped. Una placa de red moderna y una GPU se manejan igual. Si entendés NVMe,
-entendiste la forma del hardware de los últimos veinte años.
+*Non-Volatile Memory Express.* Lo interesante no es que sea rápido: es **el patrón**. Colas en memoria, timbres, y el aparato haciendo [[46-DMA-el-aparato-lee-memoria-solo|DMA]] a la memoria del huésped. Una placa de red moderna y una GPU se manejan igual. Si entendés NVMe, entendiste la forma del hardware de los últimos veinte años.
 
 ## Qué problema resuelve
 
-El modelo viejo era **un registro por operación**: escribís el sector en un registro, el
-comando en otro, y esperás mirando un tercero. Eso tiene tres problemas que no se arreglan
-haciendo el aparato más rápido.
+El modelo viejo era **un registro por operación**: escribís el sector en un registro, el comando en otro, y esperás mirando un tercero. Eso tiene tres problemas que no se arreglan haciendo el aparato más rápido.
 
-1. **Cada pedido cuesta varios viajes al aparato.** Un acceso [[MMIO|MMIO]] no se cachea y
-   no se puede reordenar: son cientos de nanosegundos cada uno. Con un SSD que responde en
-   decenas de microsegundos, el driver empieza a ser el cuello de botella.
-2. **Hay un solo juego de registros, así que hay un pedido a la vez.** No se puede pedir
-   mil cosas y que el aparato las ordene como le convenga.
-3. **Un solo juego de registros es un solo candado.** Ocho núcleos pidiendo al mismo disco
-   se serializan en el driver, no en el disco.
+1. **Cada pedido cuesta varios viajes al aparato.** Un acceso [[MMIO|MMIO]] no se cachea y no se puede reordenar: son cientos de nanosegundos cada uno. Con un SSD que responde en decenas de microsegundos, el driver empieza a ser el cuello de botella.
+2. **Hay un solo juego de registros, así que hay un pedido a la vez.** No se puede pedir mil cosas y que el aparato las ordene como le convenga.
+3. **Un solo juego de registros es un solo candado.** Ocho núcleos pidiendo al mismo disco se serializan en el driver, no en el disco.
 
-La salida es invertir quién va a buscar los datos. **El pedido no viaja al aparato: el
-aparato viene a buscarlo.** El driver escribe en RAM —que es barata de escribir— y lo único
-que cruza el bus es un aviso de una palabra.
+La salida es invertir quién va a buscar los datos. **El pedido no viaja al aparato: el aparato viene a buscarlo.** El driver escribe en RAM —que es barata de escribir— y lo único que cruza el bus es un aviso de una palabra.
 
 ## Cómo funciona
 
@@ -45,8 +33,7 @@ Una cola son **dos anillos en RAM**, y no uno:
 | **Submission Queue** (SQ) | el driver | el aparato | pedidos de 64 bytes |
 | **Completion Queue** (CQ) | el aparato | el driver | respuestas de 16 bytes |
 
-Y **dos timbres** (*doorbells*) por cola, que sí son registros del aparato: uno donde el
-driver dice "escribí hasta acá", otro donde dice "leí hasta acá".
+Y **dos timbres** (*doorbells*) por cola, que sí son registros del aparato: uno donde el driver dice "escribí hasta acá", otro donde dice "leí hasta acá".
 
 ```mermaid
 sequenceDiagram
@@ -66,30 +53,17 @@ sequenceDiagram
 
 Tres detalles que no se ven en el dibujo y son los que rompen todo:
 
-- **El bit de fase.** ¿Cómo sabe el driver que una entrada de la CQ es nueva? No alcanza
-  con "hay algo escrito", porque lo de la vuelta anterior también está escrito. Hay un bit
-  que **alterna en cada vuelta del anillo**: si vale lo contrario que la última vez, es
-  nueva.
-- **El aparato tiene que poder alcanzar esa memoria.** Las colas viven en la RAM del
-  huésped y el aparato las lee por DMA — así que pasan por el
-  [[47-IOMMU-VT-d-y-SMMUv3|IOMMU]], y si no están declaradas no llegan.
-- **La separación entre timbres la dice el aparato**, en un campo de su registro de
-  capacidades (`CAP.DSTRD`). Suponer que es 4 anda en QEMU y falla en silencio donde no lo
-  sea.
+- **El bit de fase.** ¿Cómo sabe el driver que una entrada de la CQ es nueva? No alcanza con "hay algo escrito", porque lo de la vuelta anterior también está escrito. Hay un bit que **alterna en cada vuelta del anillo**: si vale lo contrario que la última vez, es nueva.
+- **El aparato tiene que poder alcanzar esa memoria.** Las colas viven en la RAM del huésped y el aparato las lee por DMA — así que pasan por el [[47-IOMMU-VT-d-y-SMMUv3|IOMMU]], y si no están declaradas no llegan.
+- **La separación entre timbres la dice el aparato**, en un campo de su registro de capacidades (`CAP.DSTRD`). Suponer que es 4 anda en QEMU y falla en silencio donde no lo sea.
 
-El MSI es un **opcional**: con las colas ya se puede sondear la CQ. La interrupción sirve
-para no gastar núcleo esperando, no para enterarse.
+El MSI es un **opcional**: con las colas ya se puede sondear la CQ. La interrupción sirve para no gastar núcleo esperando, no para enterarse.
 
 ## Cómo lo hace Linux
 
-El driver es `drivers/nvme/host/pci.c` (la parte que habla con el bus) más
-`drivers/nvme/host/core.c` (la parte que no depende de PCIe). Las funciones tienen los
-nombres del patrón: `nvme_alloc_queue`, `nvme_submit_cmd`, `nvme_process_cq`,
-`nvme_pci_enable`.
+El driver es `drivers/nvme/host/pci.c` (la parte que habla con el bus) más `drivers/nvme/host/core.c` (la parte que no depende de PCIe). Las funciones tienen los nombres del patrón: `nvme_alloc_queue`, `nvme_submit_cmd`, `nvme_process_cq`, `nvme_pci_enable`.
 
-**Las colas son por núcleo**, y esa es la razón de ser del diseño. Linux las cuelga de
-`blk-mq` (*multi-queue block layer*): una cola de hardware por CPU, así dos núcleos que
-piden a la vez no comparten candado ni línea de caché.
+**Las colas son por núcleo**, y esa es la razón de ser del diseño. Linux las cuelga de `blk-mq` (*multi-queue block layer*): una cola de hardware por CPU, así dos núcleos que piden a la vez no comparten candado ni línea de caché.
 
 ```bash
 ls /sys/class/nvme/nvme0/            # model, serial, firmware_rev, cntlid
@@ -98,8 +72,7 @@ ls /sys/block/nvme0n1/mq/            # una carpeta por cola de hardware
 grep nvme /proc/interrupts           # nvme0q0, nvme0q1, ...: un MSI-X por cola
 ```
 
-Y con `nvme-cli` se le mandan comandos de administración a mano — los mismos que manda un
-driver escrito desde cero:
+Y con `nvme-cli` se le mandan comandos de administración a mano — los mismos que manda un driver escrito desde cero:
 
 ```bash
 sudo nvme list                       # los discos y sus namespaces
@@ -108,14 +81,11 @@ sudo nvme id-ns /dev/nvme0n1         # cuántos bloques y de qué tamaño
 sudo nvme smart-log /dev/nvme0
 ```
 
-Un **namespace** es la división del disco que hace el propio controlador: `/dev/nvme0` es
-el controlador y `/dev/nvme0n1` es su primer namespace. No es una partición — está más
-abajo que la tabla de particiones.
+Un **namespace** es la división del disco que hace el propio controlador: `/dev/nvme0` es el controlador y `/dev/nvme0n1` es su primer namespace. No es una partición — está más abajo que la tabla de particiones.
 
 ## Cómo lo hace Kornelia
 
-**Acá está la demostración concreta de D4.** El kernel no tiene driver de NVMe; el driver
-lo escribió el agente, y usa **los verbos y nada más**. Vive en `scripts/client.py:1732#class Nvme`.
+**Acá está la demostración concreta de D4.** El kernel no tiene driver de NVMe; el driver lo escribió el agente, y usa **los verbos y nada más**. Vive en `scripts/client.py:1732#class Nvme`.
 
 | | |
 |---|---|
@@ -125,40 +95,21 @@ lo escribió el agente, y usa **los verbos y nada más**. Vive en `scripts/clien
 
 Qué hace cada verbo en el driver:
 
-- **`describe`** dice dónde se configura PCIe (la ventana ECAM). No dice qué hay conectado:
-  eso lo recorre el agente. El kernel publica dónde se pregunta, no la respuesta (P4).
-- **`mem.claim`** para tres cosas distintas: la ventana de configuración del bus, los 16 KiB
-  de registros del controlador (16 y no 4, porque los timbres viven a partir de `0x1000`), y
-  una página por cada anillo.
-- **`mem.write`** sobre el espacio de configuración para prenderle dos bits al aparato:
-  *memory space* y *bus master*. Sin el segundo **no puede leer sus propias colas**.
-- **`mem.read`/`mem.write` con `width`** para los registros. `CAP` se lee de 8 bytes,
-  `CSTS` de 4. Leerlos con el ancho equivocado devuelve ceros en x86 y mata la máquina en
-  ARM: ver [[MMIO]].
-- **`dma.allow`** por cada página que el aparato va a tocar. Con el IOMMU encendido y vacío
-  (D8), una cola no declarada simplemente no existe para el controlador.
+- **`describe`** dice dónde se configura PCIe (la ventana ECAM). No dice qué hay conectado: eso lo recorre el agente. El kernel publica dónde se pregunta, no la respuesta (P4).
+- **`mem.claim`** para tres cosas distintas: la ventana de configuración del bus, los 16 KiB de registros del controlador (16 y no 4, porque los timbres viven a partir de `0x1000`), y una página por cada anillo.
+- **`mem.write`** sobre el espacio de configuración para prenderle dos bits al aparato: *memory space* y *bus master*. Sin el segundo **no puede leer sus propias colas**.
+- **`mem.read`/`mem.write` con `width`** para los registros. `CAP` se lee de 8 bytes, `CSTS` de 4. Leerlos con el ancho equivocado devuelve ceros en x86 y mata la máquina en ARM: ver [[MMIO]].
+- **`dma.allow`** por cada página que el aparato va a tocar. Con el IOMMU encendido y vacío (D8), una cola no declarada simplemente no existe para el controlador.
 - **`release`** al final. Lo que el agente toma, el agente devuelve.
 
-Hay una función que junta tres pasos a propósito, `scripts/client.py:1823#def shared_page`:
-reclamar, **limpiar** y declarar. Van juntos siempre porque olvidarse de cualquiera de los
-dos últimos produce el mismo síntoma —el aparato "no contesta"— por causas opuestas.
+Hay una función que junta tres pasos a propósito, `scripts/client.py:1823#def shared_page`: reclamar, **limpiar** y declarar. Van juntos siempre porque olvidarse de cualquiera de los dos últimos produce el mismo síntoma —el aparato "no contesta"— por causas opuestas.
 
-**Qué se quitó.** No hay capa de bloques, ni planificador de I/O, ni `blk-mq`, ni
-`/dev/nvme0n1`, ni sistema de archivos ([[53-Sin-sistema-de-archivos]]). Lo que en Linux son
-cinco capas entre `read()` y el silicio, acá es el agente escribiendo un comando de 64 bytes
-en una página que reclamó. La capa no se reemplazó: se dejó vacía (P2).
+**Qué se quitó.** No hay capa de bloques, ni planificador de I/O, ni `blk-mq`, ni `/dev/nvme0n1`, ni sistema de archivos ([[53-Sin-sistema-de-archivos]]). Lo que en Linux son cinco capas entre `read()` y el silicio, acá es el agente escribiendo un comando de 64 bytes en una página que reclamó. La capa no se reemplazó: se dejó vacía (P2).
 
-**Y llega hasta el final:** el driver lee el bloque 0, comprueba una cabecera, trae el
-payload **directo a un reclamo del agente por DMA** (`scripts/client.py:2048#def read_into`,
-sin que los bytes pasen por el cable), verifica una suma, reclama un núcleo y salta ahí con
-`exec`. Eso es D19 de punta a punta. El portón lo corre en las dos arquitecturas contra un
-`-device nvme` de verdad.
+**Y llega hasta el final:** el driver lee el bloque 0, comprueba una cabecera, trae el payload **directo a un reclamo del agente por DMA** (`scripts/client.py:2048#def read_into`, sin que los bytes pasen por el cable), verifica una suma, reclama un núcleo y salta ahí con `exec`. Eso es D19 de punta a punta. El portón lo corre en las dos arquitecturas contra un `-device nvme` de verdad.
 
 > [!info] Se busca por clase, no por modelo
-> El controlador se encuentra por sus tres bytes de clase —`scripts/client.py:1614#NVME_CLASS = (0x01, 0x08, 0x02)`,
-> o sea "almacenamiento / no volátil / NVMe"— y no por fabricante y modelo. Es P4 aplicado
-> al bus: el aparato dice **qué hace**, y por eso el mismo driver anda contra cualquier NVMe
-> y no solo contra el de QEMU.
+> El controlador se encuentra por sus tres bytes de clase —`scripts/client.py:1614#NVME_CLASS = (0x01, 0x08, 0x02)`, o sea "almacenamiento / no volátil / NVMe"— y no por fabricante y modelo. Es P4 aplicado al bus: el aparato dice **qué hace**, y por eso el mismo driver anda contra cualquier NVMe y no solo contra el de QEMU.
 
 ## Cómo se ve roto
 

@@ -10,24 +10,15 @@ capitulos: [17-PCIe-buses-funciones-y-BARs, 18-Lo-que-la-maquina-no-dice, 45-Un-
 
 # BAR
 
-> El registro donde un aparato dice **cuánto espacio de direcciones necesita**, y donde el
-> sistema le contesta **dónde se lo puso**. El aparato no elige: se la asignan.
+> El registro donde un aparato dice **cuánto espacio de direcciones necesita**, y donde el sistema le contesta **dónde se lo puso**. El aparato no elige: se la asignan.
 
-*Base Address Register.* Son seis campos del [[PCIe|espacio de configuración]], en los
-desplazamientos `0x10` a `0x24`. La confusión típica es leerlos como "la dirección del
-aparato", como si fuera un dato del fabricante. Es al revés: es una casilla vacía que el
-aparato sabe cuán grande tiene que ser, y que alguien más llena.
+*Base Address Register.* Son seis campos del [[PCIe|espacio de configuración]], en los desplazamientos `0x10` a `0x24`. La confusión típica es leerlos como "la dirección del aparato", como si fuera un dato del fabricante. Es al revés: es una casilla vacía que el aparato sabe cuán grande tiene que ser, y que alguien más llena.
 
 ## Qué problema resuelve
 
-Si cada aparato viniera con su dirección de fábrica, dos placas del mismo modelo no podrían
-convivir, y cualquier aparato nuevo podría chocar con uno viejo. Poner la dirección en un
-jumper —que es lo que se hacía— traslada el problema a una persona con un manual.
+Si cada aparato viniera con su dirección de fábrica, dos placas del mismo modelo no podrían convivir, y cualquier aparato nuevo podría chocar con uno viejo. Poner la dirección en un jumper —que es lo que se hacía— traslada el problema a una persona con un manual.
 
-El acuerdo de PCI invierte quién decide. El aparato solo declara **cuánto** y **de qué
-tipo**; quien enumera reparte el espacio de direcciones de la máquina y le escribe a cada
-uno dónde le tocó. Un aparato es, desde este punto de vista, una función que se puede
-reubicar.
+El acuerdo de PCI invierte quién decide. El aparato solo declara **cuánto** y **de qué tipo**; quien enumera reparte el espacio de direcciones de la máquina y le escribe a cada uno dónde le tocó. Un aparato es, desde este punto de vista, una función que se puede reubicar.
 
 ## Cómo funciona
 
@@ -40,22 +31,15 @@ Cada BAR son 4 bytes, y los bits de abajo **no son dirección**: son la declarac
 | 3 | *Prefetchable*: leer no tiene efectos colaterales y las escrituras se pueden combinar. |
 | resto | La dirección base, alineada al tamaño de la región. |
 
-Un BAR de 64 bits que se lee como si fuera de 32 da una dirección **truncada**, que es peor
-que ninguna: apunta a algún lado. Por eso el recorrido de Kornelia mira esos dos bits antes
-de seguir: `scripts/client.py:1647#wide = (bar0 & 0x6) == 0x4`.
+Un BAR de 64 bits que se lee como si fuera de 32 da una dirección **truncada**, que es peor que ninguna: apunta a algún lado. Por eso el recorrido de Kornelia mira esos dos bits antes de seguir: `scripts/client.py:1647#wide = (bar0 & 0x6) == 0x4`.
 
 ### Prefetchable no es una optimización menor
 
-Un BAR de registros **nunca** es prefetchable: leer un registro de estado puede vaciar una
-cola. Un framebuffer de video sí. La diferencia importa porque los puentes usan ese bit para
-decidir si pueden traer datos por adelantado y juntar escrituras — y porque los puentes
-tienen ventanas separadas para lo prefetchable y lo que no, así que declararlo mal puede
-dejar al aparato sin dónde caer.
+Un BAR de registros **nunca** es prefetchable: leer un registro de estado puede vaciar una cola. Un framebuffer de video sí. La diferencia importa porque los puentes usan ese bit para decidir si pueden traer datos por adelantado y juntar escrituras — y porque los puentes tienen ventanas separadas para lo prefetchable y lo que no, así que declararlo mal puede dejar al aparato sin dónde caer.
 
 ### Cómo se descubre el tamaño
 
-El aparato no publica cuántos bytes necesita en ningún campo. Se lo descubre **escribiendo
-todos unos y leyendo de vuelta**: los bits que el aparato no decodifica vuelven en cero.
+El aparato no publica cuántos bytes necesita en ningún campo. Se lo descubre **escribiendo todos unos y leyendo de vuelta**: los bits que el aparato no decodifica vuelven en cero.
 
 ```text
 1. Apagar el bit de "espacio de memoria" en el command  (si no, el aparato se muda mientras)
@@ -66,22 +50,15 @@ todos unos y leyendo de vuelta**: los bits que el aparato no decodifica vuelven 
 6. Restaurar el valor guardado
 ```
 
-Es un procedimiento **destructivo**: entre el paso 3 y el 6 el aparato está respondiendo en
-otra dirección. Hacerlo con el aparato en uso es una forma prolija de colgar una máquina.
+Es un procedimiento **destructivo**: entre el paso 3 y el 6 el aparato está respondiendo en otra dirección. Hacerlo con el aparato en uso es una forma prolija de colgar una máquina.
 
 ### Quién lo asigna
 
-Normalmente el firmware, antes de que arranque el sistema. El kernel puede aceptar lo que
-encontró o rehacerlo (en Linux, `pci=realloc`). Y **escribir un BAR no prende el aparato**:
-para que empiece a contestar en esa dirección hay que prender el bit 1 del registro
-*command*. Son dos pasos y confundirlos es la causa más común de "el aparato está pero no
-responde".
+Normalmente el firmware, antes de que arranque el sistema. El kernel puede aceptar lo que encontró o rehacerlo (en Linux, `pci=realloc`). Y **escribir un BAR no prende el aparato**: para que empiece a contestar en esa dirección hay que prender el bit 1 del registro *command*. Son dos pasos y confundirlos es la causa más común de "el aparato está pero no responde".
 
 ## Cómo lo hace Linux
 
-Linux lee los BARs en la enumeración y los deja resueltos como *recursos*: rangos con
-principio, fin y banderas. `lspci -v` los muestra ya interpretados, con el tamaño que
-descubrió escribiendo unos:
+Linux lee los BARs en la enumeración y los deja resueltos como *recursos*: rangos con principio, fin y banderas. `lspci -v` los muestra ya interpretados, con el tamaño que descubrió escribiendo unos:
 
 ```bash
 lspci -v -s 00:01.0
@@ -100,8 +77,7 @@ void __iomem *regs   = pci_iomap(pdev, 0, len); // ioremap con el ancho correcto
 pci_set_master(pdev);                           // el bit de bus master, para DMA
 ```
 
-`pci_resource_len` existe porque el tamaño **ya se midió**: nadie repite el truco de los
-unos en un driver.
+`pci_resource_len` existe porque el tamaño **ya se midió**: nadie repite el truco de los unos en un driver.
 
 ## Cómo lo hace Kornelia
 
@@ -111,34 +87,14 @@ unos en un driver.
 | **Los verbos** | `mem.read` sobre la ventana ECAM para leer el BAR; `mem.claim {at}` para alcanzar lo que apunta |
 | **Dónde vive** | `scripts/client.py:1617#def pcie_scan` (del lado del agente), `kernel-core/src/protocol.rs:1119#p.map_device` (del lado del kernel) |
 
-El kernel no sabe qué es un BAR. Lo que sabe es entregar un rango que el agente pidió, y
-para eso el BAR ya está leído: el agente lo lee del espacio de configuración, le enmascara
-los bits de tipo, y hace `mem.claim {at: esa_dirección}`.
+El kernel no sabe qué es un BAR. Lo que sabe es entregar un rango que el agente pidió, y para eso el BAR ya está leído: el agente lo lee del espacio de configuración, le enmascara los bits de tipo, y hace `mem.claim {at: esa_dirección}`.
 
-**Lo que devuelve no es `mmio`, es `unreported`.** Un BAR que el firmware no listó en el
-mapa cae en un hueco, y ahí el kernel entrega el rango **y** la advertencia de que la máquina
-nunca dijo qué hay: `kernel-core/src/memory.rs:131#Kind::Unreported`. Alcanzarlo no es
-enterarse (P4). Ver [[18-Lo-que-la-maquina-no-dice]].
+**Lo que devuelve no es `mmio`, es `unreported`.** Un BAR que el firmware no listó en el mapa cae en un hueco, y ahí el kernel entrega el rango **y** la advertencia de que la máquina nunca dijo qué hay: `kernel-core/src/memory.rs:131#Kind::Unreported`. Alcanzarlo no es enterarse (P4). Ver [[18-Lo-que-la-maquina-no-dice]].
 
 > [!warning] El caso real: un BAR más arriba que el mapa
-> En aarch64 los BARs de PCIe caen en **512 GiB**, y el mapa de memoria que da el firmware
-> llega a **257**. El identity map se calcula a partir de ese mapa, así que el rango del
-> controlador [[NVMe]] ni siquiera estaba mapeado: `mem.claim` contestaba `unmapped` y el
-> aparato era **inalcanzable**. O sea, el kernel era la razón por la que no se podía usar un
-> aparato, que es exactamente lo que prohíbe **P1**.
->
-> La salida no fue agrandar el identity map —512 GiB de tablas por si acaso— sino
-> **mapear y reintentar una vez**: si el reclamo falla por `unmapped` y cae más arriba de lo
-> que las tablas cubren, el kernel mapea ese gigabyte como dispositivo y vuelve a intentar
-> (`kernel-core/src/protocol.rs:1119#p.map_device`, y el registro de lo agregado en
-> `kernel-core/src/paging.rs:73#pub fn note_mapped`). Como dispositivo y no como RAM porque
-> **no se sabe qué hay ahí**; y se sigue entregando como `unreported`, porque haberlo
-> alcanzado no cambia lo que la máquina dijo.
+> En aarch64 los BARs de PCIe caen en **512 GiB**, y el mapa de memoria que da el firmware llega a **257**. El identity map se calcula a partir de ese mapa, así que el rango del controlador [[NVMe]] ni siquiera estaba mapeado: `mem.claim` contestaba `unmapped` y el aparato era **inalcanzable**. O sea, el kernel era la razón por la que no se podía usar un aparato, que es exactamente lo que prohíbe **P1**. La salida no fue agrandar el identity map —512 GiB de tablas por si acaso— sino **mapear y reintentar una vez**: si el reclamo falla por `unmapped` y cae más arriba de lo que las tablas cubren, el kernel mapea ese gigabyte como dispositivo y vuelve a intentar (`kernel-core/src/protocol.rs:1119#p.map_device`, y el registro de lo agregado en `kernel-core/src/paging.rs:73#pub fn note_mapped`). Como dispositivo y no como RAM porque **no se sabe qué hay ahí**; y se sigue entregando como `unreported`, porque haberlo alcanzado no cambia lo que la máquina dijo.
 
-**Qué se quitó:** no hay reasignación de BARs, ni ventanas de puente calculadas por el
-kernel, ni un asignador de espacio de direcciones. Se acepta lo que dejó el firmware. Si
-algún día hace falta reasignar, lo hace el agente: tiene `mem.write` sobre la ventana de
-configuración, que es todo lo que se necesita (P2).
+**Qué se quitó:** no hay reasignación de BARs, ni ventanas de puente calculadas por el kernel, ni un asignador de espacio de direcciones. Se acepta lo que dejó el firmware. Si algún día hace falta reasignar, lo hace el agente: tiene `mem.write` sobre la ventana de configuración, que es todo lo que se necesita (P2).
 
 ## Cómo se ve roto
 

@@ -36,8 +36,7 @@ Y sobre todo **qué se quitó**, con la decisión y el principio que lo justific
 
 ## Cómo se ve roto
 
-El síntoma primero, la causa después. Si esto ya pasó de verdad en el proyecto, va acá
-con lo que se observó — y también en [[Indice-de-sintomas]].
+El síntoma primero, la causa después. Si esto ya pasó de verdad en el proyecto, va acá con lo que se observó — y también en [[Indice-de-sintomas]].
 
 ## Práctica
 

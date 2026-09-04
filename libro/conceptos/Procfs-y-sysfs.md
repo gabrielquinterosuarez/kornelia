@@ -10,27 +10,17 @@ capitulos: [00-Como-mirar-una-maquina, 18-Lo-que-la-maquina-no-dice, 53-Sin-sist
 
 # Procfs y sysfs
 
-> Archivos que **no existen en ningún disco**: cuando los leés, el kernel arma la respuesta
-> en ese momento. Es la superficie por la que Linux se describe a sí mismo.
+> Archivos que **no existen en ningún disco**: cuando los leés, el kernel arma la respuesta en ese momento. Es la superficie por la que Linux se describe a sí mismo.
 
-`/proc` y `/sys` son sistemas de archivos **virtuales**. `cat /proc/uptime` no lee bytes de
-ninguna parte: llama a una función del kernel que calcula el número y lo escribe. El
-archivo es una interfaz disfrazada de archivo.
+`/proc` y `/sys` son sistemas de archivos **virtuales**. `cat /proc/uptime` no lee bytes de ninguna parte: llama a una función del kernel que calcula el número y lo escribe. El archivo es una interfaz disfrazada de archivo.
 
 ## Qué problema resuelve
 
-Un kernel sabe cosas que nadie más sabe: cuánta memoria hay y dónde, qué aparatos están
-enchufados, cuántas interrupciones llegaron por cada vector, qué tiene mapeado cada
-proceso. Y el espacio de usuario **no puede leer eso**: está del otro lado del privilegio.
+Un kernel sabe cosas que nadie más sabe: cuánta memoria hay y dónde, qué aparatos están enchufados, cuántas interrupciones llegaron por cada vector, qué tiene mapeado cada proceso. Y el espacio de usuario **no puede leer eso**: está del otro lado del privilegio.
 
-Hacen falta, entonces, una puerta y un formato. Y ahí aparece la incomodidad de verdad:
-**una puerta nueva por cada dato es una llamada al sistema nueva por cada dato**. Cada una
-hay que diseñarla, versionarla y mantenerla para siempre, y una vez que existe no se puede
-sacar.
+Hacen falta, entonces, una puerta y un formato. Y ahí aparece la incomodidad de verdad: **una puerta nueva por cada dato es una llamada al sistema nueva por cada dato**. Cada una hay que diseñarla, versionarla y mantenerla para siempre, y una vez que existe no se puede sacar.
 
-La idea de `/proc` es no agregar puertas: **usar la que ya está**. `open`, `read`, `close`
-ya existen, ya tienen permisos, ya andan con `cat`, `grep` y cualquier lenguaje. Un dato
-nuevo del kernel es un archivo nuevo, y no cuesta nada.
+La idea de `/proc` es no agregar puertas: **usar la que ya está**. `open`, `read`, `close` ya existen, ya tienen permisos, ya andan con `cat`, `grep` y cualquier lenguaje. Un dato nuevo del kernel es un archivo nuevo, y no cuesta nada.
 
 ## Cómo funciona
 
@@ -43,9 +33,7 @@ flowchart LR
     E --> F["Bytes que nunca existieron"]
 ```
 
-La pieza que lo hace posible es el **VFS**: la capa que define qué es un sistema de
-archivos. Cualquiera que implemente esas operaciones **es** un sistema de archivos, aunque
-del otro lado no haya un disco sino una función. `procfs` y `sysfs` son eso.
+La pieza que lo hace posible es el **VFS**: la capa que define qué es un sistema de archivos. Cualquiera que implemente esas operaciones **es** un sistema de archivos, aunque del otro lado no haya un disco sino una función. `procfs` y `sysfs` son eso.
 
 De ahí salen las rarezas que confunden la primera vez:
 
@@ -67,17 +55,11 @@ Es la distinción que hay que llevarse:
 | Cómo se lee | `grep`, `awk`, y saber la forma de ese archivo en particular. | `cat` y listo. |
 | La estructura | Plana y arbitraria. | Un árbol con enlaces simbólicos que expresan las relaciones reales. |
 
-`/proc/interrupts` es una tabla de ancho variable con una columna por núcleo. `/proc/cpuinfo`
-son párrafos separados por líneas en blanco, y **cambia de forma según la arquitectura**.
-`/proc/meminfo` son pares con unidades pegadas. Nada de eso es parseable en general: es
-parseable *archivo por archivo*, y los parsers se rompen cuando el kernel agrega una
-columna.
+`/proc/interrupts` es una tabla de ancho variable con una columna por núcleo. `/proc/cpuinfo` son párrafos separados por líneas en blanco, y **cambia de forma según la arquitectura**. `/proc/meminfo` son pares con unidades pegadas. Nada de eso es parseable en general: es parseable *archivo por archivo*, y los parsers se rompen cuando el kernel agrega una columna.
 
-`/sys` nació justamente de eso: un archivo, un valor, sin unidades, sin encabezados. La
-estructura la lleva **el árbol de directorios**, no el texto.
+`/sys` nació justamente de eso: un archivo, un valor, sin unidades, sin encabezados. La estructura la lleva **el árbol de directorios**, no el texto.
 
-Y hay un tercero, `/proc/sys`, que a pesar del nombre es de la familia de `/sys`: un valor
-por archivo, y escribible. Es lo que toca `sysctl`. Ver [[Falsos-amigos]].
+Y hay un tercero, `/proc/sys`, que a pesar del nombre es de la familia de `/sys`: un valor por archivo, y escribible. Es lo que toca `sysctl`. Ver [[Falsos-amigos]].
 
 ## Cómo lo hace Linux
 
@@ -104,65 +86,36 @@ cat /sys/bus/pci/devices/0000:00:02.0/{vendor,device,class}
 ls /sys/kernel/iommu_groups/
 ```
 
-`/proc/PID/` es la mitad más vieja y la que le da el nombre: **un directorio por proceso**.
-`/proc/self` es un enlace al tuyo. Que exista `/proc/self` y no una llamada al sistema
-`getmyinfo()` es la tesis entera del diseño.
+`/proc/PID/` es la mitad más vieja y la que le da el nombre: **un directorio por proceso**. `/proc/self` es un enlace al tuyo. Que exista `/proc/self` y no una llamada al sistema `getmyinfo()` es la tesis entera del diseño.
 
 ## Cómo lo hace Kornelia
 
-Lo mismo, con **un solo verbo**: `describe`. Y no hay sistema de archivos en ningún lado
-(D10) — no se quitó `/proc`, se quitó la abstracción "archivo" y `describe` quedó siendo la
-única puerta.
+Lo mismo, con **un solo verbo**: `describe`. Y no hay sistema de archivos en ningún lado (D10) — no se quitó `/proc`, se quitó la abstracción "archivo" y `describe` quedó siendo la única puerta.
 
 | | |
 |---|---|
 | **Decisiones** | D16 (`describe` es consultable, no un volcado fijo), D10 (sin sistema de archivos) |
 | **Las trece secciones** | `memory` · `tables` · `claims` · `cpus` · `interrupts` · `pcie` · `cores` · `channel` · `handlers` · `exec` · `iommu` · `clock` · `cable` |
 
-Se pide con `describe {what:["memory","pcie"]}` y vuelve solo eso. Tres cosas de ese diseño
-no son detalles:
+Se pide con `describe {what:["memory","pcie"]}` y vuelve solo eso. Tres cosas de ese diseño no son detalles:
 
-**1. Sin `what`, contesta un índice, no todo.** Devuelve la arquitectura, **la lista de las
-trece secciones**, y unos pocos números de resumen: cuántas regiones de memoria hay, si el
-firmware dejó ACPI o device tree. Es `ls /sys`, no `cat` de todo `/sys`. Esa es D16: volcar
-todo ahoga al cliente chico, y resumir le saca información al grande, así que **el cliente
-pide la profundidad que quiere** y el kernel no adivina a quién le habla.
+**1. Sin `what`, contesta un índice, no todo.** Devuelve la arquitectura, **la lista de las trece secciones**, y unos pocos números de resumen: cuántas regiones de memoria hay, si el firmware dejó ACPI o device tree. Es `ls /sys`, no `cat` de todo `/sys`. Esa es D16: volcar todo ahoga al cliente chico, y resumir le saca información al grande, así que **el cliente pide la profundidad que quiere** y el kernel no adivina a quién le habla.
 
-**2. Una sección que no conoce es un error, no un silencio:**
-`kernel-core/src/protocol.rs:361#unknown section in what`.
-El comentario de al lado dice por qué: *contestar solo con lo que se reconoció, callado,
-sería mentir por omisión*. Si pedís `iomu` en vez de `iommu` y el kernel te contesta
-alegremente con las otras doce secciones, tu programa concluye que esta máquina no tiene
-IOMMU. Ver [[18-Lo-que-la-maquina-no-dice]].
+**2. Una sección que no conoce es un error, no un silencio:** `kernel-core/src/protocol.rs:361#unknown section in what`. El comentario de al lado dice por qué: *contestar solo con lo que se reconoció, callado, sería mentir por omisión*. Si pedís `iomu` en vez de `iommu` y el kernel te contesta alegremente con las otras doce secciones, tu programa concluye que esta máquina no tiene IOMMU. Ver [[18-Lo-que-la-maquina-no-dice]].
 
-**3. Lo que se publica incluye lo que la máquina no puede.** `describe {what:["exec"]}` trae
-`cancel`, que dice si el segundo escalón para cortar un núcleo existe en esta máquina —en
-aarch64 no, porque el GIC de QEMU no tiene los registros que harían falta— y
-`describe {what:["clock"]}` dice **que no se sabe** la frecuencia cuando nadie la informa,
-en vez de calcular un tiempo falso. Publicar una carencia es P4 aplicado al revés.
+**3. Lo que se publica incluye lo que la máquina no puede.** `describe {what:["exec"]}` trae `cancel`, que dice si el segundo escalón para cortar un núcleo existe en esta máquina —en aarch64 no, porque el GIC de QEMU no tiene los registros que harían falta— y `describe {what:["clock"]}` dice **que no se sabe** la frecuencia cuando nadie la informa, en vez de calcular un tiempo falso. Publicar una carencia es P4 aplicado al revés.
 
-Y el contador de bytes que el cable perdió está en `describe {what:["cable"]}`, porque
-antes existía y **nadie lo podía ver**: el portón exige que sea cero.
+Y el contador de bytes que el cable perdió está en `describe {what:["cable"]}`, porque antes existía y **nadie lo podía ver**: el portón exige que sea cero.
 
 ### Por qué una sola puerta y no una superficie
 
-Linux tiene miles de archivos en `/proc` y `/sys` porque **el que mira es una persona con
-una terminal**, y para una persona el costo de una interfaz es acordarse del nombre. Un
-archivo más no le cuesta nada, y `cat` y `grep` ya están instalados. La superficie enorme
-es una ventaja: cada dato tiene su lugar y se encuentra tanteando.
+Linux tiene miles de archivos en `/proc` y `/sys` porque **el que mira es una persona con una terminal**, y para una persona el costo de una interfaz es acordarse del nombre. Un archivo más no le cuesta nada, y `cat` y `grep` ya están instalados. La superficie enorme es una ventaja: cada dato tiene su lugar y se encuentra tanteando.
 
-Acá el que mira es **un programa** (P3, D1), y para un programa el costo es al revés. Mil
-archivos con mil formatos son mil parsers, y cada uno se rompe cuando el kernel agrega una
-columna. Un agente no tantea: pide lo que quiere y necesita que la respuesta tenga forma.
+Acá el que mira es **un programa** (P3, D1), y para un programa el costo es al revés. Mil archivos con mil formatos son mil parsers, y cada uno se rompe cuando el kernel agrega una columna. Un agente no tantea: pide lo que quiere y necesita que la respuesta tenga forma.
 
-Por eso el kernel entero son **once verbos** y la descripción es **uno**, con secciones
-nombradas y respuesta en CBOR (D6) — un formato binario con estructura, no texto para
-leer. La diferencia con `/proc` no es de tamaño: es que `/proc` es una **superficie por la
-que se navega** y `describe` es una **consulta que se contesta**.
+Por eso el kernel entero son **once verbos** y la descripción es **uno**, con secciones nombradas y respuesta en CBOR (D6) — un formato binario con estructura, no texto para leer. La diferencia con `/proc` no es de tamaño: es que `/proc` es una **superficie por la que se navega** y `describe` es una **consulta que se contesta**.
 
-Que además haya trece secciones y no una, y que se pidan por nombre, es el mismo
-razonamiento de `/sys` sobre `/proc` llevado hasta el final: la estructura la lleva el
-pedido, no el texto de la respuesta.
+Que además haya trece secciones y no una, y que se pidan por nombre, es el mismo razonamiento de `/sys` sobre `/proc` llevado hasta el final: la estructura la lleva el pedido, no el texto de la respuesta.
 
 ## Cómo se ve roto
 

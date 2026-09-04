@@ -10,31 +10,21 @@ capitulos: [28-Que-es-un-proceso-y-que-queda-sin-procesos, 22-Identity-map-la-me
 
 # Espacio de direcciones
 
-> El conjunto de direcciones que un código **puede nombrar**, y a qué apunta cada una.
-> Un proceso no tiene memoria: tiene un mapa.
+> El conjunto de direcciones que un código **puede nombrar**, y a qué apunta cada una. Un proceso no tiene memoria: tiene un mapa.
 
-Un espacio de direcciones es exactamente una [[Tabla-de-paginas|tabla de páginas]] —una raíz
-y lo que cuelga de ella— vista desde arriba. Cambiar de espacio es cambiar un registro.
+Un espacio de direcciones es exactamente una [[Tabla-de-paginas|tabla de páginas]] —una raíz y lo que cuelga de ella— vista desde arriba. Cambiar de espacio es cambiar un registro.
 
 ## Qué problema resuelve
 
-"¿Cuánta memoria usa este proceso?" no tiene una sola respuesta, y eso no es un defecto de
-las herramientas: es que la pregunta está mal hecha.
+"¿Cuánta memoria usa este proceso?" no tiene una sola respuesta, y eso no es un defecto de las herramientas: es que la pregunta está mal hecha.
 
-Un proceso que hace `mmap` de 1 GiB no consumió nada todavía. Dos procesos que cargaron la
-misma biblioteca comparten los mismos marcos físicos, así que sumar sus tamaños cuenta la
-biblioteca dos veces. Y la mitad alta de todo espacio es el kernel, que está en todos los
-procesos y es uno solo.
+Un proceso que hace `mmap` de 1 GiB no consumió nada todavía. Dos procesos que cargaron la misma biblioteca comparten los mismos marcos físicos, así que sumar sus tamaños cuenta la biblioteca dos veces. Y la mitad alta de todo espacio es el kernel, que está en todos los procesos y es uno solo.
 
-Sin la noción de espacio de direcciones no se puede decir ninguna de esas tres cosas. Con
-ella, cada una es obvia: **lo que un proceso tiene es un mapa, y el mapa no es el
-territorio**. Preguntar "cuánta memoria usa" es preguntar por el territorio mirando el mapa.
+Sin la noción de espacio de direcciones no se puede decir ninguna de esas tres cosas. Con ella, cada una es obvia: **lo que un proceso tiene es un mapa, y el mapa no es el territorio**. Preguntar "cuánta memoria usa" es preguntar por el territorio mirando el mapa.
 
 ## Cómo funciona
 
-Un espacio es una lista de rangos. Cada rango tiene una dirección de inicio, un tamaño, unos
-permisos y un **respaldo**: qué hay del otro lado. El respaldo puede ser RAM, un archivo, o
-nada todavía.
+Un espacio es una lista de rangos. Cada rango tiene una dirección de inicio, un tamaño, unos permisos y un **respaldo**: qué hay del otro lado. El respaldo puede ser RAM, un archivo, o nada todavía.
 
 ```mermaid
 flowchart TD
@@ -50,22 +40,13 @@ flowchart TD
 
 Tres consecuencias que hay que tener claras:
 
-- **La misma dirección virtual en dos espacios apunta a cosas distintas.** Un puntero no
-  significa nada fuera de su espacio. Por eso un `printf("%p")` de dos procesos no se puede
-  comparar.
-- **Dos espacios pueden apuntar al mismo marco.** Ahí sale compartir bibliotecas y el
-  *copy-on-write* de `fork`.
-- **El kernel vive en el mismo espacio que el proceso**, en la mitad alta, para no tener que
-  cambiar la raíz en cada [[Syscall|llamada al sistema]]. Eso es lo que Meltdown obligó a
-  deshacer con KPTI. En aarch64 el reparto es más limpio: hay **dos** registros raíz,
-  `TTBR0_EL1` para las direcciones bajas y `TTBR1_EL1` para las altas, así que el kernel
-  tiene tabla propia sin compartir la del proceso.
+- **La misma dirección virtual en dos espacios apunta a cosas distintas.** Un puntero no significa nada fuera de su espacio. Por eso un `printf("%p")` de dos procesos no se puede comparar.
+- **Dos espacios pueden apuntar al mismo marco.** Ahí sale compartir bibliotecas y el *copy-on-write* de `fork`.
+- **El kernel vive en el mismo espacio que el proceso**, en la mitad alta, para no tener que cambiar la raíz en cada [[Syscall|llamada al sistema]]. Eso es lo que Meltdown obligó a deshacer con KPTI. En aarch64 el reparto es más limpio: hay **dos** registros raíz, `TTBR0_EL1` para las direcciones bajas y `TTBR1_EL1` para las altas, así que el kernel tiene tabla propia sin compartir la del proceso.
 
 ## Cómo lo hace Linux
 
-Cada proceso tiene un `mm_struct` con una lista de `vm_area_struct` — un nodo por rango, con
-sus permisos y su respaldo. Los hilos de un proceso comparten el mismo `mm_struct`: eso
-**es** la definición de hilo en Linux (ver [[Falsos-amigos#6]]).
+Cada proceso tiene un `mm_struct` con una lista de `vm_area_struct` — un nodo por rango, con sus permisos y su respaldo. Los hilos de un proceso comparten el mismo `mm_struct`: eso **es** la definición de hilo en Linux (ver [[Falsos-amigos#6]]).
 
 La lista se lee así:
 
@@ -93,14 +74,9 @@ Una línea de `/proc/self/maps` tiene seis campos:
 | **Inodo** | El del archivo. `0` si no hay. |
 | **Respaldo** | La ruta, o `[heap]`, `[stack]`, `[vdso]`, `[vvar]`, o **vacío**: memoria anónima, que no viene de ningún lado. |
 
-Lo que se aprende leyendo un mapa entero: un solo ejecutable aparece en tres o cuatro líneas
-—`r--p` para las constantes, `r-xp` para el código, `rw-p` para las variables— porque cada
-pedazo se mapea con permisos distintos. La granularidad de los permisos es la razón por la
-que un binario chico ocupa varias líneas.
+Lo que se aprende leyendo un mapa entero: un solo ejecutable aparece en tres o cuatro líneas —`r--p` para las constantes, `r-xp` para el código, `rw-p` para las variables— porque cada pedazo se mapea con permisos distintos. La granularidad de los permisos es la razón por la que un binario chico ocupa varias líneas.
 
-`smaps` agrega lo que `maps` no dice: `Size` es lo prometido, `Rss` lo que está en RAM de
-verdad, y `Pss` reparte lo compartido entre quienes lo comparten. **`Pss` es la única
-columna que se puede sumar** entre procesos sin contar dos veces.
+`smaps` agrega lo que `maps` no dice: `Size` es lo prometido, `Rss` lo que está en RAM de verdad, y `Pss` reparte lo compartido entre quienes lo comparten. **`Pss` es la única columna que se puede sumar** entre procesos sin contar dos veces.
 
 ## Cómo lo hace Kornelia
 
@@ -109,39 +85,17 @@ columna que se puede sumar** entre procesos sin contar dos veces.
 | **Decisiones** | D12 (identity map), D13 (un solo agente), D27 (dos vistas del mismo mapa) |
 | **Dónde vive** | El plan en `kernel-core/src/paging.rs:30#pub const GIB: u64 = 1 << 30;`; los reclamos en `kernel-core/src/claims.rs:157#pub fn claim` |
 
-**Hay un solo espacio de direcciones y es el identity map** (D12): virtual igual a física.
-Todos los núcleos comparten la misma raíz —`core.claim` arranca núcleos, no espacios— y en
-aarch64 la mitad alta ni se recorre: `TTBR1_EL1` está apagado a propósito
-(`kernel-aarch64/src/paging.rs:224#EPD1: nadie camina por TTBR1`).
+**Hay un solo espacio de direcciones y es el identity map** (D12): virtual igual a física. Todos los núcleos comparten la misma raíz —`core.claim` arranca núcleos, no espacios— y en aarch64 la mitad alta ni se recorre: `TTBR1_EL1` está apagado a propósito (`kernel-aarch64/src/paging.rs:224#EPD1: nadie camina por TTBR1`).
 
-**Y no hay procesos** (D13), así que no hay `mm_struct` porque no hay a quién asignárselo.
-Lo que hay es una **tabla de reclamos**, y no es lo mismo: no cambia lo que se puede nombrar,
-anota quién pidió qué. Se mira con `describe {what:["claims"]}` y cada reclamo trae `handle`,
-`start`, `bytes`, `kind`, `caching` y `user` — que es lo más parecido a `/proc/self/maps` que
-hay acá, y **no** es un mapa: es un registro de pedidos.
+**Y no hay procesos** (D13), así que no hay `mm_struct` porque no hay a quién asignárselo. Lo que hay es una **tabla de reclamos**, y no es lo mismo: no cambia lo que se puede nombrar, anota quién pidió qué. Se mira con `describe {what:["claims"]}` y cada reclamo trae `handle`, `start`, `bytes`, `kind`, `caching` y `user` — que es lo más parecido a `/proc/self/maps` que hay acá, y **no** es un mapa: es un registro de pedidos.
 
-La diferencia se nota en algo concreto: en Linux, lo que no está en tu mapa **no existe**
-desde donde estás parado. Acá, con `exec raw`, el agente puede nombrar toda la máquina haya
-reclamado o no — el reclamo es contabilidad, no una frontera. El kernel no está para impedir
-lo que el agente decidió (P2).
+La diferencia se nota en algo concreto: en Linux, lo que no está en tu mapa **no existe** desde donde estás parado. Acá, con `exec raw`, el agente puede nombrar toda la máquina haya reclamado o no — el reclamo es contabilidad, no una frontera. El kernel no está para impedir lo que el agente decidió (P2).
 
-**Pero el mapa tiene dos vistas, y la elige el agente.** Un bloque de 2 MiB marcado como
-alcanzable sin privilegio es lo que hace posible `exec supervised` (D27); uno sin marcar no
-se alcanza desde ahí. Así que el espacio *efectivo* de un código depende del privilegio con
-el que el agente declaró que corre — y eso lo hace cumplir el hardware, no una política del
-kernel (P6). El protocolo lo dice al pie: `exec supervised` sobre memoria sin marcar se
-rechaza en vez de prometer algo que el hardware va a negar un microsegundo después.
+**Pero el mapa tiene dos vistas, y la elige el agente.** Un bloque de 2 MiB marcado como alcanzable sin privilegio es lo que hace posible `exec supervised` (D27); uno sin marcar no se alcanza desde ahí. Así que el espacio *efectivo* de un código depende del privilegio con el que el agente declaró que corre — y eso lo hace cumplir el hardware, no una política del kernel (P6). El protocolo lo dice al pie: `exec supervised` sobre memoria sin marcar se rechaza en vez de prometer algo que el hardware va a negar un microsegundo después.
 
-**Y hay un cuarto interlocutor con espacio propio: el aparato.** Lo que un dispositivo puede
-nombrar cuando hace DMA no lo define esta tabla sino el [[47-IOMMU-VT-d-y-SMMUv3|IOMMU]], y
-arranca **vacío**: sin declarar nada con `dma.allow`, ningún aparato llega a la memoria (D8).
-Son dos mapas distintos de la misma máquina. Ver [[Falsos-amigos#4]].
+**Y hay un cuarto interlocutor con espacio propio: el aparato.** Lo que un dispositivo puede nombrar cuando hace DMA no lo define esta tabla sino el [[47-IOMMU-VT-d-y-SMMUv3|IOMMU]], y arranca **vacío**: sin declarar nada con `dma.allow`, ningún aparato llega a la memoria (D8). Son dos mapas distintos de la misma máquina. Ver [[Falsos-amigos#4]].
 
-**Qué se quitó, y qué queda vacío en vez de reemplazado:** no hay reubicación, ni
-copy-on-write, ni mapear un archivo, ni una pila que crezca sola, ni la mitad alta reservada
-para el kernel. El agente que quiera un espacio propio arma tablas y las carga desde su
-código, corriendo en `raw` — con el aviso de que si no mapea el kernel y el UART pierde el
-cordón umbilical. La capa está vacía, no tapiada (P2).
+**Qué se quitó, y qué queda vacío en vez de reemplazado:** no hay reubicación, ni copy-on-write, ni mapear un archivo, ni una pila que crezca sola, ni la mitad alta reservada para el kernel. El agente que quiera un espacio propio arma tablas y las carga desde su código, corriendo en `raw` — con el aviso de que si no mapea el kernel y el UART pierde el cordón umbilical. La capa está vacía, no tapiada (P2).
 
 ## Cómo se ve roto
 

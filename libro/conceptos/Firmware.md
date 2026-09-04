@@ -10,29 +10,17 @@ capitulos: [11-Reset-vector-firmware-BIOS-y-UEFI, 18-Lo-que-la-maquina-no-dice, 
 
 # Firmware
 
-> El código que **ya venía en la máquina**. Corre antes que cualquier sistema operativo,
-> deja el hardware en un estado usable, y después cuenta lo que encontró.
+> El código que **ya venía en la máquina**. Corre antes que cualquier sistema operativo, deja el hardware en un estado usable, y después cuenta lo que encontró.
 
-Es el eslabón que ningún libro de kernels puede saltear: cuando tu código empieza a
-correr, alguien ya hizo un trabajo enorme, y de la calidad de ese trabajo —y de sus
-mentiras— dependen las primeras mil líneas de cualquier kernel.
+Es el eslabón que ningún libro de kernels puede saltear: cuando tu código empieza a correr, alguien ya hizo un trabajo enorme, y de la calidad de ese trabajo —y de sus mentiras— dependen las primeras mil líneas de cualquier kernel.
 
 ## Qué problema resuelve
 
-Al soltar el botón de encendido, **la RAM no anda**. No es una figura: un chip de DDR
-necesita que alguien le programe voltajes, refresco y decenas de retardos, y que después
-*entrene* cada canal —mandar patrones y mover la ventana de muestreo hasta que los bits
-vuelvan enteros—. Antes de eso no hay dónde guardar una variable.
+Al soltar el botón de encendido, **la RAM no anda**. No es una figura: un chip de DDR necesita que alguien le programe voltajes, refresco y decenas de retardos, y que después *entrene* cada canal —mandar patrones y mover la ventana de muestreo hasta que los bits vuelvan enteros—. Antes de eso no hay dónde guardar una variable.
 
-Y ahí está el huevo y la gallina: **el código que enciende la RAM no puede vivir en la
-RAM.** Se resuelve corriendo desde el chip de flash del motherboard, con la caché del
-procesador configurada como si fuera memoria (*cache-as-RAM*) para tener unos KB donde
-apoyar una pila.
+Y ahí está el huevo y la gallina: **el código que enciende la RAM no puede vivir en la RAM.** Se resuelve corriendo desde el chip de flash del motherboard, con la caché del procesador configurada como si fuera memoria (*cache-as-RAM*) para tener unos KB donde apoyar una pila.
 
-Aparte de eso hay un segundo problema, más aburrido y más grande: **la variedad**. Cada
-motherboard tiene otro chipset, otros módulos de memoria, otros retardos. Si el kernel
-tuviera que saber todo eso, sería un kernel por motherboard. El firmware existe para que
-el kernel pueda empezar en una máquina que ya está prendida y **preguntarle cómo es**.
+Aparte de eso hay un segundo problema, más aburrido y más grande: **la variedad**. Cada motherboard tiene otro chipset, otros módulos de memoria, otros retardos. Si el kernel tuviera que saber todo eso, sería un kernel por motherboard. El firmware existe para que el kernel pueda empezar en una máquina que ya está prendida y **preguntarle cómo es**.
 
 ## Cómo funciona
 
@@ -46,9 +34,7 @@ flowchart TD
     H["Entregar: mapa de memoria + tablas<br/>y hacerse a un lado"] --> K[Kernel]
 ```
 
-Los cuatro pasos del medio son los que el kernel **no repite**. Sobre todo el tercero:
-un aparato PCIe no elige su dirección, se la asignan escribiéndole los
-[[BAR|BARs]], y quien la asigna es el firmware. El kernel se entera leyendo.
+Los cuatro pasos del medio son los que el kernel **no repite**. Sobre todo el tercero: un aparato PCIe no elige su dirección, se la asignan escribiéndole los [[BAR|BARs]], y quien la asigna es el firmware. El kernel se entera leyendo.
 
 ### Dos cosas distintas que se llaman igual
 
@@ -57,37 +43,22 @@ un aparato PCIe no elige su dirección, se la asignan escribiéndole los
 | **Firmware de la máquina** | Un chip de flash en el motherboard. Es [[UEFI]] hoy, BIOS antes, y también coreboot o U-Boot. | Corre, entrega la máquina y se aparta. El kernel lo trata como un servicio con horario de atención. |
 | **Firmware de un aparato** | Adentro del aparato: la controladora del SSD, la placa de red, la GPU, el Intel ME. | **Nunca se aparta.** Corre en paralelo al kernel, todo el tiempo, y el kernel no lo puede inspeccionar. |
 
-Y hay un tercer caso que confunde a propósito: **firmware que el kernel le carga al aparato
-en cada arranque**, porque el aparato viene con la memoria vacía para abaratarlo. En Linux
-eso es `/lib/firmware`, y son archivos binarios que el driver empuja al aparato antes de
-usarlo. Se los llama "blobs", igual que el `blob.bin` de Kornelia, y **no tienen nada que
-ver**: ver [[51-El-blob-y-la-ventana-de-rescate]].
+Y hay un tercer caso que confunde a propósito: **firmware que el kernel le carga al aparato en cada arranque**, porque el aparato viene con la memoria vacía para abaratarlo. En Linux eso es `/lib/firmware`, y son archivos binarios que el driver empuja al aparato antes de usarlo. Se los llama "blobs", igual que el `blob.bin` de Kornelia, y **no tienen nada que ver**: ver [[51-El-blob-y-la-ventana-de-rescate]].
 
 ## Por qué no se le puede creer todo
 
-El firmware informa un mapa de memoria física. Ese mapa **está incompleto por
-construcción**, y no por descuido:
+El firmware informa un mapa de memoria física. Ese mapa **está incompleto por construcción**, y no por descuido:
 
-1. **Informa lo que configuró, no lo que hay.** Un rango que él no tocó puede no aparecer.
-   El caso concreto de este proyecto: en aarch64 la ventana de configuración de PCIe **no
-   está en el mapa de UEFI**, aunque la tabla MCFG de [[ACPI]] diga exactamente dónde está.
-2. **Deja huecos donde viven los [[BAR|BARs]].** Direcciones que responden a un aparato y
-   que el mapa no menciona. Alcanzarlas no es lo mismo que saber qué hay.
-3. **Dice "libre" sobre memoria que no lo es del todo.** En UEFI, `BootServicesData` pasa a
-   libre recién *después* de salir — y la pila sobre la que corre el propio código de
-   arranque suele salir de ahí.
-4. **Tiene bugs, y son famosos.** Linux mantiene tablas enteras de *quirks* indexadas por
-   fabricante y modelo para desmentir a firmwares concretos.
+1. **Informa lo que configuró, no lo que hay.** Un rango que él no tocó puede no aparecer. El caso concreto de este proyecto: en aarch64 la ventana de configuración de PCIe **no está en el mapa de UEFI**, aunque la tabla MCFG de [[ACPI]] diga exactamente dónde está.
+2. **Deja huecos donde viven los [[BAR|BARs]].** Direcciones que responden a un aparato y que el mapa no menciona. Alcanzarlas no es lo mismo que saber qué hay.
+3. **Dice "libre" sobre memoria que no lo es del todo.** En UEFI, `BootServicesData` pasa a libre recién *después* de salir — y la pila sobre la que corre el propio código de arranque suele salir de ahí.
+4. **Tiene bugs, y son famosos.** Linux mantiene tablas enteras de *quirks* indexadas por fabricante y modelo para desmentir a firmwares concretos.
 
-De acá sale **P4** ("la máquina se describe a sí misma; el agente no asume nada"), y de
-paso su límite: P4 dice que hay que preguntarle a la máquina en vez de suponer,
-**no** que lo que la máquina contesta sea completo. Un kernel honesto tiene que poder
-decir "esto no me lo dijo nadie". Ver [[18-Lo-que-la-maquina-no-dice]].
+De acá sale **P4** ("la máquina se describe a sí misma; el agente no asume nada"), y de paso su límite: P4 dice que hay que preguntarle a la máquina en vez de suponer, **no** que lo que la máquina contesta sea completo. Un kernel honesto tiene que poder decir "esto no me lo dijo nadie". Ver [[18-Lo-que-la-maquina-no-dice]].
 
 ## Cómo lo hace Linux
 
-El mapa que el firmware entrega en x86 se llama `e820`, y sale crudo en el diario del
-arranque:
+El mapa que el firmware entrega en x86 se llama `e820`, y sale crudo en el diario del arranque:
 
 ```bash
 sudo dmesg | grep -iE 'BIOS-e820|efi:'    # el mapa, tal como lo dio el firmware
@@ -96,9 +67,7 @@ ls /sys/firmware/                          # acpi/ dmi/ efi/ devicetree/, según
 sudo dmidecode -t bios -t system           # qué firmware es, versión y fecha
 ```
 
-Adentro del kernel, `arch/x86/kernel/e820.c` lo recibe y lo sanea: hay funciones dedicadas
-a **recortar** rangos que el firmware informó mal. Los quirks entran por
-`dmi_check_system`, que compara fabricante y modelo contra una lista y prende parches.
+Adentro del kernel, `arch/x86/kernel/e820.c` lo recibe y lo sanea: hay funciones dedicadas a **recortar** rangos que el firmware informó mal. Los quirks entran por `dmi_check_system`, que compara fabricante y modelo contra una lista y prende parches.
 
 Y para el otro sentido de la palabra:
 
@@ -115,41 +84,18 @@ sudo dmesg | grep -i 'firmware'
 | **Decisiones** | D25 (todo se le pide en una ventana), D24 (el entorno de arranque es un eje propio) |
 | **Dónde vive** | `boot-uefi/src/lib.rs:632#unsafe fn normalize`, `boot-uefi/src/lib.rs:662#fn classify`, `boot-uefi/src/lib.rs:497#unsafe fn add_pcie_window` |
 
-Todo el trato con el firmware está en un solo crate, `boot-uefi/`, que **no lleva `asm!`
-ni `target_arch`**: cómo se le pide el mapa de memoria varía por entorno de arranque, no
-por arquitectura, y el formato del mapa no varía por ninguno de los dos (D24).
+Todo el trato con el firmware está en un solo crate, `boot-uefi/`, que **no lleva `asm!` ni `target_arch`**: cómo se le pide el mapa de memoria varía por entorno de arranque, no por arquitectura, y el formato del mapa no varía por ninguno de los dos (D24).
 
 Cuatro cosas que hace, y las cuatro son desconfianza aplicada:
 
-1. **Traduce en vez de copiar.** Los quince tipos de memoria de UEFI se pasan a un
-   vocabulario chico y propio (`classify`): libre, del kernel, del firmware, MMIO, rota,
-   tablas de ACPI. El comentario al lado de `BootServicesCode/Data` deja anotado que son
-   libres *porque ya salimos*, y que la pila del arranque sale de ahí.
-2. **La cacheabilidad la toma del atributo, no de la clase.** UEFI informa región por
-   región qué modos de caché soporta, y eso es más preciso que deducirlo
-   (`boot-uefi/src/lib.rs:711#fn caching_of`).
-3. **Corrige el mapa donde el firmware calló.** La ventana de configuración de PCIe se
-   agrega al mapa desde la MCFG cuando el firmware no la informó, **antes de que nadie lo
-   lea**. Sin eso, el kernel publicaba una dirección que él mismo hacía inalcanzable —o
-   sea, el kernel era la razón por la que no se podía usar un aparato, que es exactamente
-   lo que prohíbe P1.
-4. **Se reserva lo que necesita, en el mapa.** La página baja por la que pasa el trampolín
-   que arranca los otros núcleos está marcada libre por el firmware
-   (`boot-uefi/src/lib.rs:544#pub unsafe fn reserve_for_kernel`). Se arregla en el mapa y
-   **no** con un chequeo al reclamar, porque un chequeo haría que `describe memory` diga
-   "libre" sobre algo que `mem.claim` rechaza: dos respuestas distintas a la misma
-   pregunta.
+1. **Traduce en vez de copiar.** Los quince tipos de memoria de UEFI se pasan a un vocabulario chico y propio (`classify`): libre, del kernel, del firmware, MMIO, rota, tablas de ACPI. El comentario al lado de `BootServicesCode/Data` deja anotado que son libres *porque ya salimos*, y que la pila del arranque sale de ahí.
+2. **La cacheabilidad la toma del atributo, no de la clase.** UEFI informa región por región qué modos de caché soporta, y eso es más preciso que deducirlo (`boot-uefi/src/lib.rs:711#fn caching_of`).
+3. **Corrige el mapa donde el firmware calló.** La ventana de configuración de PCIe se agrega al mapa desde la MCFG cuando el firmware no la informó, **antes de que nadie lo lea**. Sin eso, el kernel publicaba una dirección que él mismo hacía inalcanzable —o sea, el kernel era la razón por la que no se podía usar un aparato, que es exactamente lo que prohíbe P1.
+4. **Se reserva lo que necesita, en el mapa.** La página baja por la que pasa el trampolín que arranca los otros núcleos está marcada libre por el firmware (`boot-uefi/src/lib.rs:544#pub unsafe fn reserve_for_kernel`). Se arregla en el mapa y **no** con un chequeo al reclamar, porque un chequeo haría que `describe memory` diga "libre" sobre algo que `mem.claim` rechaza: dos respuestas distintas a la misma pregunta.
 
-Y lo que cae en un hueco del mapa no se disfraza: se entrega con la clase `unreported`,
-que **no es `mmio`** (`kernel-core/src/memory.rs:131#Kind::Unreported`). El agente se lleva
-el rango y la advertencia de que la máquina nunca dijo qué hay ahí.
+Y lo que cae en un hueco del mapa no se disfraza: se entrega con la clase `unreported`, que **no es `mmio`** (`kernel-core/src/memory.rs:131#Kind::Unreported`). El agente se lleva el rango y la advertencia de que la máquina nunca dijo qué hay ahí.
 
-**Qué se quitó:** no hay tabla de quirks —una lista de firmwares mentirosos es
-exactamente el tipo de política que P6 le deja al agente—, no hay drivers de firmware de
-aparatos, y **los Runtime Services de UEFI no se usan nunca**: el campo existe en la
-estructura sólo para que los desplazamientos de los demás den bien
-(`boot-uefi/src/lib.rs:87#runtime_services`). Después de `ExitBootServices` el firmware,
-para este kernel, dejó de existir.
+**Qué se quitó:** no hay tabla de quirks —una lista de firmwares mentirosos es exactamente el tipo de política que P6 le deja al agente—, no hay drivers de firmware de aparatos, y **los Runtime Services de UEFI no se usan nunca**: el campo existe en la estructura sólo para que los desplazamientos de los demás den bien (`boot-uefi/src/lib.rs:87#runtime_services`). Después de `ExitBootServices` el firmware, para este kernel, dejó de existir.
 
 ## Cómo se ve roto
 

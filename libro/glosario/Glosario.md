@@ -5,14 +5,12 @@ estado: vivo
 
 # Glosario
 
-**Una línea por término, y un enlace.** Acá no se explica nada: si necesitás más de una
-línea, el término tiene su nota de concepto y está enlazado.
+**Una línea por término, y un enlace.** Acá no se explica nada: si necesitás más de una línea, el término tiene su nota de concepto y está enlazado.
 
 Si dos términos te suenan iguales, el lugar es [[Falsos-amigos]].
 
 > [!note] Cómo crece
-> Cada vez que aparece un término nuevo en un capítulo, entra acá con su línea. Un glosario
-> que se escribe al final no sirve: el que sabe ya no se acuerda de qué era confuso.
+> Cada vez que aparece un término nuevo en un capítulo, entra acá con su línea. Un glosario que se escribe al final no sirve: el que sabe ya no se acuerda de qué era confuso.
 
 ---
 

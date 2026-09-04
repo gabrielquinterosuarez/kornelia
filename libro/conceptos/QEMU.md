@@ -10,24 +10,15 @@ capitulos: [00-Como-mirar-una-maquina, 11-Reset-vector-firmware-BIOS-y-UEFI]
 
 # QEMU
 
-> El programa que arma la máquina donde corre este kernel: procesador, RAM y una lista de
-> aparatos que vos elegís. Es la herramienta, no el concepto.
+> El programa que arma la máquina donde corre este kernel: procesador, RAM y una lista de aparatos que vos elegís. Es la herramienta, no el concepto.
 
-La teoría —emulación contra virtualización, atrapar y emular, VT-x y EL2, virtio,
-passthrough— está en [[Maquina-virtual]] y no se repite acá. **Leela primero.** Esta nota es
-sobre *usar* QEMU: qué banderas importan, cómo se mira una máquina que se murió, y qué
-aparatos lleva a propósito la máquina de prueba de este proyecto.
+La teoría —emulación contra virtualización, atrapar y emular, VT-x y EL2, virtio, passthrough— está en [[Maquina-virtual]] y no se repite acá. **Leela primero.** Esta nota es sobre *usar* QEMU: qué banderas importan, cómo se mira una máquina que se murió, y qué aparatos lleva a propósito la máquina de prueba de este proyecto.
 
 ## Qué problema resuelve
 
-Escribir un kernel es escribir el programa que manda en la máquina, y **el programa que
-manda en la máquina no se puede depurar desde adentro**: cuando se rompe, se lleva puesto
-al depurador. QEMU corre el kernel **como un proceso normal de tu Debian**, así que lo que
-adentro es "la máquina se colgó", desde afuera es un proceso al que le podés preguntar
-todo: los registros, la memoria física, el mapa del bus.
+Escribir un kernel es escribir el programa que manda en la máquina, y **el programa que manda en la máquina no se puede depurar desde adentro**: cuando se rompe, se lleva puesto al depurador. QEMU corre el kernel **como un proceso normal de tu Debian**, así que lo que adentro es "la máquina se colgó", desde afuera es un proceso al que le podés preguntar todo: los registros, la memoria física, el mapa del bus.
 
-Y arma la máquina **por partes**. Que el IOMMU y el motor de DMA sean dos banderas de
-línea de comandos es lo que hace posible probar contra hardware que no tenés.
+Y arma la máquina **por partes**. Que el IOMMU y el motor de DMA sean dos banderas de línea de comandos es lo que hace posible probar contra hardware que no tenés.
 
 ## Cómo funciona
 
@@ -47,19 +38,13 @@ Una invocación de QEMU es una lista de piezas. Las que importan:
 | `-no-reboot` | Que un triple fault **apague** en vez de reiniciar. | Sin esto, un kernel roto reinicia para siempre y no se ve el error. |
 | `-s -S` | Servidor de gdb en el puerto 1234, **congelado antes de la primera instrucción**. | Ver abajo. |
 
-La forma normal de `-drive` + `-device` engaña la primera vez: son **dos** piezas, el medio
-y el controlador. El archivo se declara sin conexión y después se le enchufa un
-controlador NVMe, o SATA, o virtio. Es exactamente cómo está armado en una máquina real,
-y por eso `-drive file=...,if=none,id=payload` y `-device nvme,...,drive=payload` son dos
-líneas y no una.
+La forma normal de `-drive` + `-device` engaña la primera vez: son **dos** piezas, el medio y el controlador. El archivo se declara sin conexión y después se le enchufa un controlador NVMe, o SATA, o virtio. Es exactamente cómo está armado en una máquina real, y por eso `-drive file=...,if=none,id=payload` y `-device nvme,...,drive=payload` son dos líneas y no una.
 
 ## El monitor: lo más parecido a un debugger cuando el kernel se murió
 
-QEMU tiene una consola propia que habla **de la máquina**, no de lo que corre adentro. Es
-la herramienta más importante de esta nota, porque funciona igual con la máquina colgada.
+QEMU tiene una consola propia que habla **de la máquina**, no de lo que corre adentro. Es la herramienta más importante de esta nota, porque funciona igual con la máquina colgada.
 
-Se llega con `-monitor stdio`, `-monitor telnet:127.0.0.1:5555,server,nowait`, o
-—si el serie no está crudo— con `Ctrl-A C`.
+Se llega con `-monitor stdio`, `-monitor telnet:127.0.0.1:5555,server,nowait`, o —si el serie no está crudo— con `Ctrl-A C`.
 
 | Comando | Qué muestra |
 |---|---|
@@ -74,25 +59,17 @@ Se llega con `-monitor stdio`, `-monitor telnet:127.0.0.1:5555,server,nowait`, o
 
 Dos que valen por sí solas:
 
-- **`info mtree` contesta "¿por qué mi lectura devuelve ceros?"** sin tocar el kernel. Si
-  la dirección no aparece en el árbol, no hay nadie del otro lado.
-- **`info registers` con la máquina muda** dice si el procesador está girando en un
-  handler, esperando en `hlt`/`wfi`, o parado en una dirección que no es de tu código.
+- **`info mtree` contesta "¿por qué mi lectura devuelve ceros?"** sin tocar el kernel. Si la dirección no aparece en el árbol, no hay nadie del otro lado.
+- **`info registers` con la máquina muda** dice si el procesador está girando en un handler, esperando en `hlt`/`wfi`, o parado en una dirección que no es de tu código.
 
-Y para lo pesado, `-s -S`: QEMU levanta un servidor de gdb y **no ejecuta ni una
-instrucción** hasta que alguien se conecte. Del otro lado, `gdb -ex 'target remote :1234'`.
-Así se puede poner un breakpoint en la primerísima instrucción del firmware, mucho antes de
-que exista tu kernel — que es la única forma de depurar el arranque.
+Y para lo pesado, `-s -S`: QEMU levanta un servidor de gdb y **no ejecuta ni una instrucción** hasta que alguien se conecte. Del otro lado, `gdb -ex 'target remote :1234'`. Así se puede poner un breakpoint en la primerísima instrucción del firmware, mucho antes de que exista tu kernel — que es la única forma de depurar el arranque.
 
 > [!warning] gdb necesita símbolos y tu kernel es un PE
-> `target remote` funciona sin nada, pero solo da direcciones. Para ver nombres de
-> funciones hay que cargarle los símbolos aparte, y ahí aparece que el binario es
-> `.efi`, no un ELF: ver [[ELF-y-PE]].
+> `target remote` funciona sin nada, pero solo da direcciones. Para ver nombres de funciones hay que cargarle los símbolos aparte, y ahí aparece que el binario es `.efi`, no un ELF: ver [[ELF-y-PE]].
 
 ## Qué se ve distinto entre emulado y con KVM
 
-No es solo la velocidad, y por eso el proyecto tiene las dos formas de correr
-(`./scripts/client.py --kvm`). Lo que cambia:
+No es solo la velocidad, y por eso el proyecto tiene las dos formas de correr (`./scripts/client.py --kvm`). Lo que cambia:
 
 | | Emulado (TCG) | Con KVM |
 |---|---|---|
@@ -105,17 +82,12 @@ No es solo la velocidad, y por eso el proyecto tiene las dos formas de correr
 
 De ahí salen dos síntomas simétricos, y saber cuál es cuál ahorra un día:
 
-- **Anda emulado, se rompe con KVM** → casi siempre falta una barrera. Es un bug **real**
-  que la emulación tapaba.
-- **Anda con KVM, se rompe emulado** → casi siempre un plazo. `exec {deadline_ms}` medido
-  en tiempo real se vence cuando todo va cien veces más lento. Ver [[39-Plazos-y-cortes]].
+- **Anda emulado, se rompe con KVM** → casi siempre falta una barrera. Es un bug **real** que la emulación tapaba.
+- **Anda con KVM, se rompe emulado** → casi siempre un plazo. `exec {deadline_ms}` medido en tiempo real se vence cuando todo va cien veces más lento. Ver [[39-Plazos-y-cortes]].
 
 ## Cómo lo hace Kornelia
 
-Las dos máquinas de prueba están en `scripts/run-x86_64.sh` y `scripts/run-aarch64.sh`, y
-**llevan aparatos a propósito**. No son adorno: cada uno existe para que algo del kernel se
-pueda probar contra hardware en vez de contra la palabra del kernel (P4, y
-[[58-Una-prueba-que-no-puede-pasar-por-accidente]]).
+Las dos máquinas de prueba están en `scripts/run-x86_64.sh` y `scripts/run-aarch64.sh`, y **llevan aparatos a propósito**. No son adorno: cada uno existe para que algo del kernel se pueda probar contra hardware en vez de contra la palabra del kernel (P4, y [[58-Una-prueba-que-no-puede-pasar-por-accidente]]).
 
 | Bandera | Por qué está |
 |---|---|
@@ -129,32 +101,18 @@ pueda probar contra hardware en vez de contra la palabra del kernel (P4, y
 
 ### D26: el serie va crudo
 
-`scripts/run-x86_64.sh:73#SERIAL=(-serial stdio)` — **sin** el prefijo `mon:`, y no es un
-olvido.
+`scripts/run-x86_64.sh:73#SERIAL=(-serial stdio)` — **sin** el prefijo `mon:`, y no es un olvido.
 
-Con `mon:stdio`, QEMU multiplexa su monitor sobre la misma terminal, y ese multiplexor
-**se come el byte `0x01`** (Ctrl-A) como escape junto con el que le sigue. Por ese puerto
-viaja CBOR (D6) y, más adelante, código máquina: ahí `0x01` es un byte tan legítimo como
-cualquier otro, y perderlo **corrompe el mensaje en silencio**.
+Con `mon:stdio`, QEMU multiplexa su monitor sobre la misma terminal, y ese multiplexor **se come el byte `0x01`** (Ctrl-A) como escape junto con el que le sigue. Por ese puerto viaja CBOR (D6) y, más adelante, código máquina: ahí `0x01` es un byte tan legítimo como cualquier otro, y perderlo **corrompe el mensaje en silencio**.
 
-El costo es que `Ctrl-A X` no sale. **De Kornelia se sale con `Ctrl-C`.** Y si querés el
-monitor, se pide por otro lado: `-monitor telnet:127.0.0.1:5555,server,nowait`.
+El costo es que `Ctrl-A X` no sale. **De Kornelia se sale con `Ctrl-C`.** Y si querés el monitor, se pide por otro lado: `-monitor telnet:127.0.0.1:5555,server,nowait`.
 
-Con `SOCKET=<ruta>` el cable sale por un socket Unix en vez de por la terminal, y entonces
-la máquina **sobrevive a que el cliente se vaya** (D14): mandás algo largo, cortás, y
-volvés a buscar el resultado.
+Con `SOCKET=<ruta>` el cable sale por un socket Unix en vez de por la terminal, y entonces la máquina **sobrevive a que el cliente se vaya** (D14): mandás algo largo, cortás, y volvés a buscar el resultado.
 
 ## Cómo se ve roto
 
 > [!danger] Una prueba que pasa porque no pasa nada
-> El aparato `edu` **recorta la dirección de DMA a 28 bits** si no se le dice otra cosa. En
-> aarch64 la RAM arranca en 1 GiB, así que ningún destino podía llegar nunca: el IOMMU
-> parecía estar bloqueando perfectamente, y en realidad no ocurría nada.
->
-> "Bloqueado" y "nunca pasó nada" **se ven idénticos desde afuera**. Se encontró booteando
-> sin IOMMU y mirando: si la cosa bloqueada no ocurre tampoco sin el bloqueo, la prueba no
-> prueba. En x86_64 no se veía porque ahí la RAM arranca en cero. De ahí
-> `dma_mask=0xffffffffffff`, en las dos.
+> El aparato `edu` **recorta la dirección de DMA a 28 bits** si no se le dice otra cosa. En aarch64 la RAM arranca en 1 GiB, así que ningún destino podía llegar nunca: el IOMMU parecía estar bloqueando perfectamente, y en realidad no ocurría nada. "Bloqueado" y "nunca pasó nada" **se ven idénticos desde afuera**. Se encontró booteando sin IOMMU y mirando: si la cosa bloqueada no ocurre tampoco sin el bloqueo, la prueba no prueba. En x86_64 no se veía porque ahí la RAM arranca en cero. De ahí `dma_mask=0xffffffffffff`, en las dos.
 
 | Síntoma | Causa |
 |---|---|

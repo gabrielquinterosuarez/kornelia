@@ -10,12 +10,10 @@ conceptos: []
 # PNN · <Título>
 
 > [!success] Qué vas a ver si funciona
-> Decilo **antes** de los pasos, y decilo concreto: un número, un nombre, una línea.
-> Si la práctica puede "funcionar" sin que veas nada distinto, no prueba nada.
+> Decilo **antes** de los pasos, y decilo concreto: un número, un nombre, una línea. Si la práctica puede "funcionar" sin que veas nada distinto, no prueba nada.
 
 > [!danger] Riesgo
-> *(borrar si la clase es `mirar`)* Esta práctica cuelga la máquina a propósito.
-> Corre en la VM de [[P00-Armar-la-VM-de-practicas]], no en tu Debian.
+> *(borrar si la clase es `mirar`)* Esta práctica cuelga la máquina a propósito. Corre en la VM de [[P00-Armar-la-VM-de-practicas]], no en tu Debian.
 
 ## Contra Linux
 

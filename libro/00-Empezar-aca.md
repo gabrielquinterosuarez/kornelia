@@ -6,15 +6,9 @@ estado: vivo
 # El kernel desde abajo
 
 > [!info] Dos nombres provisorios
-> El del libro y el del kernel. Mientras no haya otro, en la prosa se escribe
-> **Kornelia** (con mayúscula); `kornelia/` en minúscula solo cuando es la ruta real
-> de una carpeta. Cambiarlo después es un reemplazo sobre el vault y nada más.
-> Ver [[_El-nombre]].
+> El del libro y el del kernel. Mientras no haya otro, en la prosa se escribe **Kornelia** (con mayúscula); `kornelia/` en minúscula solo cuando es la ruta real de una carpeta. Cambiarlo después es un reemplazo sobre el vault y nada más. Ver [[_El-nombre]].
 
-Un libro sobre **cómo funciona un kernel**, escrito desde el silicio hacia arriba, que
-usa un kernel de verdad —este— como caso de estudio en cada capítulo. La diferencia con
-los libros que ya existen es una columna: no solo *cómo lo hace Linux*, sino **qué se
-puede quitar y qué pasa cuando se quita**.
+Un libro sobre **cómo funciona un kernel**, escrito desde el silicio hacia arriba, que usa un kernel de verdad —este— como caso de estudio en cada capítulo. La diferencia con los libros que ya existen es una columna: no solo *cómo lo hace Linux*, sino **qué se puede quitar y qué pasa cuando se quita**.
 
 - **Cómo se estudia con esto** → [[El-metodo]]
 - **Qué es lo que no entendí todavía** → [[dudas/_Como-se-usa-esta-carpeta|dudas/]]
@@ -25,15 +19,13 @@ puede quitar y qué pasa cuando se quita**.
 
 ## Parte 0 · Cómo mirar
 
-Sin herramientas, una práctica es una receta. Este capítulo va primero porque todos los
-demás lo usan.
+Sin herramientas, una práctica es una receta. Este capítulo va primero porque todos los demás lo usan.
 
 - [[00-Como-mirar-una-maquina]] — qué le pregunto a Linux, qué le pregunto al silicio, y cómo se depura algo que se quedó mudo.
 
 ## Parte I · La máquina antes del kernel
 
-Acá no hay kernel todavía. Hay silicio, y hace falta entender qué le pide un kernel
-al silicio antes de entender qué hace el kernel.
+Acá no hay kernel todavía. Hay silicio, y hace falta entender qué le pide un kernel al silicio antes de entender qué hace el kernel.
 
 - [[01-El-reloj-y-el-transistor]] — por qué la computadora avanza a saltos y qué es un "ciclo".
 - [[02-Registros-y-RAM-no-son-lo-mismo]] — la jerarquía, y por qué el kernel se pasa la vida moviendo cosas entre las dos.
@@ -135,32 +127,34 @@ Cada capa vacía es una decisión, y explicarla obliga a entender la capa (P2).
 
 ## Los conceptos
 
-El libro se lee por capítulos; **se consulta por conceptos**. Cada uno es una ficha
-autónoma con el mismo molde: qué problema resuelve, cómo funciona, cómo lo hace Linux,
-cómo lo hace Kornelia y **qué se quitó**, cómo se ve roto, y una práctica.
+El libro se lee por capítulos; **se consulta por conceptos**. Cada uno es una ficha autónoma con el mismo molde: qué problema resuelve, cómo funciona, cómo lo hace Linux, cómo lo hace Kornelia y **qué se quitó**, cómo se ve roto, y una práctica.
 
-**El silicio**
+#### El silicio
+
 [[Flip-flop]] · [[Registro]] · [[Jerarquia-de-memoria]] · [[Cache]] · [[Bus]] · [[Modo-privilegiado]]
 
-**Memoria**
+#### Memoria
+
 [[MMU]] · [[Memoria-virtual]] · [[Tabla-de-paginas]] · [[Pagina]] · [[TLB]] · [[Espacio-de-direcciones]]
 
-**Aparatos**
+#### Aparatos
+
 [[MMIO]] · [[PCIe]] · [[BAR]] · [[DMA]] · [[IOMMU]] · [[NVMe]] · [[UART]] · [[Driver]]
 
-**Interrupciones y fallos**
+#### Interrupciones y fallos
+
 [[Interrupcion]] · [[Handler]] · [[MSI]] · [[Fault]] · [[Oops-y-panic]] · [[Syscall]]
 
-**Arranque y descripción de la máquina**
+#### Arranque y descripción de la máquina
+
 [[Firmware]] · [[UEFI]] · [[ACPI]] · [[Device-tree]] · [[ELF-y-PE]]
 
-**Herramientas y entorno**
+#### Herramientas y entorno
+
 [[Maquina-virtual]] · [[QEMU]] · [[Procfs-y-sysfs]] · [[Modulo-de-kernel]]
 
 > [!tip] Si no sabés por dónde empezar
-> [[Falsos-amigos]] primero. Casi toda la confusión inicial en sistemas es vocabulario, no
-> conceptos: núcleo/kernel/core, interrupción/excepción/trap/fault, y las cuatro clases de
-> dirección que parecen la misma.
+> [[Falsos-amigos]] primero. Casi toda la confusión inicial en sistemas es vocabulario, no conceptos: núcleo/kernel/core, interrupción/excepción/trap/fault, y las cuatro clases de dirección que parecen la misma.
 
 ## Dónde voy
 

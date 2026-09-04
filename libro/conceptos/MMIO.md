@@ -10,28 +10,17 @@ capitulos: [04-El-bus-tocar-algo-que-no-es-memoria, 45-Un-registro-no-es-RAM]
 
 # MMIO
 
-> Hablarle a un aparato **escribiendo en direcciones que no son memoria**. La dirección
-> existe, el chip de RAM no.
+> Hablarle a un aparato **escribiendo en direcciones que no son memoria**. La dirección existe, el chip de RAM no.
 
-*Memory-Mapped I/O.* Es el mecanismo por el que un kernel controla absolutamente todo el
-hardware moderno, y la idea entera cabe en una frase: algunas direcciones, en vez de llegar
-a la RAM, llegan a un aparato.
+*Memory-Mapped I/O.* Es el mecanismo por el que un kernel controla absolutamente todo el hardware moderno, y la idea entera cabe en una frase: algunas direcciones, en vez de llegar a la RAM, llegan a un aparato.
 
 ## Qué problema resuelve
 
-Un procesador sabe hacer dos cosas con el mundo exterior: leer de una dirección y escribir
-en una dirección. Si le quisieras agregar una forma nueva de hablarle a cada clase de
-aparato, harían falta instrucciones nuevas por aparato — y el juego de instrucciones es
-silicio, no se puede extender.
+Un procesador sabe hacer dos cosas con el mundo exterior: leer de una dirección y escribir en una dirección. Si le quisieras agregar una forma nueva de hablarle a cada clase de aparato, harían falta instrucciones nuevas por aparato — y el juego de instrucciones es silicio, no se puede extender.
 
-La solución es no agregar nada: **reusar las direcciones**. El aparato se hace pasar por
-memoria. Escribir un 1 en cierta dirección es apretar un botón del aparato; leer otra es
-mirar su tablero.
+La solución es no agregar nada: **reusar las direcciones**. El aparato se hace pasar por memoria. Escribir un 1 en cierta dirección es apretar un botón del aparato; leer otra es mirar su tablero.
 
-x86 tiene además un mecanismo aparte y anterior —los **puertos de I/O**, con instrucciones
-propias `in` y `out` y un espacio de 65.536 direcciones separado— que es de dónde viene el
-famoso `0x3F8` del [[UART|cable serie]]. Es historia: todo lo nuevo es MMIO, y ARM y RISC-V
-nunca tuvieron puertos.
+x86 tiene además un mecanismo aparte y anterior —los **puertos de I/O**, con instrucciones propias `in` y `out` y un espacio de 65.536 direcciones separado— que es de dónde viene el famoso `0x3F8` del [[UART|cable serie]]. Es historia: todo lo nuevo es MMIO, y ARM y RISC-V nunca tuvieron puertos.
 
 ## Cómo funciona
 
@@ -44,47 +33,31 @@ flowchart LR
     BUS -->|nadie| ERR[Abort / ceros / basura]
 ```
 
-Quién responde a cada rango lo decide un árbol de ruteo del bus, y **quién lo configura es
-el firmware o el kernel**, escribiendo los [[17-PCIe-buses-funciones-y-BARs|BARs]] del
-aparato. Un aparato no elige su dirección: se la asignan.
+Quién responde a cada rango lo decide un árbol de ruteo del bus, y **quién lo configura es el firmware o el kernel**, escribiendo los [[17-PCIe-buses-funciones-y-BARs|BARs]] del aparato. Un aparato no elige su dirección: se la asignan.
 
-La rama de abajo es la que hace daño: si nadie responde, lo que pasa **depende de la
-arquitectura**, y eso está en la sección de cómo se rompe.
+La rama de abajo es la que hace daño: si nadie responde, lo que pasa **depende de la arquitectura**, y eso está en la sección de cómo se rompe.
 
 ## Las tres reglas que no valen para la RAM
 
-Un registro de aparato se parece a memoria y se comporta distinto en tres cosas. Las tres
-producen bugs que no se ven venir.
+Un registro de aparato se parece a memoria y se comporta distinto en tres cosas. Las tres producen bugs que no se ven venir.
 
 ### 1. No se puede cachear
 
-Si la escritura se queda en la [[05-Caches-y-la-primera-mentira-util|caché]], nunca llega
-al aparato. Si la lectura sale de la caché, devuelve la copia vieja en vez del valor de
-ahora — y el valor de ahora es justamente el punto: un registro de estado **cambia solo**.
+Si la escritura se queda en la [[05-Caches-y-la-primera-mentira-util|caché]], nunca llega al aparato. Si la lectura sale de la caché, devuelve la copia vieja en vez del valor de ahora — y el valor de ahora es justamente el punto: un registro de estado **cambia solo**.
 
-Entonces el mapeo se marca como "no cacheable" o "dispositivo" en la tabla de páginas.
-En Kornelia eso es D12 y vive en `kernel-x86_64/src/paging.rs:68#pub unsafe fn map_device`; el
-comentario de al lado (`kernel-x86_64/src/paging.rs:54#PCD: cache disable`) explica qué bits
-se prenden.
+Entonces el mapeo se marca como "no cacheable" o "dispositivo" en la tabla de páginas. En Kornelia eso es D12 y vive en `kernel-x86_64/src/paging.rs:68#pub unsafe fn map_device`; el comentario de al lado (`kernel-x86_64/src/paging.rs:54#PCD: cache disable`) explica qué bits se prenden.
 
 ### 2. Leer tiene efecto
 
-En RAM, leer dos veces da lo mismo y no cambia nada, así que el compilador puede borrar la
-segunda lectura o reordenarla. En un aparato, leer un registro puede **vaciar una cola** o
-**borrar una bandera de interrupción**. Por eso el acceso va marcado `volatile`: "esto
-ocurre exactamente las veces que escribí y en el orden que escribí".
+En RAM, leer dos veces da lo mismo y no cambia nada, así que el compilador puede borrar la segunda lectura o reordenarla. En un aparato, leer un registro puede **vaciar una cola** o **borrar una bandera de interrupción**. Por eso el acceso va marcado `volatile`: "esto ocurre exactamente las veces que escribí y en el orden que escribí".
 
-`volatile` **no** sirve para concurrencia entre núcleos; para eso hacen falta
-[[42-Ordenamiento-de-memoria|barreras y atómicos]]. Confundir las dos cosas es clásico.
+`volatile` **no** sirve para concurrencia entre núcleos; para eso hacen falta [[42-Ordenamiento-de-memoria|barreras y atómicos]]. Confundir las dos cosas es clásico.
 
 ### 3. El ancho importa
 
-Y esta es la que más caro sale. Muchos registros **solo aceptan accesos de su ancho
-exacto**: un registro de 4 bytes leído de a un byte no devuelve el primer byte, devuelve
-cualquier cosa — o mata la máquina.
+Y esta es la que más caro sale. Muchos registros **solo aceptan accesos de su ancho exacto**: un registro de 4 bytes leído de a un byte no devuelve el primer byte, devuelve cualquier cosa — o mata la máquina.
 
-Por eso `mem.read` y `mem.write` de Kornelia toman `width`, y por eso los accesos crudos
-tienen esa firma: `kernel-x86_64/src/guarded.rs:113#pub unsafe fn read`.
+Por eso `mem.read` y `mem.write` de Kornelia toman `width`, y por eso los accesos crudos tienen esa firma: `kernel-x86_64/src/guarded.rs:113#pub unsafe fn read`.
 
 ## Cómo lo hace Linux
 
@@ -97,19 +70,13 @@ writel(1, base + 0x08);                             // escritura de 4 bytes
 iounmap(base);
 ```
 
-`readl`/`writel` (*long* = 4 bytes; hay `readb`, `readw`, `readq`) existen para que **el
-ancho esté en el nombre de la función** y no se pueda equivocar por accidente. Y el tipo
-`__iomem` hace que el verificador estático se queje si alguien intenta usar ese puntero como
-memoria normal. Las dos son defensas contra las tres reglas de arriba.
+`readl`/`writel` (*long* = 4 bytes; hay `readb`, `readw`, `readq`) existen para que **el ancho esté en el nombre de la función** y no se pueda equivocar por accidente. Y el tipo `__iomem` hace que el verificador estático se queje si alguien intenta usar ese puntero como memoria normal. Las dos son defensas contra las tres reglas de arriba.
 
-Desde el espacio de usuario se puede ver el mapa (`sudo cat /proc/iomem`) y, con permiso,
-tocarlo por `/sys/bus/pci/devices/*/resource0`. Ver [[P01-Preguntarle-a-Linux-que-maquina-es]].
+Desde el espacio de usuario se puede ver el mapa (`sudo cat /proc/iomem`) y, con permiso, tocarlo por `/sys/bus/pci/devices/*/resource0`. Ver [[P01-Preguntarle-a-Linux-que-maquina-es]].
 
 ## Cómo lo hace Kornelia
 
-El kernel **no tiene drivers** (D4): quien toca los registros es el agente. Así que el
-kernel no ofrece `ioremap` ni `readl`, ofrece que el agente alcance el rango y lo lea con el
-ancho que él diga.
+El kernel **no tiene drivers** (D4): quien toca los registros es el agente. Así que el kernel no ofrece `ioremap` ni `readl`, ofrece que el agente alcance el rango y lo lea con el ancho que él diga.
 
 | | |
 |---|---|
@@ -119,30 +86,16 @@ ancho que él diga.
 
 Tres cosas de este kernel salen directo de que MMIO no es RAM:
 
-1. **La clase `unreported`.** Un rango que cae en un hueco del mapa —donde quedan los BARs
-   que el firmware no listó— se entrega con esa clase, que **no es `mmio`**
-   (`kernel-core/src/memory.rs:131#Kind::Unreported`). El agente se lleva el rango **y** la
-   advertencia de que la máquina nunca dijo qué hay ahí. Alcanzarlo no es enterarse (P4).
-2. **Se mapea aunque esté fuera del mapa.** Si el rango cae más arriba de lo que las tablas
-   cubren, el kernel lo mapea y reintenta en vez de contestar `unmapped`. No es comodidad:
-   en aarch64 los BARs de PCIe caen en 512 GiB y el mapa del firmware llega a 257, así que
-   el controlador NVMe era **inalcanzable** — o sea, el kernel era la razón por la que no se
-   podía usar un aparato, que es exactamente lo que prohíbe P1.
-3. **Un acceso rechazado no mata al kernel.** `mem.read`/`mem.write` corren en el camino del
-   protocolo, y ahí no había punto de recuperación. Ahora van con el mismo que usa `exec`,
-   armado alrededor de **una sola instrucción**, y el rechazo vuelve como `access-refused`
-   con la dirección que cortó (P5). Ver [[33-Recuperar-un-acceso-que-el-bus-rechaza]].
+1. **La clase `unreported`.** Un rango que cae en un hueco del mapa —donde quedan los BARs que el firmware no listó— se entrega con esa clase, que **no es `mmio`** (`kernel-core/src/memory.rs:131#Kind::Unreported`). El agente se lleva el rango **y** la advertencia de que la máquina nunca dijo qué hay ahí. Alcanzarlo no es enterarse (P4).
+2. **Se mapea aunque esté fuera del mapa.** Si el rango cae más arriba de lo que las tablas cubren, el kernel lo mapea y reintenta en vez de contestar `unmapped`. No es comodidad: en aarch64 los BARs de PCIe caen en 512 GiB y el mapa del firmware llega a 257, así que el controlador NVMe era **inalcanzable** — o sea, el kernel era la razón por la que no se podía usar un aparato, que es exactamente lo que prohíbe P1.
+3. **Un acceso rechazado no mata al kernel.** `mem.read`/`mem.write` corren en el camino del protocolo, y ahí no había punto de recuperación. Ahora van con el mismo que usa `exec`, armado alrededor de **una sola instrucción**, y el rechazo vuelve como `access-refused` con la dirección que cortó (P5). Ver [[33-Recuperar-un-acceso-que-el-bus-rechaza]].
 
 ## Cómo se ve roto
 
 > [!danger] El mismo error, dos síntomas opuestos
 > Un registro que solo acepta lecturas de 4 bytes, leído de a uno:
 > - en **x86_64** devuelve **ceros, en silencio** — se ve como si el aparato no estuviera;
-> - en **aarch64** lo rechaza el bus con un abort externo que **dejaba la máquina muda**.
->
-> El mismo pedido: en una arquitectura miente, en la otra mata. Es el mejor argumento
-> concreto para D22/D23 —las dos arquitecturas siempre en verde—: no es portabilidad, es
-> que cada una revela lo que la otra esconde.
+> - en **aarch64** lo rechaza el bus con un abort externo que **dejaba la máquina muda**. El mismo pedido: en una arquitectura miente, en la otra mata. Es el mejor argumento concreto para D22/D23 —las dos arquitecturas siempre en verde—: no es portabilidad, es que cada una revela lo que la otra esconde.
 
 | Síntoma | Causa |
 |---|---|

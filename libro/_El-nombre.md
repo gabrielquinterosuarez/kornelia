@@ -15,8 +15,7 @@ Mientras no haya otro:
 
 ## Cuando se decida el nombre
 
-Cambiar el vault es un reemplazo de texto sobre `libro/`. Cambiar el repo es otra cosa y
-no lo toca este libro.
+Cambiar el vault es un reemplazo de texto sobre `libro/`. Cambiar el repo es otra cosa y no lo toca este libro.
 
 ```bash
 grep -rl 'Kornelia' libro/ | xargs sed -i 's/Kornelia/NuevoNombre/g'
@@ -25,8 +24,7 @@ grep -rl 'Kornelia' libro/ | xargs sed -i 's/Kornelia/NuevoNombre/g'
 
 ## Candidatos
 
-*(Anotalos acá cuando aparezcan, con qué te gusta y qué no. Un nombre que se elige
-apurado se cambia dos veces.)*
+*(Anotalos acá cuando aparezcan, con qué te gusta y qué no. Un nombre que se elige apurado se cambia dos veces.)*
 
 | Nombre | A favor | En contra |
 |---|---|---|

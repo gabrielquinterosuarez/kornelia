@@ -5,9 +5,7 @@ estado: vivo
 
 # Falsos amigos
 
-Términos que **suenan igual y no lo son**, o que significan dos cosas distintas según
-quién los diga. Casi toda la confusión inicial en sistemas vive acá, y no es culpa tuya:
-son cuarenta años de vocabulario acumulado sin nadie que lo ordenara.
+Términos que **suenan igual y no lo son**, o que significan dos cosas distintas según quién los diga. Casi toda la confusión inicial en sistemas vive acá, y no es culpa tuya: son cuarenta años de vocabulario acumulado sin nadie que lo ordenara.
 
 Cuando algo no cierra, buscá acá antes que en el [[Glosario]].
 
@@ -29,8 +27,7 @@ En inglés son dos palabras; en español, una. Es la peor de todas y aparece en 
 
 ## 2. Interrupción, excepción, trap, fault, abort
 
-Cinco palabras para cosas que se parecen. Se distinguen por **quién las causa** y **si se
-puede volver**.
+Cinco palabras para cosas que se parecen. Se distinguen por **quién las causa** y **si se puede volver**.
 
 | Palabra | Quién la causa | ¿Se puede seguir? | Ejemplo |
 |---|---|---|---|
@@ -41,20 +38,13 @@ puede volver**.
 | **Abort** | Algo se rompió y **no se sabe dónde quedó**. | No de forma confiable. | Error del bus, corrupción de memoria, doble fallo. |
 
 > [!important] La diferencia entre fault y abort es de qué se puede recuperar
-> Un fault se puede reintentar porque el silicio garantiza que no alcanzó a cambiar nada.
-> Un abort no. Por eso [[32-Los-faults-como-datos|P5 dice "los faults son datos"]] y no
-> "los aborts son datos": no es una elección de diseño, es lo que el silicio permite.
+> Un fault se puede reintentar porque el silicio garantiza que no alcanzó a cambiar nada. Un abort no. Por eso [[32-Los-faults-como-datos|P5 dice "los faults son datos"]] y no "los aborts son datos": no es una elección de diseño, es lo que el silicio permite.
 
 Y una más, que no entra en la tabla:
 
-- **NMI** (*non-maskable interrupt*) — una interrupción que **no se puede tapar**. Existe
-  para el caso en que el código dijo "no me interrumpan" y hay que interrumpirlo igual.
-  Es el segundo escalón para [[39-Plazos-y-cortes|cortar un núcleo que se tapó los oídos]].
+- **NMI** (*non-maskable interrupt*) — una interrupción que **no se puede tapar**. Existe para el caso en que el código dijo "no me interrumpan" y hay que interrumpirlo igual. Es el segundo escalón para [[39-Plazos-y-cortes|cortar un núcleo que se tapó los oídos]].
 
-Detalle histórico que confunde: en x86 el **número** que identifica una excepción y el que
-identifica una interrupción de aparato viven en la **misma tabla** (la IDT), del 0 al 255.
-Los primeros 32 son excepciones; el resto los reparte el sistema. En ARM están separados
-por construcción. Ver [[30-Capturar-un-fault-IDT-y-vectores]].
+Detalle histórico que confunde: en x86 el **número** que identifica una excepción y el que identifica una interrupción de aparato viven en la **misma tabla** (la IDT), del 0 al 255. Los primeros 32 son excepciones; el resto los reparte el sistema. En ARM están separados por construcción. Ver [[30-Capturar-un-fault-IDT-y-vectores]].
 
 ---
 
@@ -74,15 +64,13 @@ Y el equivalente del primero en otras arquitecturas, que **no se llama anillo**:
 | aarch64 | Nivel de excepción (*EL*) | EL0 (usuario) … EL3 (firmware) — **el número sube al subir el privilegio** |
 | RISC-V | Modo | U (usuario), S (supervisor), M (máquina) |
 
-Que en x86 el privilegio alto sea el número **bajo** y en ARM el **alto** es una fuente
-inagotable de errores al leer código de las dos. Ver [[06-El-silicio-tiene-modos]].
+Que en x86 el privilegio alto sea el número **bajo** y en ARM el **alto** es una fuente inagotable de errores al leer código de las dos. Ver [[06-El-silicio-tiene-modos]].
 
 ---
 
 ## 4. Direcciones: física, virtual, de bus, IOVA
 
-Cuatro nombres para "un número que apunta a algo", y confundirlos es la causa clásica de
-que un [[46-DMA-el-aparato-lee-memoria-solo|DMA]] escriba en el lugar equivocado.
+Cuatro nombres para "un número que apunta a algo", y confundirlos es la causa clásica de que un [[46-DMA-el-aparato-lee-memoria-solo|DMA]] escriba en el lugar equivocado.
 
 | Nombre | Quién la usa | Qué significa |
 |---|---|---|
@@ -92,9 +80,7 @@ que un [[46-DMA-el-aparato-lee-memoria-solo|DMA]] escriba en el lugar equivocado
 | **IOVA** | El aparato, cuando hay [[47-IOMMU-VT-d-y-SMMUv3|IOMMU]]. | Una dirección virtual **del aparato**. El IOMMU la traduce igual que la MMU traduce la del procesador. |
 
 > [!warning] Un aparato no ve la memoria como la ve el procesador
-> Es la idea que más cuesta y la que hace falta para entender el IOMMU. El aparato tiene su
-> propia vista, con su propia tabla de traducción, y por omisión en Kornelia **está vacía**:
-> sin declarar nada, ningún aparato llega a la memoria (D8).
+> Es la idea que más cuesta y la que hace falta para entender el IOMMU. El aparato tiene su propia vista, con su propia tabla de traducción, y por omisión en Kornelia **está vacía**: sin declarar nada, ningún aparato llega a la memoria (D8).
 
 ---
 
@@ -106,8 +92,7 @@ que un [[46-DMA-el-aparato-lee-memoria-solo|DMA]] escriba en el lugar equivocado
 | **Segmento de un ejecutable** | Un pedazo de un archivo ELF o PE que se carga en memoria con ciertos permisos (código, datos, solo lectura). No tiene ninguna relación con el anterior. |
 | **Segmentación** (el concepto viejo) | Un esquema de memoria previo a la paginación, donde la memoria se dividía en segmentos de tamaño variable. Muerto en la práctica. La palabra sobrevive en `SIGSEGV`. |
 
-`SIGSEGV` —"violación de segmento"— casi nunca tiene que ver con segmentos: es un fallo de
-página que el kernel decidió no arreglar. El nombre quedó del esquema viejo.
+`SIGSEGV` —"violación de segmento"— casi nunca tiene que ver con segmentos: es un fallo de página que el kernel decidió no arreglar. El nombre quedó del esquema viejo.
 
 ---
 
@@ -119,13 +104,9 @@ página que el kernel decidió no arreglar. El nombre quedó del esquema viejo.
 | **Hilo** (*thread*) | Una línea de ejecución dentro de un proceso; comparte memoria con sus hermanos. | Un `task_struct`. |
 | **Tarea** (*task*) | Vago; depende del sistema. | **Un hilo.** El `task_struct` de Linux es un hilo, no un proceso — a pesar del nombre. |
 
-Adentro de Linux **la distinción entre proceso e hilo casi no existe**: hay tareas que
-comparten más o menos cosas. `fork()` y `pthread_create()` llaman a la misma función
-(`clone()`) con banderas distintas. Es una de las ideas más elegantes del diseño de Linux
-y no se nota desde afuera.
+Adentro de Linux **la distinción entre proceso e hilo casi no existe**: hay tareas que comparten más o menos cosas. `fork()` y `pthread_create()` llaman a la misma función (`clone()`) con banderas distintas. Es una de las ideas más elegantes del diseño de Linux y no se nota desde afuera.
 
-En Kornelia no hay ninguna de las tres (D13): hay **un** agente, que se multiplica
-reclamando núcleos. Ver [[28-Que-es-un-proceso-y-que-queda-sin-procesos]].
+En Kornelia no hay ninguna de las tres (D13): hay **un** agente, que se multiplica reclamando núcleos. Ver [[28-Que-es-un-proceso-y-que-queda-sin-procesos]].
 
 ---
 
@@ -138,9 +119,7 @@ reclamando núcleos. Ver [[28-Que-es-un-proceso-y-que-queda-sin-procesos]].
 | **Memoria volátil** | Que se borra al cortar la luz. No tiene nada que ver con `volatile`. |
 | **`volatile`** (en C o Rust) | "No optimices este acceso": el compilador no puede reordenarlo ni suprimirlo, porque la dirección es un [[45-Un-registro-no-es-RAM|registro de un aparato]] y leerla dos veces **no** da lo mismo que leerla una. |
 
-El swap es una **consecuencia** de la memoria virtual, no su definición. Kornelia tiene
-memoria virtual ([[22-Identity-map-la-mentira-mas-simple|mapeada uno a uno]]) y no tiene
-swap ni la va a tener.
+El swap es una **consecuencia** de la memoria virtual, no su definición. Kornelia tiene memoria virtual ([[22-Identity-map-la-mentira-mas-simple|mapeada uno a uno]]) y no tiene swap ni la va a tener.
 
 ---
 
@@ -154,9 +133,7 @@ Los tres guardan algo para no ir a buscarlo, y se rompen distinto.
 | **TLB** | Traducciones ya hechas de virtual a física. | Cuando cambiás la tabla de páginas: el procesador **no se entera**. Hay que invalidarlo a mano. Ver [[21-TLB-invalidacion-y-barreras]]. |
 | **Buffer de escritura** | Escrituras que todavía no llegaron a destino. | Cuando el orden importa: le escribís a un aparato "arrancá" antes de que llegue el dato. Se arregla con una **barrera**. |
 
-Los tres son invisibles cuando andan y muy difíciles de ver cuando no. Y **x86 los esconde
-mejor que ARM**, que es exactamente por qué este proyecto insiste en compilar las dos
-(D22/D23): x86 tiene modelo de memoria fuerte y perdona barreras faltantes que ARM castiga.
+Los tres son invisibles cuando andan y muy difíciles de ver cuando no. Y **x86 los esconde mejor que ARM**, que es exactamente por qué este proyecto insiste en compilar las dos (D22/D23): x86 tiene modelo de memoria fuerte y perdona barreras faltantes que ARM castiga.
 
 ---
 
@@ -169,8 +146,7 @@ mejor que ARM**, que es exactamente por qué este proyecto insiste en compilar l
 | **Firmware** | Código que ya venía en la máquina o en el aparato. UEFI es firmware. | Antes del kernel, o adentro del aparato. |
 | **Blob** | Un pedazo de código o datos que el sistema trata como opaco: no lo entiende, lo carga y lo ejecuta o se lo pasa a alguien. En Kornelia es [[51-El-blob-y-la-ventana-de-rescate|`blob.bin`]]: lo que el agente dejó para que corra en el próximo arranque. |
 
-Peyorativamente, "blob binario" es un driver sin código fuente. En este proyecto la palabra
-**no** tiene ese sentido: el blob es *lo que el agente escribió*.
+Peyorativamente, "blob binario" es un driver sin código fuente. En este proyecto la palabra **no** tiene ese sentido: el blob es *lo que el agente escribió*.
 
 ---
 
@@ -183,8 +159,7 @@ Peyorativamente, "blob binario" es un driver sin código fuente. En este proyect
 | **Mapear** | Hacer que una dirección virtual apunte a una física. No consigue memoria: la hace alcanzable. |
 | **Reservar** | Marcar que algo **no** se puede usar. Lo hace el firmware con las regiones que necesita. |
 
-Que Kornelia tenga `mem.claim` y no `mem.alloc` es una decisión, no un sinónimo. Ver
-[[23-Asignadores-y-por-que-aca-no-hay]].
+Que Kornelia tenga `mem.claim` y no `mem.alloc` es una decisión, no un sinónimo. Ver [[23-Asignadores-y-por-que-aca-no-hay]].
 
 ---
 
@@ -196,8 +171,7 @@ Que Kornelia tenga `mem.claim` y no `mem.alloc` es una decisión, no un sinónim
 | **Word** (*palabra*) | **Depende, y no de lo que creés** | En la documentación de Intel, una *word* son **16 bits** para siempre, porque el 8086 era de 16 — así que `dword` son 32 y `qword` son 64. En ARM una *word* son 32. En un libro genérico, "palabra" es "el ancho natural del procesador". |
 | **Página** | Típico 4096 bytes | La unidad de la traducción de direcciones. Hay páginas grandes (2 MiB, 1 GiB). |
 
-Cuando leas `mov word ptr [rax], 0` en x86, son dos bytes. Es la razón por la que este
-libro dice **"4 bytes"** y no "una palabra".
+Cuando leas `mov word ptr [rax], 0` en x86, son dos bytes. Es la razón por la que este libro dice **"4 bytes"** y no "una palabra".
 
 ---
 
@@ -214,12 +188,9 @@ flowchart LR
 ```
 
 - **Línea** es física: un cable que sube o baja.
-- **IRQ** es el número que el sistema le puso a esa línea. En un PC viejo eran 16 y estaban
-  repartidos por convención (IRQ 0 = reloj, IRQ 4 = serie).
-- **Vector** es el índice en la tabla del procesador. El mapeo IRQ→vector lo decide el
-  sistema, y es donde se confunde todo al leer código.
-- **MSI** rompe el modelo: no hay cable. El aparato **escribe un dato en una dirección**, y
-  eso se convierte en interrupción. Ver [[35-MSI-interrupciones-sin-cable]].
+- **IRQ** es el número que el sistema le puso a esa línea. En un PC viejo eran 16 y estaban repartidos por convención (IRQ 0 = reloj, IRQ 4 = serie).
+- **Vector** es el índice en la tabla del procesador. El mapeo IRQ→vector lo decide el sistema, y es donde se confunde todo al leer código.
+- **MSI** rompe el modelo: no hay cable. El aparato **escribe un dato en una dirección**, y eso se convierte en interrupción. Ver [[35-MSI-interrupciones-sin-cable]].
 
 ---
 

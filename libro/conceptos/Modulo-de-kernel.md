@@ -10,31 +10,20 @@ capitulos: [50-initramfs-modulos-y-el-huevo-y-la-gallina, 39-Plazos-y-cortes, 32
 
 # Módulo de kernel
 
-> Un pedazo de kernel que se carga y se descarga **sin reiniciar**. Es un envase, no un
-> contenido: casi todos son [[Driver|drivers]], pero un driver puede no ser módulo.
+> Un pedazo de kernel que se carga y se descarga **sin reiniciar**. Es un envase, no un contenido: casi todos son [[Driver|drivers]], pero un driver puede no ser módulo.
 
 ## Qué problema resuelve
 
-Un kernel monolítico con todo adentro tiene dos incomodidades, y ninguna se arregla
-escribiendo mejor código.
+Un kernel monolítico con todo adentro tiene dos incomodidades, y ninguna se arregla escribiendo mejor código.
 
-1. **La imagen es enorme y la mayoría no se usa.** Debian tiene que arrancar en máquinas que
-   todavía no existen, así que trae drivers para miles de aparatos. Ninguna máquina tiene más
-   que un puñado.
-2. **Cambiar cualquier cosa cuesta un reinicio.** Recompilar el kernel para probar veinte
-   líneas de un driver, y reiniciar para probarlas, es un ciclo de minutos donde debería ser
-   de segundos.
+1. **La imagen es enorme y la mayoría no se usa.** Debian tiene que arrancar en máquinas que todavía no existen, así que trae drivers para miles de aparatos. Ninguna máquina tiene más que un puñado.
+2. **Cambiar cualquier cosa cuesta un reinicio.** Recompilar el kernel para probar veinte líneas de un driver, y reiniciar para probarlas, es un ciclo de minutos donde debería ser de segundos.
 
-Y hay un tercero que es el más interesante: **el huevo y la gallina del arranque**. El driver
-del disco raíz tiene que estar disponible *antes* de poder leer el disco raíz. La salida es un
-sistema de archivos chiquito en memoria que el arrancador carga junto al kernel —el
-`initramfs`— con los pocos módulos que hacen falta para llegar al disco de verdad. Ver
-[[50-initramfs-modulos-y-el-huevo-y-la-gallina]].
+Y hay un tercero que es el más interesante: **el huevo y la gallina del arranque**. El driver del disco raíz tiene que estar disponible *antes* de poder leer el disco raíz. La salida es un sistema de archivos chiquito en memoria que el arrancador carga junto al kernel —el `initramfs`— con los pocos módulos que hacen falta para llegar al disco de verdad. Ver [[50-initramfs-modulos-y-el-huevo-y-la-gallina]].
 
 ## Cómo funciona
 
-Un módulo (`.ko`, *kernel object*) es un ELF **relocalizable**: no está enlazado todavía. Al
-cargarlo, el kernel hace de enlazador en caliente.
+Un módulo (`.ko`, *kernel object*) es un ELF **relocalizable**: no está enlazado todavía. Al cargarlo, el kernel hace de enlazador en caliente.
 
 ```mermaid
 flowchart TD
@@ -49,14 +38,9 @@ flowchart TD
 
 Tres cosas de ahí valen por todo el resto:
 
-- **`EXPORT_SYMBOL`.** Un módulo no ve todos los símbolos del kernel: solo los que el kernel
-  **exportó** a propósito. Es una superficie declarada, igual que los once verbos de Kornelia.
-  `EXPORT_SYMBOL_GPL` restringe además la licencia de quien puede usarlos.
-- **La cuenta de usuarios.** `rmmod` falla si alguien lo está usando. Es la columna *Used by*
-  de `lsmod`, y es lo que impide sacarle el piso a algo que está corriendo.
-- **Una vez cargado, no es un invitado.** Corre en anillo 0 / EL1, en el mismo espacio de
-  direcciones que el kernel, sin límite de tiempo y sin nadie mirando. Un módulo **es** el
-  kernel.
+- **`EXPORT_SYMBOL`.** Un módulo no ve todos los símbolos del kernel: solo los que el kernel **exportó** a propósito. Es una superficie declarada, igual que los once verbos de Kornelia. `EXPORT_SYMBOL_GPL` restringe además la licencia de quien puede usarlos.
+- **La cuenta de usuarios.** `rmmod` falla si alguien lo está usando. Es la columna *Used by* de `lsmod`, y es lo que impide sacarle el piso a algo que está corriendo.
+- **Una vez cargado, no es un invitado.** Corre en anillo 0 / EL1, en el mismo espacio de direcciones que el kernel, sin límite de tiempo y sin nadie mirando. Un módulo **es** el kernel.
 
 ## Cómo lo hace Linux
 
@@ -72,9 +56,7 @@ cat /lib/modules/$(uname -r)/modules.dep | head    # lo que genera depmod
 cat /proc/sys/kernel/tainted         # si el kernel quedo "manchado"
 ```
 
-La diferencia entre `insmod` y `modprobe` es todo el sistema: `insmod` carga **un archivo**;
-`modprobe` busca **por nombre** en `/lib/modules/$(uname -r)/`, resuelve dependencias con
-`modules.dep` (que arma `depmod`) y las carga en orden.
+La diferencia entre `insmod` y `modprobe` es todo el sistema: `insmod` carga **un archivo**; `modprobe` busca **por nombre** en `/lib/modules/$(uname -r)/`, resuelve dependencias con `modules.dep` (que arma `depmod`) y las carga en orden.
 
 El esqueleto mínimo:
 
@@ -87,10 +69,7 @@ module_exit(hola_exit);
 MODULE_LICENSE("GPL");
 ```
 
-`MODULE_LICENSE` no es papeleo: sin "GPL" el módulo no puede usar los símbolos
-`EXPORT_SYMBOL_GPL` **y el kernel se marca como manchado** (*tainted*). Eso queda en el
-`dmesg` de cualquier [[Oops-y-panic|oops]] posterior, y quiere decir "hay código acá adentro
-que no puedo auditar, esta traza puede no ser culpa mía".
+`MODULE_LICENSE` no es papeleo: sin "GPL" el módulo no puede usar los símbolos `EXPORT_SYMBOL_GPL` **y el kernel se marca como manchado** (*tainted*). Eso queda en el `dmesg` de cualquier [[Oops-y-panic|oops]] posterior, y quiere decir "hay código acá adentro que no puedo auditar, esta traza puede no ser culpa mía".
 
 ### Por qué un módulo mal escrito cuelga la máquina entera
 
@@ -103,8 +82,7 @@ Cuatro razones, y ninguna tiene arreglo dentro del modelo:
 | **Sin red debajo** | Un `oops` en un módulo mata el hilo, pero el kernel queda en estado desconocido: candados tomados que nadie va a soltar, memoria a medio liberar. Por eso `oops` suele terminar en `panic`. |
 | **Sin plazo** | Nadie mira el reloj. Un `while (1)` con las interrupciones enmascaradas es la máquina muerta: ni siquiera el temporizador entra. |
 
-Y **un módulo de Linux siempre es lo que Kornelia llamaría `raw`**. No hay una opción de
-cargarlo con menos privilegio: el modelo de módulos no tiene ese eje.
+Y **un módulo de Linux siempre es lo que Kornelia llamaría `raw`**. No hay una opción de cargarlo con menos privilegio: el modelo de módulos no tiene ese eje.
 
 ## Cómo lo hace Kornelia
 
@@ -113,42 +91,22 @@ cargarlo con menos privilegio: el modelo de módulos no tiene ese eje.
 | **Decisiones** | D27 (el agente declara el privilegio), D29 (en el núcleo del protocolo manda el kernel), D18 (el blob) |
 | **Principios** | P6 (el hardware hace cumplir lo declarado, no una política), P5 (los faults son datos), P2 (la capa que se saca se deja vacía) |
 
-**No hay carga dinámica de código del kernel.** El kernel es lo que es y no crece. Lo más
-parecido a "cargar código" es `exec`: el agente sube código máquina y el kernel lo corre — sin
-enlazarlo, sin símbolos, sin dependencias, sin nombre.
+**No hay carga dinámica de código del kernel.** El kernel es lo que es y no crece. Lo más parecido a "cargar código" es `exec`: el agente sube código máquina y el kernel lo corre — sin enlazarlo, sin símbolos, sin dependencias, sin nombre.
 
-Ahí se ve qué era esencial del mecanismo y qué era el envase. Lo esencial es *ejecutar código
-que no vino con la imagen*. Todo lo demás —el enlazado en caliente, `EXPORT_SYMBOL`, la cuenta
-de usuarios, `modules.dep`— es infraestructura para que ese código se meta **adentro** del
-kernel, que es justamente lo que acá no pasa.
+Ahí se ve qué era esencial del mecanismo y qué era el envase. Lo esencial es *ejecutar código que no vino con la imagen*. Todo lo demás —el enlazado en caliente, `EXPORT_SYMBOL`, la cuenta de usuarios, `modules.dep`— es infraestructura para que ese código se meta **adentro** del kernel, que es justamente lo que acá no pasa.
 
 ### El agente declara el privilegio, y es obligatorio
 
-`mode` no tiene valor por omisión, y eso es a propósito:
-`kernel-core/src/protocol.rs:1480#exec needs mode: supervised or raw`. **Un valor por omisión
-sería el kernel eligiendo**, y elegir es del agente (P6).
+`mode` no tiene valor por omisión, y eso es a propósito: `kernel-core/src/protocol.rs:1480#exec needs mode: supervised or raw`. **Un valor por omisión sería el kernel eligiendo**, y elegir es del agente (P6).
 
-- `supervised` — anillo 3 en x86_64, EL0 en aarch64. No puede colgar la máquina. La memoria
-  tiene que estar reclamada como alcanzable por el agente
-  (`kernel-core/src/protocol.rs:1526#exec supervised needs memory claimed with user`), y para
-  volver hay que pasar por una ventanilla cuyos bytes **publica `describe`**, así el agente no
-  los tiene horneados (P4).
+- `supervised` — anillo 3 en x86_64, EL0 en aarch64. No puede colgar la máquina. La memoria tiene que estar reclamada como alcanzable por el agente (`kernel-core/src/protocol.rs:1526#exec supervised needs memory claimed with user`), y para volver hay que pasar por una ventanilla cuyos bytes **publica `describe`**, así el agente no los tiene horneados (P4).
 - `raw` — privilegio completo, como un módulo de Linux.
 
-Y hay un lugar donde `raw` no se ofrece: el núcleo que atiende el protocolo.
-`kernel-core/src/protocol.rs:1504#the protocol core only runs supervised`. Ahí manda el kernel
-(D29), y para que eso sea verdad el agente no puede *poder* enmascarar las interrupciones. Si
-quiere el privilegio entero, que reclame un núcleo. El kernel lo **publica** en
-`describe exec` (`kernel-core/src/protocol.rs:721#fn write_exec`) en vez de dejar que se
-descubra chocándose.
+Y hay un lugar donde `raw` no se ofrece: el núcleo que atiende el protocolo. `kernel-core/src/protocol.rs:1504#the protocol core only runs supervised`. Ahí manda el kernel (D29), y para que eso sea verdad el agente no puede *poder* enmascarar las interrupciones. Si quiere el privilegio entero, que reclame un núcleo. El kernel lo **publica** en `describe exec` (`kernel-core/src/protocol.rs:721#fn write_exec`) en vez de dejar que se descubra chocándose.
 
 ### Y declara cuánto puede tardar
 
-`exec {deadline_ms}` corta el código que no vuelve:
-`kernel-core/src/protocol.rs:1005#deadline_ms: Option<u64>,`. La respuesta trae `cancelled`
-como campo aparte de `faulted`
-(`kernel-core/src/protocol.rs:1700#w.text("cancelled");`) porque el código no hizo nada mal:
-**se lo cortaron**, y para el que depura eso es información distinta.
+`exec {deadline_ms}` corta el código que no vuelve: `kernel-core/src/protocol.rs:1005#deadline_ms: Option<u64>,`. La respuesta trae `cancelled` como campo aparte de `faulted` (`kernel-core/src/protocol.rs:1700#w.text("cancelled");`) porque el código no hizo nada mal: **se lo cortaron**, y para el que depura eso es información distinta.
 
 Un módulo colgado, no. No hay `deadline_ms` en `insmod`.
 
@@ -166,19 +124,9 @@ Un módulo colgado, no. No hay `deadline_ms` en `insmod`.
 
 ### La excepción honesta: los handlers y el blob
 
-D27 **solo cubre `exec`**. Un handler instalado con `irq.install` corre **siempre
-privilegiado**, y no por comodidad: el hardware no sabe entregar una interrupción a un nivel
-sin privilegio. En x86_64 la entrada de la IDT exige anillo 0; en aarch64 la excepción entra
-en EL1. Un handler del agente es, en este sentido, tan `raw` como un módulo.
+D27 **solo cubre `exec`**. Un handler instalado con `irq.install` corre **siempre privilegiado**, y no por comodidad: el hardware no sabe entregar una interrupción a un nivel sin privilegio. En x86_64 la entrada de la IDT exige anillo 0; en aarch64 la excepción entra en EL1. Un handler del agente es, en este sentido, tan `raw` como un módulo.
 
-Y el blob de arranque (D18, `kernel-core/src/lib.rs:224#fn run_blob`) es lo más parecido que
-hay a un módulo cargado al arrancar: corre privilegiado, en el mismo espacio de direcciones,
-antes de que exista el protocolo. Con el mismo riesgo — y por eso hay algo que Linux no tiene:
-**antes de saltar, avisa y espera dos segundos, y cualquier byte lo cancela**
-(`kernel-core/src/lib.rs:285#cancelled: someone is on the other side`). Sin esa ventana, un
-blob malo dejaría la máquina inútil en cada arranque y habría que sacarle el disco. La
-respuesta de Linux a un módulo que cuelga al arrancar es reiniciar en modo rescate; la de
-Kornelia es una ventana en **cada** arranque.
+Y el blob de arranque (D18, `kernel-core/src/lib.rs:224#fn run_blob`) es lo más parecido que hay a un módulo cargado al arrancar: corre privilegiado, en el mismo espacio de direcciones, antes de que exista el protocolo. Con el mismo riesgo — y por eso hay algo que Linux no tiene: **antes de saltar, avisa y espera dos segundos, y cualquier byte lo cancela** (`kernel-core/src/lib.rs:285#cancelled: someone is on the other side`). Sin esa ventana, un blob malo dejaría la máquina inútil en cada arranque y habría que sacarle el disco. La respuesta de Linux a un módulo que cuelga al arrancar es reiniciar en modo rescate; la de Kornelia es una ventana en **cada** arranque.
 
 ## Cómo se ve roto
 

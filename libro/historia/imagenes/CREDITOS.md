@@ -1,14 +1,8 @@
 # Créditos de las imágenes
 
-Todas las imágenes de esta carpeta vienen de **Wikimedia Commons** y están en
-**dominio público** o bajo una licencia libre que permite uso comercial y obras
-derivadas (**CC0**, **CC BY**, **CC BY-SA**). No hay ningún archivo con licencia
-*fair use*, *non-free*, **NC** (no comercial) ni **ND** (sin derivadas).
+Todas las imágenes de esta carpeta vienen de **Wikimedia Commons** y están en **dominio público** o bajo una licencia libre que permite uso comercial y obras derivadas (**CC0**, **CC BY**, **CC BY-SA**). No hay ningún archivo con licencia *fair use*, *non-free*, **NC** (no comercial) ni **ND** (sin derivadas).
 
-Las que dicen **CC BY** o **CC BY-SA** obligan a **acreditar al autor** en la
-publicación. Las **CC BY-SA** además exigen que la *obra derivada de la imagen*
-—no el libro entero— se distribuya con la misma licencia: para una foto usada
-como ilustración, alcanza con el pie de foto acreditando autor y licencia.
+Las que dicen **CC BY** o **CC BY-SA** obligan a **acreditar al autor** en la publicación. Las **CC BY-SA** además exigen que la *obra derivada de la imagen* —no el libro entero— se distribuya con la misma licencia: para una foto usada como ilustración, alcanza con el pie de foto acreditando autor y licencia.
 
 | Archivo | Qué muestra | Autor | Licencia | Fuente (URL) |
 |---|---|---|---|---|
@@ -36,28 +30,9 @@ como ilustración, alcanza con el pie de foto acreditando autor y licencia.
 
 ## Notas
 
-- **Los archivos son versiones reducidas.** Para que ninguno pase de 2 MB se
-  bajaron escalados (entre 1024 y 1920 px de ancho) desde el mismo Commons. Si
-  para imprenta hace falta más resolución, el original está en la URL de la
-  columna *Fuente*; algunos son enormes (el die del Pentium II tiene 22036 px de
-  ancho y 155 MB).
-- **La foto *clásica* de Thompson y Ritchie ante el PDP-11 no está: no existe
-  libre.** La que todo el mundo conoce —Thompson sentado al teletipo y Ritchie
-  parado detrás— es de Bell Labs y sigue con derechos; en Commons no hay ninguna
-  versión libre. Lo que sí hay es `thompson-ritchie-1973.jpg`, que son los dos
-  juntos ese mismo año pero **sin la máquina en cuadro**, y encima es chica
-  (310x201 px, la única resolución que existe): alcanza para web o para una
-  viñeta, no para una página completa. Su declaración de dominio público viene de
-  que el Jargon File fue liberado al dominio público por sus autores, y el
-  fotógrafo figura como desconocido — es la que se usa en todas partes, pero la
-  cadena de derechos no es tan firme como en las demás.
-  **Para armar la escena del capítulo, la combinación libre es**
-  `pdp11-40-viena.jpg` (la máquina, CC BY-SA 3.0) + `dennis-ritchie-2011.jpg` y
-  `kernighan-thompson-2019.jpg` (las personas, en buena resolución).
-- **`andrew-tanenbaum-2012.jpg` retrata a una persona viva.** La licencia cubre
-  el derecho de autor de la foto, no los derechos de imagen; para uso editorial
-  en un libro de historia técnica no hay problema, pero no serviría para una
-  publicidad.
+- **Los archivos son versiones reducidas.** Para que ninguno pase de 2 MB se bajaron escalados (entre 1024 y 1920 px de ancho) desde el mismo Commons. Si para imprenta hace falta más resolución, el original está en la URL de la columna *Fuente*; algunos son enormes (el die del Pentium II tiene 22036 px de ancho y 155 MB).
+- **La foto *clásica* de Thompson y Ritchie ante el PDP-11 no está: no existe libre.** La que todo el mundo conoce —Thompson sentado al teletipo y Ritchie parado detrás— es de Bell Labs y sigue con derechos; en Commons no hay ninguna versión libre. Lo que sí hay es `thompson-ritchie-1973.jpg`, que son los dos juntos ese mismo año pero **sin la máquina en cuadro**, y encima es chica (310x201 px, la única resolución que existe): alcanza para web o para una viñeta, no para una página completa. Su declaración de dominio público viene de que el Jargon File fue liberado al dominio público por sus autores, y el fotógrafo figura como desconocido — es la que se usa en todas partes, pero la cadena de derechos no es tan firme como en las demás. **Para armar la escena del capítulo, la combinación libre es** `pdp11-40-viena.jpg` (la máquina, CC BY-SA 3.0) + `dennis-ritchie-2011.jpg` y `kernighan-thompson-2019.jpg` (las personas, en buena resolución).
+- **`andrew-tanenbaum-2012.jpg` retrata a una persona viva.** La licencia cubre el derecho de autor de la foto, no los derechos de imagen; para uso editorial en un libro de historia técnica no hay problema, pero no serviría para una publicidad.
 
 ## Faltantes
 
@@ -65,11 +40,5 @@ Ninguno: los diez temas pedidos tienen al menos un archivo con licencia usable.
 
 Lo que sí quedó a medias, sin llegar a ser un faltante:
 
-- **La foto clásica de Thompson y Ritchie ante el PDP-11.** Es de Bell Labs y no
-  hay versión libre; ver la nota de arriba y la combinación que la reemplaza.
-- **El die shot de un procesador moderno con los bloques *rotulados*.** Hay fotos
-  libres de dies (las dos incluidas), pero ningún diagrama libre que marque
-  encima qué bloque es la caché, qué el decodificador y qué las unidades de
-  ejecución. Los rótulos de ese estilo que circulan son de prensa técnica y no
-  son libres; habría que dibujarlos sobre las fotos incluidas, que para eso
-  admiten obra derivada.
+- **La foto clásica de Thompson y Ritchie ante el PDP-11.** Es de Bell Labs y no hay versión libre; ver la nota de arriba y la combinación que la reemplaza.
+- **El die shot de un procesador moderno con los bloques *rotulados*.** Hay fotos libres de dies (las dos incluidas), pero ningún diagrama libre que marque encima qué bloque es la caché, qué el decodificador y qué las unidades de ejecución. Los rótulos de ese estilo que circulan son de prensa técnica y no son libres; habría que dibujarlos sobre las fotos incluidas, que para eso admiten obra derivada.

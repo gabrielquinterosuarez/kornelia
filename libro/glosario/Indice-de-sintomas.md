@@ -5,16 +5,11 @@ estado: vivo
 
 # Índice de síntomas
 
-**Del síntoma a la causa**, que es la dirección en la que uno depura y la contraria a la
-que enseñan los libros.
+**Del síntoma a la causa**, que es la dirección en la que uno depura y la contraria a la que enseñan los libros.
 
-Casi todo lo de acá pasó de verdad —en este proyecto o en cualquier kernel— y el punto
-central es este: **el síntoma no se parece a la causa**. Un `mem.write` de 4 KiB que cuelga
-la máquina no dice "el buffer del cable es más chico que el pedido". Nadie lo deduce; se
-busca en una lista como esta.
+Casi todo lo de acá pasó de verdad —en este proyecto o en cualquier kernel— y el punto central es este: **el síntoma no se parece a la causa**. Un `mem.write` de 4 KiB que cuelga la máquina no dice "el buffer del cable es más chico que el pedido". Nadie lo deduce; se busca en una lista como esta.
 
-Cuando encuentres uno nuevo, agregalo. Esta nota crece con la experiencia, no con la
-lectura.
+Cuando encuentres uno nuevo, agregalo. Esta nota crece con la experiencia, no con la lectura.
 
 ---
 
@@ -46,9 +41,7 @@ lectura.
 | Se espera con los timbres cerrados. | Si el kernel espera a otro núcleo con las interrupciones deshabilitadas, no atiende el cable ni corre handlers en todo ese rato. Estuvo así desde que `exec` acepta `core` y **no lo encontró nadie mirando**: apareció cuando una prueba nueva obligó a recorrer ese camino. |
 
 > [!tip] Regla que sale de los dos casos de arriba
-> **Un contador de errores que nadie puede leer no existe.** Si el kernel descarta algo, lo
-> tiene que poder decir. Y **un camino que ninguna prueba recorre no está andando: está sin
-> probar.**
+> **Un contador de errores que nadie puede leer no existe.** Si el kernel descarta algo, lo tiene que poder decir. Y **un camino que ninguna prueba recorre no está andando: está sin probar.**
 
 ---
 
@@ -153,16 +146,11 @@ No hay debugger. Se marca el camino con letras por el cable y se lee la traza:
 p.uart_write_byte(b'A');
 ```
 
-Así apareció lo de `CPACR_EL1`: la traza `1ST234KJ2Da2` y **ninguna `b`** dijo que los dos
-núcleos hacían su parte y que el reclamado moría entre terminar el trabajo y guardar la
-respuesta. Las letras se sacan antes de commitear.
+Así apareció lo de `CPACR_EL1`: la traza `1ST234KJ2Da2` y **ninguna `b`** dijo que los dos núcleos hacían su parte y que el reclamado moría entre terminar el trabajo y guardar la respuesta. Las letras se sacan antes de commitear.
 
-Cuando el problema depende de tiempos, la letra **cambia el fenómeno** (ver arriba): ahí el
-dato va a un estático y se publica por `describe`.
+Cuando el problema depende de tiempos, la letra **cambia el fenómeno** (ver arriba): ahí el dato va a un estático y se publica por `describe`.
 
-Y la técnica que resolvió más de un caso de esta página: **separar las dos mitades**. Si el
-aparato escribe y la interrupción no llega, hacé sonar la interrupción a mano sin aparato.
-Una de las dos mitades anda, y ya sabés cuál.
+Y la técnica que resolvió más de un caso de esta página: **separar las dos mitades**. Si el aparato escribe y la interrupción no llega, hacé sonar la interrupción a mano sin aparato. Una de las dos mitades anda, y ya sabés cuál.
 
 ---
 

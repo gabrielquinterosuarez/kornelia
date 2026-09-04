@@ -12,17 +12,13 @@ capitulos: [01-El-reloj-y-el-transistor, 02-Registros-y-RAM-no-son-lo-mismo]
 
 > Un puñado de celdas adentro del procesador. La única memoria que no cuesta ciclos alcanzar, y la única que las instrucciones pueden nombra directamente.
 
-Ojo con la palabra: **"registro" también se dice de los registros de un aparato**, que son
-una cosa completamente distinta —una dirección de memoria que no es memoria— y viven en [[45-Un-registro-no-es-RAM]]. Esta nota es sobre los del procesador.
+Ojo con la palabra: **"registro" también se dice de los registros de un aparato**, que son una cosa completamente distinta —una dirección de memoria que no es memoria— y viven en [[45-Un-registro-no-es-RAM]]. Esta nota es sobre los del procesador.
 
 ## Qué problema resuelve
 
-Una instrucción tiene que decir sobre qué opera, y ese "sobre qué" tiene que caber en la
-instrucción misma, que son unos pocos bytes. No hay lugar para una dirección de 64 bits en cada operando; y aunque hubiera, ir a la [[Jerarquia-de-memoria|RAM]] cuesta unos 250 ciclos y una operación aritmética cuesta uno.
+Una instrucción tiene que decir sobre qué opera, y ese "sobre qué" tiene que caber en la instrucción misma, que son unos pocos bytes. No hay lugar para una dirección de 64 bits en cada operando; y aunque hubiera, ir a la [[Jerarquia-de-memoria|RAM]] cuesta unos 250 ciclos y una operación aritmética cuesta uno.
 
-Así que el procesador tiene un juego chiquito de celdas con **nombre propio**, cableadas al
-lado de la unidad aritmética. Nombrar una cuesta 3 o 4 bits en la instrucción, y usarla
-cuesta cero ciclos.
+Así que el procesador tiene un juego chiquito de celdas con **nombre propio**, cableadas al lado de la unidad aritmética. Nombrar una cuesta 3 o 4 bits en la instrucción, y usarla cuesta cero ciclos.
 
 ## Cómo funciona
 
@@ -34,11 +30,9 @@ cuesta cero ciclos.
 | Banderas | `rflags` | `nzcv` (parte de `pstate`) |
 | Nombres heredados | Sí: `rax` era `ax` en el 8086, de 16 bits | No: los renombraron en el salto a 64 bits |
 
-Los nombres de x86 arrastran cuarenta años: `rax` es el mismo registro que `eax` (32 bits),
-que `ax` (16), que `al` (8 bits bajos). Escribir en `eax` **pone en cero la mitad de arriba** de `rax`, y escribir en `al` no. Es una de las asimetrías que hacen que el ensamblador de x86 se lea raro.
+Los nombres de x86 arrastran cuarenta años: `rax` es el mismo registro que `eax` (32 bits), que `ax` (16), que `al` (8 bits bajos). Escribir en `eax` **pone en cero la mitad de arriba** de `rax`, y escribir en `al` no. Es una de las asimetrías que hacen que el ensamblador de x86 se lea raro.
 
-Y hay registros que no son de propósito general y mandan más que ellos: los **de control**.
-`cr3` en x86_64 apunta a la [[20-Tablas-de-paginas-de-verdad|tabla de páginas]] activa; `ttbr0_el1` hace lo mismo en aarch64. Cambiar uno de esos cambia el mundo entero que ve el código.
+Y hay registros que no son de propósito general y mandan más que ellos: los **de control**. `cr3` en x86_64 apunta a la [[20-Tablas-de-paginas-de-verdad|tabla de páginas]] activa; `ttbr0_el1` hace lo mismo en aarch64. Cambiar uno de esos cambia el mundo entero que ve el código.
 
 ## Por qué importan tanto en un kernel
 
@@ -49,36 +43,25 @@ Y hay registros que no son de propósito general y mandan más que ellos: los **
 
 ## Cómo lo hace Linux
 
-Los registros del momento de un crash aparecen en `dmesg` cuando hay un `oops`, con sus
-nombres horneados:
+Los registros del momento de un crash aparecen en `dmesg` cuando hay un `oops`, con sus nombres horneados:
 
 ```
 RIP: 0010:mi_funcion+0x1a/0x40
 RAX: 0000000000000000 RBX: ffff8881040a8000 RCX: 0000000000000000
 ```
 
-Y `ptrace` / `gdb` los leen de un proceso vivo. Están **nombrados en la interfaz**: la
-estructura `user_regs_struct` de Linux tiene un campo `rax`, lo cual significa que la
-interfaz de Linux sabe que está en x86.
+Y `ptrace` / `gdb` los leen de un proceso vivo. Están **nombrados en la interfaz**: la estructura `user_regs_struct` de Linux tiene un campo `rax`, lo cual significa que la interfaz de Linux sabe que está en x86.
 
 ## Cómo lo hace Kornelia
 
-Acá aparece una de las decisiones más chicas y más ilustrativas del proyecto (D3, P4):
-**el protocolo no lleva nombres de registros horneados.**
+Acá aparece una de las decisiones más chicas y más ilustrativas del proyecto (D3, P4): **el protocolo no lleva nombres de registros horneados.**
 
-x86_64 tiene RAX; ARM64 tiene X0–X30; RISC-V tiene x0–x31. Si el protocolo dijera "poné
-esto en RAX", el protocolo sería de x86 disfrazado de genérico. Entonces la máquina
-**informa qué registros tiene**, y el agente los nombra como los nombra esa máquina:
+x86_64 tiene RAX; ARM64 tiene X0–X30; RISC-V tiene x0–x31. Si el protocolo dijera "poné esto en RAX", el protocolo sería de x86 disfrazado de genérico. Entonces la máquina **informa qué registros tiene**, y el agente los nombra como los nombra esa máquina:
 
-- `describe exec` publica cuáles se pueden poner, y por cuáles pasan los argumentos:
-  `kernel-x86_64/src/exec.rs:293#pub const ARGUMENTS`.
-- El orden de esa lista es el orden en que el ensamblador deja los valores. **Cambiar uno
-  sin el otro hace que el kernel informe un registro con el nombre de otro** — ya pasó, en
-  aarch64. Ver [[Indice-de-sintomas]].
+- `describe exec` publica cuáles se pueden poner, y por cuáles pasan los argumentos: `kernel-x86_64/src/exec.rs:293#pub const ARGUMENTS`.
+- El orden de esa lista es el orden en que el ensamblador deja los valores. **Cambiar uno sin el otro hace que el kernel informe un registro con el nombre de otro** — ya pasó, en aarch64. Ver [[Indice-de-sintomas]].
 
-Y la razón por la que `ARGUMENTS` **se publica en vez de deducirse** es un bug que costó
-caro: la convención de llamada no la pone la arquitectura, la pone el *target*. Ver
-[[27-La-ABI-la-pone-el-target-no-el-silicio]].
+Y la razón por la que `ARGUMENTS` **se publica en vez de deducirse** es un bug que costó caro: la convención de llamada no la pone la arquitectura, la pone el *target*. Ver [[27-La-ABI-la-pone-el-target-no-el-silicio]].
 
 ## Cómo se ve roto
 

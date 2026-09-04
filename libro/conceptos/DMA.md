@@ -10,18 +10,13 @@ capitulos: [46-DMA-el-aparato-lee-memoria-solo, 47-IOMMU-VT-d-y-SMMUv3, 48-Colas
 
 # DMA
 
-> El aparato lee y escribe la RAM **por su cuenta**: el procesador le dice dónde y cuánto,
-> y se va a hacer otra cosa.
+> El aparato lee y escribe la RAM **por su cuenta**: el procesador le dice dónde y cuánto, y se va a hacer otra cosa.
 
-*Direct Memory Access.* Es la mitad que falta de [[MMIO]]. En MMIO el procesador va al
-aparato; en DMA **el aparato va a la memoria**, y es un maestro del bus como cualquier otro.
-Todo el hardware rápido de los últimos treinta años funciona así.
+*Direct Memory Access.* Es la mitad que falta de [[MMIO]]. En MMIO el procesador va al aparato; en DMA **el aparato va a la memoria**, y es un maestro del bus como cualquier otro. Todo el hardware rápido de los últimos treinta años funciona así.
 
 ## Qué problema resuelve
 
-La alternativa es PIO (*programmed I/O*): el procesador copia los datos de a pedazos,
-leyendo un registro del aparato y escribiendo en RAM. Anda, y es carísimo por dos motivos
-que se ven en la jerarquía de latencias.
+La alternativa es PIO (*programmed I/O*): el procesador copia los datos de a pedazos, leyendo un registro del aparato y escribiendo en RAM. Anda, y es carísimo por dos motivos que se ven en la jerarquía de latencias.
 
 | Acceso | Orden de magnitud |
 |---|---|
@@ -31,15 +26,9 @@ que se ven en la jerarquía de latencias.
 | **Un registro de un aparato por MMIO** | **cientos de ns a 1 µs** |
 | Un bloque de un SSD NVMe | ~50 µs |
 
-Un acceso MMIO no se cachea y no se puede reordenar: cada uno es un viaje entero por el bus.
-Copiar 4 KiB de a 4 bytes son **mil accesos**, y con eso el procesador se pasa cerca de un
-milisegundo quemado moviendo bytes que él no va a usar. Ver
-[[02-Registros-y-RAM-no-son-lo-mismo]].
+Un acceso MMIO no se cachea y no se puede reordenar: cada uno es un viaje entero por el bus. Copiar 4 KiB de a 4 bytes son **mil accesos**, y con eso el procesador se pasa cerca de un milisegundo quemado moviendo bytes que él no va a usar. Ver [[02-Registros-y-RAM-no-son-lo-mismo]].
 
-Con DMA, esas mil vueltas se convierten en **cuatro escrituras**: origen, destino, cantidad,
-arrancá. El aparato hace las transferencias contra la RAM directamente —que es dos órdenes
-de magnitud más barata que su propio registro— y avisa cuando terminó. El núcleo mientras
-tanto está libre, que era el punto.
+Con DMA, esas mil vueltas se convierten en **cuatro escrituras**: origen, destino, cantidad, arrancá. El aparato hace las transferencias contra la RAM directamente —que es dos órdenes de magnitud más barata que su propio registro— y avisa cuando terminó. El núcleo mientras tanto está libre, que era el punto.
 
 ## Cómo funciona
 
@@ -59,34 +48,20 @@ sequenceDiagram
 
 Cuatro condiciones que no se ven en el dibujo y sin las cuales no ocurre nada:
 
-1. **El aparato tiene que tener permiso de iniciar accesos**: el bit de *bus master* de su
-   [[PCIe|espacio de configuración]]. Sin él, escribe sus registros y no hace nada más.
-2. **La dirección que se le escribe no es la que usa el programa.** Es una dirección **de
-   bus**, y si hay [[IOMMU]] es una **IOVA**. Los cuatro nombres y en qué se diferencian
-   están en [[Falsos-amigos#4]]: confundirlos es la causa clásica de que un DMA escriba en
-   el lugar equivocado.
-3. **El aparato puede no alcanzar toda la memoria.** Emite direcciones de un ancho fijo —28,
-   32, 64 bits— y lo que no entra, no entra. Es un límite del silicio, no del software.
-4. **La memoria y las cachés tienen que estar de acuerdo.** En x86 el DMA es coherente con
-   las cachés por hardware. En muchos ARM no, y hay que vaciar o invalidar la caché alrededor
-   de la transferencia. Ver [[Falsos-amigos#8]].
+1. **El aparato tiene que tener permiso de iniciar accesos**: el bit de *bus master* de su [[PCIe|espacio de configuración]]. Sin él, escribe sus registros y no hace nada más.
+2. **La dirección que se le escribe no es la que usa el programa.** Es una dirección **de bus**, y si hay [[IOMMU]] es una **IOVA**. Los cuatro nombres y en qué se diferencian están en [[Falsos-amigos#4]]: confundirlos es la causa clásica de que un DMA escriba en el lugar equivocado.
+3. **El aparato puede no alcanzar toda la memoria.** Emite direcciones de un ancho fijo —28, 32, 64 bits— y lo que no entra, no entra. Es un límite del silicio, no del software.
+4. **La memoria y las cachés tienen que estar de acuerdo.** En x86 el DMA es coherente con las cachés por hardware. En muchos ARM no, y hay que vaciar o invalidar la caché alrededor de la transferencia. Ver [[Falsos-amigos#8]].
 
 ### Por qué es peligroso
 
-**El aparato no pasa por la [[MMU]].** Un puntero mal puesto en un registro de aparato no
-da page fault: el DMA ocurre, en otro lado, y sigue todo andando hasta que algo lejano se
-rompe. Es corrupción silenciosa de memoria, el peor bug posible, y no hay forma de atraparlo
-desde el procesador porque el procesador no participó.
+**El aparato no pasa por la [[MMU]].** Un puntero mal puesto en un registro de aparato no da page fault: el DMA ocurre, en otro lado, y sigue todo andando hasta que algo lejano se rompe. Es corrupción silenciosa de memoria, el peor bug posible, y no hay forma de atraparlo desde el procesador porque el procesador no participó.
 
-Y es peor que un error: un aparato es una máquina de leer toda la RAM. Cualquier cosa
-conectada a un puerto que hable PCIe —Thunderbolt, por ejemplo— puede leer las claves de una
-máquina bloqueada. La respuesta a las dos cosas, el error y el ataque, es el mismo silicio:
-el [[IOMMU]].
+Y es peor que un error: un aparato es una máquina de leer toda la RAM. Cualquier cosa conectada a un puerto que hable PCIe —Thunderbolt, por ejemplo— puede leer las claves de una máquina bloqueada. La respuesta a las dos cosas, el error y el ataque, es el mismo silicio: el [[IOMMU]].
 
 ## Cómo lo hace Linux
 
-Hay una API de DMA entera, y su razón de ser es que el driver **no** manipule direcciones
-físicas a mano. Vive en `Documentation/core-api/dma-api.rst` y `kernel/dma/`.
+Hay una API de DMA entera, y su razón de ser es que el driver **no** manipule direcciones físicas a mano. Vive en `Documentation/core-api/dma-api.rst` y `kernel/dma/`.
 
 ```c
 dma_set_mask_and_coherent(dev, DMA_BIT_MASK(64));  // cuántos bits emite el aparato
@@ -103,16 +78,9 @@ dma_unmap_single(dev, d, len, DMA_FROM_DEVICE);
 
 Las tres piezas que importan:
 
-- **`dma_alloc_coherent` contra `dma_map_single`.** El primero consigue memoria pensada para
-  que el aparato y el procesador la miren a la vez sin sincronizar nada. El segundo toma un
-  buffer que ya existe, lo prepara y devuelve la dirección **de bus** — y esa dirección deja
-  de valer al desmapear. Usar el puntero del procesador después de mapear, o el de bus antes,
-  son los dos errores clásicos.
-- **La máscara.** `dma_set_mask` es el aparato declarando cuánto alcanza. Si el buffer cae
-  fuera, Linux no falla: usa un **bounce buffer** (`swiotlb`), copia a memoria baja y copia de
-  vuelta. Anda, y es lento en silencio: `dmesg | grep -i swiotlb`.
-- **La verificación.** Con `CONFIG_DMA_API_DEBUG` aparece `/sys/kernel/debug/dma-api/`, que
-  atrapa mapeos sin desmapear y usos después de desmapear.
+- **`dma_alloc_coherent` contra `dma_map_single`.** El primero consigue memoria pensada para que el aparato y el procesador la miren a la vez sin sincronizar nada. El segundo toma un buffer que ya existe, lo prepara y devuelve la dirección **de bus** — y esa dirección deja de valer al desmapear. Usar el puntero del procesador después de mapear, o el de bus antes, son los dos errores clásicos.
+- **La máscara.** `dma_set_mask` es el aparato declarando cuánto alcanza. Si el buffer cae fuera, Linux no falla: usa un **bounce buffer** (`swiotlb`), copia a memoria baja y copia de vuelta. Anda, y es lento en silencio: `dmesg | grep -i swiotlb`.
+- **La verificación.** Con `CONFIG_DMA_API_DEBUG` aparece `/sys/kernel/debug/dma-api/`, que atrapa mapeos sin desmapear y usos después de desmapear.
 
 ## Cómo lo hace Kornelia
 
@@ -122,32 +90,18 @@ Las tres piezas que importan:
 | **El verbo** | `dma.allow {device, handle}` — un aparato y un reclamo, nada más |
 | **Dónde vive** | `kernel-core/src/protocol.rs:1751#fn dma_allow`, la tabla en `kernel-core/src/dma.rs:16#pub const MAX` |
 
-No hay API de DMA, porque no hay drivers en el kernel (D4). El agente reclama la memoria que
-quiere con `mem.claim` —él elige la dirección, no hay asignador
-([[Falsos-amigos#10]])— y después **declara** que tal aparato puede tocar ese reclamo.
+No hay API de DMA, porque no hay drivers en el kernel (D4). El agente reclama la memoria que quiere con `mem.claim` —él elige la dirección, no hay asignador ([[Falsos-amigos#10]])— y después **declara** que tal aparato puede tocar ese reclamo.
 
 Dos cosas del verbo que son decisiones y no detalles:
 
-- **`device` es el número con el que lo nombra el bus**, no un handle que reparta el kernel:
-  bus, dispositivo y función juntos, que es lo que el silicio ve llegar en cada pedido de DMA
-  (`kernel-core/src/dma.rs:22#pub device: u32`). El kernel no inventa nombres para las cosas
-  que ya tienen uno (P4).
-- **Es el único verbo cuyo efecto no se ve desde el procesador.** Lo que cambia es lo que
-  alcanza el **aparato**. Y no es un guardarraíl: el kernel no elige nada, hace cumplir lo
-  que el agente declaró (P6).
+- **`device` es el número con el que lo nombra el bus**, no un handle que reparta el kernel: bus, dispositivo y función juntos, que es lo que el silicio ve llegar en cada pedido de DMA (`kernel-core/src/dma.rs:22#pub device: u32`). El kernel no inventa nombres para las cosas que ya tienen uno (P4).
+- **Es el único verbo cuyo efecto no se ve desde el procesador.** Lo que cambia es lo que alcanza el **aparato**. Y no es un guardarraíl: el kernel no elige nada, hace cumplir lo que el agente declaró (P6).
 
-El permiso queda **anotado** para poder sacarlo en `release`. Un reclamo devuelto que un
-aparato sigue alcanzando es justo el agujero silencioso que el IOMMU viene a cerrar: el
-próximo reclamo cae ahí mismo y el aparato de antes le sigue escribiendo.
+El permiso queda **anotado** para poder sacarlo en `release`. Un reclamo devuelto que un aparato sigue alcanzando es justo el agujero silencioso que el IOMMU viene a cerrar: el próximo reclamo cae ahí mismo y el aparato de antes le sigue escribiendo.
 
-**Qué se quitó:** no hay bounce buffers, ni scatter-gather, ni gestión de coherencia, ni
-máscara de aparato, ni `dma_map_*`. El agente elige la memoria y, si el aparato no la
-alcanza, es el agente el que tiene que elegir otra. La capa no se reemplazó por una más
-chica: se dejó vacía (P2).
+**Qué se quitó:** no hay bounce buffers, ni scatter-gather, ni gestión de coherencia, ni máscara de aparato, ni `dma_map_*`. El agente elige la memoria y, si el aparato no la alcanza, es el agente el que tiene que elegir otra. La capa no se reemplazó por una más chica: se dejó vacía (P2).
 
-Y se prueba contra un aparato de verdad: las máquinas de `scripts/run-*.sh` llevan
-`-device edu`, que es un motor de DMA que se maneja con cuatro escrituras. Sin él,
-`dma.allow` no se podría probar contra nada.
+Y se prueba contra un aparato de verdad: las máquinas de `scripts/run-*.sh` llevan `-device edu`, que es un motor de DMA que se maneja con cuatro escrituras. Sin él, `dma.allow` no se podría probar contra nada.
 
 ## Cómo se ve roto
 

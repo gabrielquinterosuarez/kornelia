@@ -10,17 +10,11 @@ conceptos: []
 # P00 · Armar la VM de prácticas
 
 > [!success] Qué vas a ver si funciona
-> Un Linux completo arrancando en tu terminal —sin ventana, por el cable serie— donde
-> podés escribir `sudo rmmod` cualquier cosa y colgar el kernel sin consecuencias. Y un
-> **snapshot** al que volver en dos segundos después de haberlo roto.
+> Un Linux completo arrancando en tu terminal —sin ventana, por el cable serie— donde podés escribir `sudo rmmod` cualquier cosa y colgar el kernel sin consecuencias. Y un **snapshot** al que volver en dos segundos después de haberlo roto.
 
-Esta es la máquina donde se hacen las prácticas de clase **romper**. La regla del libro es
-que nada que pueda dejar una máquina inservible corre en tu Debian, y hay prácticas que
-consisten exactamente en dejar una máquina inservible.
+Esta es la máquina donde se hacen las prácticas de clase **romper**. La regla del libro es que nada que pueda dejar una máquina inservible corre en tu Debian, y hay prácticas que consisten exactamente en dejar una máquina inservible.
 
-Que arranque **por el serie y sin ventana** no es solo comodidad: es la misma vista que vas
-a tener de [[10-Un-kernel-cuyo-usuario-no-es-humano|Kornelia]], donde el cable serie es todo
-lo que hay. Acostumbrarse ahora ayuda después.
+Que arranque **por el serie y sin ventana** no es solo comodidad: es la misma vista que vas a tener de [[10-Un-kernel-cuyo-usuario-no-es-humano|Kornelia]], donde el cable serie es todo lo que hay. Acostumbrarse ahora ayuda después.
 
 ## Lo que hace falta
 
@@ -28,14 +22,11 @@ lo que hay. Acostumbrarse ahora ayuda después.
 sudo apt install -y qemu-system-x86 qemu-utils cloud-image-utils
 ```
 
-`cloud-image-utils` trae `cloud-localds`, que arma el disquito de configuración con el que
-la imagen de Debian se auto-configura en el primer arranque (usuario, clave, paquetes). Sin
-eso habría que hacer una instalación entera a mano.
+`cloud-image-utils` trae `cloud-localds`, que arma el disquito de configuración con el que la imagen de Debian se auto-configura en el primer arranque (usuario, clave, paquetes). Sin eso habría que hacer una instalación entera a mano.
 
 ## Bajar la imagen
 
-Las imágenes *cloud* de Debian son un disco ya instalado, sin entorno gráfico, de unos 350
-MB. Son la forma más rápida de tener un Linux desechable.
+Las imágenes *cloud* de Debian son un disco ya instalado, sin entorno gráfico. La de Debian 13 pesa **339 MB** para bajar y declara **3 GiB** de tamaño virtual. Son la forma más rápida de tener un Linux desechable.
 
 ```bash
 mkdir -p ~/vm-practicas && cd ~/vm-practicas
@@ -43,19 +34,60 @@ mkdir -p ~/vm-practicas && cd ~/vm-practicas
 curl -LO https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2
 ```
 
-> Si esa URL cambia, el índice está en `https://cloud.debian.org/images/cloud/`. `trixie` es
-> Debian 13; si querés otra versión, cambiá el nombre.
+> Si esa URL cambia, el índice está en `https://cloud.debian.org/images/cloud/`. `trixie` es Debian 13; si querés otra versión, cambiá el nombre.
 
-**El original no se toca.** Se crea un disco nuevo que lo usa como base y solo guarda las
-diferencias, así podés tirar el disco de trabajo y volver a empezar sin bajar nada:
+**El original no se toca.** Se crea un disco nuevo que lo usa como base y solo guarda las diferencias, así podés tirar el disco de trabajo y volver a empezar sin bajar nada:
 
 ```bash
 qemu-img create -f qcow2 -F qcow2 \
   -b debian-13-genericcloud-amd64.qcow2 practicas.qcow2 20G
 ```
 
-Eso es *copy-on-write*: el archivo nuevo pesa unos kilobytes y crece solo con lo que
-cambies. La misma idea que usa un `fork()` para no copiar la memoria de un proceso.
+Eso es *copy-on-write*: el archivo nuevo pesa unos kilobytes y crece solo con lo que cambies. La misma idea que usa un `fork()` para no copiar la memoria de un proceso.
+
+### ¿Ese `20G` me come 20 GB de disco?
+
+**No.** Es el tamaño **virtual**: lo que la VM va a *creer* que mide su disco. El archivo arranca en 196 KiB y crece solo con lo que se escriba. Medido:
+
+| | Ocupado en disco |
+|---|---|
+| El overlay recién creado, "de 20 GiB" | **196 KiB** |
+| Después de escribirle 200 MiB adentro | 201 MB |
+| Después de "borrar" esos 200 MiB | **201 MB — no se reduce** |
+
+Esa tercera fila es la que importa y la que sorprende: **qcow2 crece y no se achica solo**. Borrar un archivo adentro de la VM libera espacio para la VM, no para tu disco. Para que sí lo libere hay que pedirle al disco que propague el descarte:
+
+```bash
+# en la linea de QEMU
+-drive file=practicas.qcow2,if=virtio,discard=unmap
+# y adentro de la VM, cada tanto
+sudo fstrim -av
+```
+
+O, más simple para una máquina desechable: volver al snapshot, que descarta todo.
+
+### El mínimo viable
+
+**3 GiB**, porque es el tamaño virtual de la imagen de Debian que hace de base — el archivo que se baja pesa 339 MB, pero adentro declara 3 GiB. Se puede leer del encabezado qcow2 sin bajarla:
+
+```bash
+curl -sL -r 24-31 https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2 \
+  | python3 -c "import sys,struct; print(struct.unpack('>Q', sys.stdin.buffer.read())[0] / 2**30, 'GiB')"
+```
+
+Y como el tamaño no cuesta nada hasta que se usa, **el mínimo no es el número que conviene poner**. Lo que va a ocupar de verdad son unos 2 a 3 GB: el sistema base más `build-essential` y `linux-headers`, que son lo que pesa. Con 3 GiB justos te queda sin lugar al instalar los paquetes. `8G` alcanza holgado; `20G` es un techo cómodo que sale igual de gratis.
+
+> [!danger] Y si lo pongo **más chico** que la base, qemu-img no se queja
+> Un overlay de 1 GiB sobre una base de 3 GiB se crea sin un solo aviso. Y queda roto: el disco que ve la VM está truncado, así que la tabla de particiones apunta a sectores que no existen. Leer más allá del corte da error:
+>
+> ```
+> $ qemu-io -c "read -P 0x42 2G 4k" o1.qcow2
+> read failed: Input/output error
+> ```
+>
+> Es el mismo patrón que este proyecto ya pagó con el SMMU: **un límite que sobra puede ser tan inválido como uno que falta**, y el silicio —o acá la herramienta— lo acepta y lo reinterpreta en silencio en vez de rechazarlo. Ver [[Indice-de-sintomas]].
+>
+> Si no querés pensar el número, **omitilo**: `qemu-img create -f qcow2 -F qcow2 -b base.qcow2 practicas.qcow2` hereda el tamaño de la base, que es siempre correcto por construcción.
 
 ## La configuración del primer arranque
 
@@ -86,14 +118,13 @@ EOF
 cloud-localds seed.img seed.yaml
 ```
 
-`linux-headers-amd64` y `build-essential` son lo que hace falta para **compilar un módulo de
-kernel**, que es la práctica de [[49-Escribir-un-driver]].
+`linux-headers-amd64` y `build-essential` son lo que hace falta para **compilar un módulo de kernel**, que es la práctica de [[49-Escribir-un-driver]].
 
 ## Arrancarla
 
 ```bash
 qemu-system-x86_64 \
-  -enable-kvm -cpu host -m 2048 -smp 2 \
+  -machine q35 -enable-kvm -cpu host -m 2048 -smp 2 \
   -drive file=practicas.qcow2,if=virtio \
   -drive file=seed.img,if=virtio,format=raw \
   -device intel-iommu \
@@ -103,20 +134,27 @@ qemu-system-x86_64 \
 
 | Pedazo | Para qué |
 |---|---|
+| `-machine q35` | **Obligatorio acá.** Es la máquina virtual que QEMU emula: por omisión usa `pc` (el chipset i440fx de 1996), y ahí el IOMMU de Intel **no existe**. Sin esto QEMU se niega a arrancar. Es lo mismo que hace `scripts/run-x86_64.sh` (`scripts/run-x86_64.sh:76#-machine q35`). |
 | `-enable-kvm -cpu host` | Que el silicio corra el código en vez de emularlo. Sin esto va diez veces más lento, y no verías las capacidades reales de tu procesador. |
 | `-smp 2` | Dos núcleos: hace falta para todo lo de la **Parte IX**. |
 | `-device intel-iommu` | Un IOMMU emulado, para las prácticas de [[47-IOMMU-VT-d-y-SMMUv3]]. Igual que hacen los `scripts/run-*.sh` de Kornelia. |
 | `hostfwd=tcp::2222-:22` | `ssh -p 2222 gabriel@localhost` desde otra terminal, cómodo para copiar archivos. |
 | `-nographic` | Sin ventana: la consola sale por esta terminal. **Se sale con `Ctrl-A` y después `X`.** |
 
-El primer arranque tarda un par de minutos (cloud-init instala los paquetes). Después
-arranca en unos segundos.
+El primer arranque tarda un par de minutos (cloud-init instala los paquetes). Después arranca en unos segundos.
 
 > [!warning] Acá `Ctrl-A X` sí sirve, en Kornelia no
-> Esta VM usa el multiplexor de QEMU, así que `Ctrl-A X` la cierra. Los scripts de Kornelia
-> usan `-serial stdio` **crudo** a propósito (D26), porque el multiplexor se come el byte
-> `0x01` y por ahí viaja CBOR: de Kornelia se sale con `Ctrl-C`. Dos máquinas, dos formas de
-> salir; es fácil confundirse.
+> Esta VM usa el multiplexor de QEMU, así que `Ctrl-A X` la cierra. Los scripts de Kornelia usan `-serial stdio` **crudo** a propósito (D26), porque el multiplexor se come el byte `0x01` y por ahí viaja CBOR: de Kornelia se sale con `Ctrl-C`. Dos máquinas, dos formas de salir; es fácil confundirse.
+
+> [!note] Si más adelante hace falta el IOMMU completo
+> Lo de arriba alcanza para traducir DMA, que es lo que se mira en las prácticas del [[IOMMU]]. Para **remapeo de interrupciones** —lo que hace falta para pasarle un aparato real a la VM— son dos cambios más:
+>
+> ```bash
+> -machine q35,kernel-irqchip=split \
+> -device intel-iommu,intremap=on
+> ```
+>
+> Se comprueba en el arranque: `dmesg | grep DMAR-IR` tiene que decir `Queued invalidation will be enabled to support x2apic and Intr-remapping`.
 
 Para que el IOMMU se use de verdad, hay que pedírselo al kernel de la VM:
 
@@ -144,15 +182,10 @@ Y después de haberla dejado inservible:
 qemu-img snapshot -a limpia practicas.qcow2   # volver
 ```
 
-Y para una prueba de la que **no** querés que quede nada, agregá `-snapshot` a la línea de
-QEMU: todo lo que escriba la VM se descarta al apagarla.
+Y para una prueba de la que **no** querés que quede nada, agregá `-snapshot` a la línea de QEMU: todo lo que escriba la VM se descarta al apagarla.
 
 > [!tip] Esto es lo que un kernel no puede hacer
-> Poder volver a un estado anterior con un comando es un lujo de las máquinas virtuales.
-> Adentro de un kernel **el rollback real es imposible, no caro** (D7/D11): cuando el código
-> del agente escribió en un registro de un aparato, no hay snapshot que lo deshaga. Por eso
-> Kornelia devuelve el fault con lo que pasó en vez de prometer que va a arreglarlo. Tenerlo
-> claro acá, donde sí se puede volver, hace más entendible por qué allá no.
+> Poder volver a un estado anterior con un comando es un lujo de las máquinas virtuales. Adentro de un kernel **el rollback real es imposible, no caro** (D7/D11): cuando el código del agente escribió en un registro de un aparato, no hay snapshot que lo deshaga. Por eso Kornelia devuelve el fault con lo que pasó en vez de prometer que va a arreglarlo. Tenerlo claro acá, donde sí se puede volver, hace más entendible por qué allá no.
 
 ## Un script para no repetir todo esto
 
@@ -164,7 +197,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 [[ "${1:-}" == "-limpia" ]] && qemu-img snapshot -a limpia practicas.qcow2
 exec qemu-system-x86_64 \
-  -enable-kvm -cpu host -m 2048 -smp 2 \
+  -machine q35 -enable-kvm -cpu host -m 2048 -smp 2 \
   -drive file=practicas.qcow2,if=virtio \
   -drive file=seed.img,if=virtio,format=raw \
   -device intel-iommu \
@@ -178,6 +211,7 @@ chmod +x ~/vm-practicas/arrancar.sh
 
 | Síntoma | Causa probable |
 |---|---|
+| `-device intel-iommu: Parameter 'driver' expects a dynamic sysbus device type for the machine` | Falta `-machine q35`. El IOMMU de Intel solo existe en esa máquina; en la de omisión el aparato no se puede ni instanciar. QEMU no arranca: no es que la VM falle después. |
 | `Could not access KVM kernel module` | Falta el módulo o el usuario no está en el grupo `kvm`. `sudo usermod -aG kvm $USER` y volver a entrar. En una máquina que ya es virtual, KVM anidado puede no estar. Sacá `-enable-kvm`: va lento pero anda. |
 | Arranca y no aparece la consola | Falta `-nographic`, o la imagen no es *genericcloud* (las `generic` esperan pantalla). |
 | No pide usuario nunca | `seed.img` no se adjuntó o el YAML tiene un error de indentación. cloud-init es muy quisquilloso. Mirá `sudo cloud-init status --long` adentro. |
