@@ -145,6 +145,26 @@ pub trait Platform {
     /// que ya se mapeo, o se pisa lo que habia.
     unsafe fn map_device(&mut self, start: u64, bytes: u64) -> Result<(), &'static str>;
 
+    /// Los bytes que emite el codigo del agente para **pedir un verbo y
+    /// seguir corriendo**.
+    ///
+    /// Es la otra mitad de `EXEC_RETURN`: aquella termina el `exec`, esta
+    /// vuelve. Con las dos, codigo sin privilegio puede usar el protocolo sin
+    /// que nadie del otro lado le pase nada — que es lo que hace posible que el
+    /// blob corra `supervised` en vez de `raw`.
+    ///
+    /// Se publican los bytes y no el numero: el agente no tiene que saber que
+    /// esto es un `int` o un `svc` (D3, P4).
+    const EXEC_SERVICE: &'static [u8];
+
+    /// Deja dicho a quien llamar cuando alguien entra por esa puerta.
+    ///
+    /// # Safety
+    ///
+    /// `addr` tiene que apuntar a una `extern "C" fn(*const u8, usize, *mut u8,
+    /// usize) -> usize` viva mientras corra codigo del agente.
+    unsafe fn set_service_gate(&mut self, addr: u64);
+
     /// Instala la captura de excepciones (P5, D7).
     ///
     /// # Safety

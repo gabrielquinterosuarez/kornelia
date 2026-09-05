@@ -105,9 +105,15 @@ VECTORES:
 vec_lower:
     stp x9, x10, [sp, #-16]!
     mrs x9, esr_el1
-    lsr x9, x9, #26
-    cmp x9, #0x15
-    b.eq exec_window
+    lsr x10, x9, #26
+    cmp x10, #0x15
+    b.ne 8f
+    // Es un `svc`, y cual: el numero que se le puso queda en los 16 bits de
+    // abajo del ESR. El cero termina el `exec`; el uno pide un verbo y sigue.
+    and x9, x9, #0xFFFF
+    cbz x9, exec_window
+    b   exec_service
+8:
     ldp x9, x10, [sp], #16
     // No era la ventanilla: es un fault de verdad, y sigue el camino de todos.
     b vec_common

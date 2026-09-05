@@ -387,6 +387,20 @@ pub unsafe fn install(slot: usize) -> Result<(), &'static str> {
         zero: 0,
     };
 
+    // Y la otra ventanilla, con las mismas condiciones: DPL 3 para que el
+    // agente pueda invocarla, y sin IST. La diferencia esta del otro lado —
+    // esta vuelve por `iretq` y el codigo del agente sigue.
+    let service = crate::exec::exec_service as *const () as u64;
+    idt.0[crate::exec::SERVICE_VECTOR] = Entry {
+        off_low: service as u16,
+        selector: crate::gdt::CODE,
+        ist: 0,
+        kind: 0xEE,
+        off_mid: (service >> 16) as u16,
+        off_high: (service >> 32) as u32,
+        zero: 0,
+    };
+
     let d = Descriptor {
         limit: (core::mem::size_of::<Idt>() - 1) as u16,
         base: core::ptr::addr_of!(*idt) as u64,

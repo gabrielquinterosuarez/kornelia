@@ -93,7 +93,7 @@ cat /proc/sys/kernel/watchdog_thresh
 |---|---|
 | **Decisiones** | D7 (faults estructurados), D11 (el kernel no deshace, pero cuenta) |
 | **Principios** | **P5 — los faults son datos, no muerte**; P4 |
-| **Dónde vive** | `kernel-core/src/fault.rs:123#pub fn report`, `kernel-x86_64/src/main.rs:346#D7: los faults son datos` |
+| **Dónde vive** | `kernel-core/src/fault.rs:123#pub fn report`, `kernel-x86_64/src/main.rs:354#D7: los faults son datos` |
 
 **El fault del agente no produce nada parecido a un oops: vuelve como respuesta por el cable**, con causa, `pc`, dirección tocada y los registros nombrados como los nombra esta máquina. Es la misma información que Linux imprime en un oops, pero **estructurada y dirigida a quien puede hacer algo con ella** — que es el punto de P3: el agente escribió ese código y va a escribir el siguiente. Ver [[Fault]].
 

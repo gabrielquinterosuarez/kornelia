@@ -44,6 +44,13 @@ static mut AGENT_STACKS: AgentStacks =
 /// es una excepcion, y `svc` es la que existe para pedirla a proposito.
 pub const RETURN_BYTES: &[u8] = &[0x01, 0x00, 0x00, 0xD4];
 
+/// Los bytes de `svc #1`: la otra puerta, la que **vuelve** al agente.
+///
+/// Va con otro numero en vez de distinguirse por un registro, por lo mismo que
+/// en x86_64: dos puertas con dos significados se leen, un registro con dos
+/// significados hay que explicarlo.
+pub const SERVICE_BYTES: &[u8] = &[0x21, 0x00, 0x00, 0xD4];
+
 core::arch::global_asm!(
     r#"
 .section .text
@@ -188,6 +195,38 @@ exec_supervised:
     ldr  x30,      [x30, #(30 * 8)]
     eret
 
+.globl exec_service
+// La otra ventanilla: el agente pide un verbo y **sigue corriendo**.
+//
+// Vuelve por `eret`, asi que el codigo retoma en la instruccion siguiente al
+// `svc`. Los cuatro argumentos ya vienen en x0-x3, que es donde la ABI de C los
+// pone; lo unico que hay que hacer es no pisarle al agente lo que la ABI deja
+// en manos del que llama. Los x19-x28 los preserva Rust por su cuenta, y x9 y
+// x10 ya los apilo `vec_lower`.
+exec_service:
+    stp x29, x30, [sp, #-16]!
+    stp x17, x18, [sp, #-16]!
+    stp x15, x16, [sp, #-16]!
+    stp x13, x14, [sp, #-16]!
+    stp x11, x12, [sp, #-16]!
+    stp x7,  x8,  [sp, #-16]!
+    stp x5,  x6,  [sp, #-16]!
+    stp x3,  x4,  [sp, #-16]!
+    stp x1,  x2,  [sp, #-16]!
+    bl   exec_service_rust
+    // x0 queda con el resultado: es lo unico que el agente recibe de vuelta.
+    ldp x1,  x2,  [sp], #16
+    ldp x3,  x4,  [sp], #16
+    ldp x5,  x6,  [sp], #16
+    ldp x7,  x8,  [sp], #16
+    ldp x11, x12, [sp], #16
+    ldp x13, x14, [sp], #16
+    ldp x15, x16, [sp], #16
+    ldp x17, x18, [sp], #16
+    ldp x29, x30, [sp], #16
+    ldp x9,  x10, [sp], #16
+    eret
+
 .globl exec_window
 // La ventanilla: el codigo del agente hizo `svc` desde EL0.
 //
@@ -286,6 +325,34 @@ pub const INITIAL: &[&str] = &[
 
 /// Los registros por los que pasan los argumentos, como indices dentro de
 /// `REGISTERS`, que es como viene `initial`.
+/// A donde va un pedido que entra por la ventanilla de servicio. Es un puntero
+/// porque quien atiende es generico y el ensamblador no puede nombrarlo.
+static mut SERVICE: usize = 0;
+
+/// Deja dicho quien atiende los pedidos de la ventanilla de servicio.
+///
+/// # Safety
+///
+/// `addr` tiene que ser una `extern "C" fn(*const u8, usize, *mut u8, usize)
+/// -> usize` viva.
+pub unsafe fn set_service(addr: u64) {
+    SERVICE = addr as usize;
+}
+
+/// Lo que llama el stub. Sin nadie a quien llamar contesta que no hay nada,
+/// que es mejor que saltar a cero.
+#[no_mangle]
+extern "C" fn exec_service_rust(req: *const u8, len: usize, out: *mut u8, cap: usize) -> usize {
+    let who = unsafe { SERVICE };
+    if who == 0 {
+        return 0;
+    }
+    // SAFETY: lo dejo `set_service`, y apunta a una funcion del kernel.
+    let who: extern "C" fn(*const u8, usize, *mut u8, usize) -> usize =
+        unsafe { core::mem::transmute(who) };
+    who(req, len, out, cap)
+}
+
 pub const ARGUMENTS: &[usize] = &[0, 1]; // x0, x1
 
 /// El primero de esos: donde `exec` deja la direccion de entrada.

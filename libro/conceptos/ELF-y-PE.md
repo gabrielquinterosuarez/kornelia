@@ -123,7 +123,7 @@ No es una rareza: **UEFI carga PE**, porque el estándar lo dice, y por eso el a
 > [!danger] Y de ahí sale uno de los bugs más caros del proyecto
 > El target es `x86_64-unknown-uefi`, y ese target **no trae solo el formato: trae la ABI de Windows**. `extern "C"` ahí pasa los argumentos por **RCX, RDX, R8, R9** —no RDI y RSI— y además exige que quien llama reserve **32 bytes de pila vacía** antes de la llamada. El síntoma no se parece a la causa: una llamada del blob entraba **a la función correcta** y veía **punteros nulos**. Los cuatro argumentos estaban ahí, en otros cuatro registros. La moraleja: **la convención de llamada la pone el target, no el silicio.** Saber que la máquina es x86_64 no alcanza para saber por dónde pasan los argumentos.
 
-Por eso `ARGUMENTS` vive en cada arquitectura y **se publica** en vez de deducirse (P4): `kernel-x86_64/src/exec.rs:293#pub const ARGUMENTS: &[usize] = &[2, 3]` contra `kernel-aarch64/src/exec.rs:289#pub const ARGUMENTS: &[usize] = &[0, 1]`, y el trait lo exige a las dos (`kernel-core/src/platform.rs:129#const ARGUMENTS: &'static [usize];`). El agente lo lee de `describe {what:["exec"]}`. Ver [[27-La-ABI-la-pone-el-target-no-el-silicio]].
+Por eso `ARGUMENTS` vive en cada arquitectura y **se publica** en vez de deducirse (P4): `kernel-x86_64/src/exec.rs:365#pub const ARGUMENTS: &[usize] = &[2, 3]` contra `kernel-aarch64/src/exec.rs:356#pub const ARGUMENTS: &[usize] = &[0, 1]`, y el trait lo exige a las dos (`kernel-core/src/platform.rs:129#const ARGUMENTS: &'static [usize];`). El agente lo lee de `describe {what:["exec"]}`. Ver [[27-La-ABI-la-pone-el-target-no-el-silicio]].
 
 ### Qué se quitó: el código del agente no tiene formato ninguno
 
@@ -134,7 +134,7 @@ Y esta es la parte que da vuelta el concepto. El código que sube el agente **no
 | Cabecera con arquitectura | Ya la dijo `describe`: el agente compiló **para esta máquina** (P4). |
 | Segmentos con permisos | `mem.claim` y `exec {mode}`: el agente declara privilegio, no el archivo (D27). |
 | Entry point | `exec {handle, off}`: el reclamo más un desplazamiento. |
-| Reubicaciones | Nada. El kernel le pasa al código **su propia dirección** en el primer registro de argumento (`kernel-core/src/protocol.rs:1467#recibe en el primer registro de argumento su propia direccion`). |
+| Reubicaciones | Nada. El kernel le pasa al código **su propia dirección** en el primer registro de argumento (`kernel-core/src/protocol.rs:1477#recibe en el primer registro de argumento su propia direccion`). |
 | Símbolos y enlazador | El agente. Ya enlazó él. |
 
 Lo último es P3 en una línea: **el agente es el compilador**. Un formato ejecutable existe porque el que produce el código y el que lo carga son dos programas distintos que se tienen que poner de acuerdo por escrito. Acá el que produce el código sabe la dirección de destino **antes** de compilar, porque la pidió con `mem.claim`. El acuerdo por escrito sobra.

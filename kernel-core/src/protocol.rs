@@ -719,7 +719,7 @@ fn write_index(
 /// El kernel ofrece los dos y no elige: elegir es del agente (P6). Lo que si
 /// hace es **publicar el acuerdo**, para que no lo tenga horneado (P4).
 fn write_exec<P: Platform>(p: &mut P, w: &mut Writer<'_>) {
-    w.map(8);
+    w.map(9);
 
     w.text("modes");
     w.array(2);
@@ -733,6 +733,16 @@ fn write_exec<P: Platform>(p: &mut P, w: &mut Writer<'_>) {
     // pegue al final de lo que emite sin saber sobre que silicio corre (D3).
     w.text("return");
     w.bytes(P::EXEC_RETURN);
+
+    // Y la otra puerta: **pedir un verbo y seguir corriendo**. Es lo que le
+    // permite a codigo sin privilegio hablar el protocolo sin nadie del otro
+    // lado, y por eso el blob puede correr `supervised` en vez de `raw`.
+    //
+    // Los cuatro argumentos van por los registros que publica `arguments`: la
+    // direccion del pedido, cuanto mide, donde dejar la respuesta y cuanto
+    // entra ahi. Vuelve cuanto ocupa la respuesta, o cero si no entro.
+    w.text("service");
+    w.bytes(P::EXEC_SERVICE);
 
     // Y de donde sale la pila: del final del mismo reclamo. Se dice porque es
     // memoria que el agente tiene que dejarle libre a su propio codigo.

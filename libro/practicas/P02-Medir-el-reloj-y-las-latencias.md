@@ -35,7 +35,7 @@ un ciclo dura   : 0.502 ns
 en un ciclo la senal recorre unos 10.0 cm de cobre
 ```
 
-**Qué estás viendo:** `__rdtsc()` es **una instrucción** que devuelve el valor de un contador que el silicio mantiene solo. No hay [[Driver|driver]], no hay [[Syscall|llamada al sistema]], no hay kernel en el medio. Es lo más cerca del hardware que se puede estar desde un programa normal, y es exactamente lo que hace Kornelia (`kernel-x86_64/src/main.rs:505#"lfence",`).
+**Qué estás viendo:** `__rdtsc()` es **una instrucción** que devuelve el valor de un contador que el silicio mantiene solo. No hay [[Driver|driver]], no hay [[Syscall|llamada al sistema]], no hay kernel en el medio. Es lo más cerca del hardware que se puede estar desde un programa normal, y es exactamente lo que hace Kornelia (`kernel-x86_64/src/main.rs:513#"lfence",`).
 
 Fijate en la última línea: en un ciclo, la señal recorre diez centímetros de cobre. Tu RAM está a más que eso. Ver [[01-El-reloj-y-el-transistor]].
 
@@ -180,7 +180,7 @@ export PATH="$HOME/.cargo/bin:$PATH"
 ./scripts/client.py --arch aarch64 --what clock
 ```
 
-**Qué estás viendo:** dos arquitecturas que resuelven "qué hora es" de forma distinta, y un kernel que no elige por vos. ARM lo informa en un registro (`kernel-aarch64/src/main.rs:354#cntfrq_el0`); x86 puede no decirlo y entonces hay que medirlo, igual que lo medimos nosotros en la parte 1. Y si nadie lo dice, el kernel **no inventa un número**: un tiempo falso es peor que no tener tiempo, porque parece un dato (P4).
+**Qué estás viendo:** dos arquitecturas que resuelven "qué hora es" de forma distinta, y un kernel que no elige por vos. ARM lo informa en un registro (`kernel-aarch64/src/main.rs:362#cntfrq_el0`); x86 puede no decirlo y entonces hay que medirlo, igual que lo medimos nosotros en la parte 1. Y si nadie lo dice, el kernel **no inventa un número**: un tiempo falso es peor que no tener tiempo, porque parece un dato (P4).
 
 ---
 

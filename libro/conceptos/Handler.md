@@ -70,7 +70,7 @@ Y `dmesg` avisa cuando un handler se porta mal: `irq NN: nobody cared (try booti
 
 No hay top half ni bottom half, porque no hay scheduler al que ceder (P2). Lo que hay es el patrón que D9 anticipa y el agente implementa: **el handler escribe en un buffer circular y el agente lo lee cuando vuelve.** La máquina junta eventos sola durante horas; el agente aparece después y lee la historia. Eso es posible porque los handles pertenecen a la máquina, no a la conexión (D14).
 
-El "prólogo, epílogo y EOI" que promete `irq.install` son literalmente eso: en x86_64, un stub por ranura que apila su número y salta a un tramo común que salva registros, llama, los restaura y hace `iretq` (`kernel-x86_64/src/irq.rs:651#agent_comun:`). La variante `raw` no restringe menos — `kernel-core/src/protocol.rs:2053#no restringe menos`— son veinte bytes que el agente escribiría igual. **No es un guardarraíl** lo que se saca.
+El "prólogo, epílogo y EOI" que promete `irq.install` son literalmente eso: en x86_64, un stub por ranura que apila su número y salta a un tramo común que salva registros, llama, los restaura y hace `iretq` (`kernel-x86_64/src/irq.rs:651#agent_comun:`). La variante `raw` no restringe menos — `kernel-core/src/protocol.rs:2063#no restringe menos`— son veinte bytes que el agente escribiría igual. **No es un guardarraíl** lo que se saca.
 
 Dos cosas del `Handler` que valen por sí solas:
 

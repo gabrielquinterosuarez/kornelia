@@ -93,7 +93,7 @@ earlyprintk=serial,ttyS0,115200   # la version vieja de x86, con la direccion ho
 
 **Es el único driver que el kernel lleva adentro**, y el comentario lo dice con todas las letras: `kernel-x86_64/src/uart.rs:4#y por eso es el único que el kernel lleva adentro (D4)`. Todo lo demás lo escribe el agente ([[Driver]]).
 
-**Es lo primero que se hace, antes de pedirle la máquina al [[Firmware|firmware]]:** `kernel-x86_64/src/main.rs:273#uart::init();`, con el comentario *"si lo que sigue falla, hace falta poder contarlo"*.
+**Es lo primero que se hace, antes de pedirle la máquina al [[Firmware|firmware]]:** `kernel-x86_64/src/main.rs:281#uart::init();`, con el comentario *"si lo que sigue falla, hace falta poder contarlo"*.
 
 ### Arranca con una dirección horneada y se muda
 
@@ -117,7 +117,7 @@ El UART es lentísimo. La decisión no es "el protocolo va por serie": es que el
 
 El núcleo que atiende **duerme** entre pedidos: el UART tiene el bit de "avisá cuando llegue" prendido (`kernel-aarch64/src/uart.rs:85#pub fn enable_rx_interrupt`) y el handler deja los bytes en un anillo, del que el bucle los saca al despertar. Ver [[38-Dormir-en-vez-de-girar]].
 
-Cuántos bytes aguanta ese anillo y **cuántos se perdieron** son estado de la máquina, así que se publican: `describe {what:["cable"]}`, en `kernel-core/src/protocol.rs:1975#fn write_cable`. El portón exige que el contador sea cero.
+Cuántos bytes aguanta ese anillo y **cuántos se perdieron** son estado de la máquina, así que se publican: `describe {what:["cable"]}`, en `kernel-core/src/protocol.rs:1985#fn write_cable`. El portón exige que el contador sea cero.
 
 ## Cómo se ve roto
 

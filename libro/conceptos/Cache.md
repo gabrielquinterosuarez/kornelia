@@ -117,7 +117,7 @@ Del lado del kernel: la constante `L1_CACHE_BYTES`, el atributo `____cacheline_a
 | | |
 |---|---|
 | **Decisiones** | D12 (identity map; MMIO no cacheable), D4 (el agente escribe sus [[Driver|drivers]]) |
-| **Dónde vive** | `kernel-x86_64/src/paging.rs:54#PCD: cache disable`, `kernel-aarch64/src/paging.rs:66#const ATTR_DEVICE`, `kernel-aarch64/src/exec.rs:383#dc cvau` |
+| **Dónde vive** | `kernel-x86_64/src/paging.rs:54#PCD: cache disable`, `kernel-aarch64/src/paging.rs:66#const ATTR_DEVICE`, `kernel-aarch64/src/exec.rs:450#dc cvau` |
 
 **No hay política de caché: hay un atributo por bloque de 1 GiB, con dos valores.** RAM normal write-back, o dispositivo. Eso es todo, y alcanza porque el kernel no administra memoria: la reclama el agente (P2).
 
@@ -127,7 +127,7 @@ Lo interesante es que **las dos arquitecturas codifican esa misma decisión de f
 - En aarch64 **no hay un bit**: hay un índice de tres bits a `MAIR_EL1`, un registro que contiene ocho descripciones de ocho bits cada una. La ranura 0 vale `0xFF` (normal write-back) y la ranura 1 vale `0x04` (`Device-nGnRE`). O sea: en ARM el significado de "no cacheable" lo define el kernel y la tabla solo lo referencia.
 - Y hay un tercer bit que en x86 no existe: `SHAREABLE` (`kernel-aarch64/src/paging.rs:61#const SHAREABLE`), *inner shareable*, que se pone **solo en la memoria normal**. Es literalmente pedirle al hardware que mantenga la coherencia entre núcleos para ese rango. En x86 no se pide porque siempre es así.
 
-**Las dos cachés de código, y el orden que no es negociable.** `exec` sube código máquina por el cable —o sea, lo escribe como datos— y después salta ahí. En aarch64 eso obliga a limpiar la caché de datos hasta el punto de unificación (`dc cvau`), esperar con un `dsb ish`, y **recién después** invalidar la de instrucciones (`kernel-aarch64/src/exec.rs:392#ic ivau`). Al revés no serviría: invalidaría y volvería a traer lo viejo, que todavía está sucio en la de datos. En x86_64 no hace falta nada.
+**Las dos cachés de código, y el orden que no es negociable.** `exec` sube código máquina por el cable —o sea, lo escribe como datos— y después salta ahí. En aarch64 eso obliga a limpiar la caché de datos hasta el punto de unificación (`dc cvau`), esperar con un `dsb ish`, y **recién después** invalidar la de instrucciones (`kernel-aarch64/src/exec.rs:459#ic ivau`). Al revés no serviría: invalidaría y volvería a traer lo viejo, que todavía está sucio en la de datos. En x86_64 no hace falta nada.
 
 **Y el false sharing está evitado a propósito.** El bloque de estado privado de cada núcleo está declarado `#[repr(C, align(64))]` (`kernel-x86_64/src/percpu.rs:32#repr(C, align(64))`): 64 es el tamaño de la línea, así que dos núcleos vecinos en el arreglo nunca comparten una. Sin eso, el punto de recuperación de un núcleo y el del otro rebotarían entre cachés en cada `exec`.
 

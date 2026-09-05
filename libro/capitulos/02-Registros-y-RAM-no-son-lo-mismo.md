@@ -117,7 +117,7 @@ Seis y seis, y el corte se ve a simple vista. La convención de Linux en x86_64 
 > [!warning] Y ese número no lo pone la arquitectura
 > Este kernel corre en la misma arquitectura y su convención es otra: `x86_64-unknown-uefi` usa la de Windows, que pasa **cuatro** argumentos, por `RCX, RDX, R8, R9`, y encima exige 32 bytes de pila vacía antes de la llamada. El mismo silicio, otro acuerdo.
 >
-> Eso costó caro de verdad: una llamada del blob entraba a la función correcta y **veía punteros nulos** — los cuatro argumentos estaban ahí, en otros cuatro registros. Ver [[27-La-ABI-la-pone-el-target-no-el-silicio]]. Es la razón por la que Kornelia **publica** `ARGUMENTS` en vez de que el agente lo deduzca (`kernel-x86_64/src/exec.rs:293#pub const ARGUMENTS`): la máquina se describe a sí misma (P4).
+> Eso costó caro de verdad: una llamada del blob entraba a la función correcta y **veía punteros nulos** — los cuatro argumentos estaban ahí, en otros cuatro registros. Ver [[27-La-ABI-la-pone-el-target-no-el-silicio]]. Es la razón por la que Kornelia **publica** `ARGUMENTS` en vez de que el agente lo deduzca (`kernel-x86_64/src/exec.rs:365#pub const ARGUMENTS`): la máquina se describe a sí misma (P4).
 
 ---
 

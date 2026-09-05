@@ -88,7 +88,7 @@ Las tres piezas que importan:
 |---|---|
 | **Decisiones** | D4 (el driver lo escribe el agente), D8 (IOMMU encendido y vacío) |
 | **El verbo** | `dma.allow {device, handle}` — un aparato y un reclamo, nada más |
-| **Dónde vive** | `kernel-core/src/protocol.rs:1751#fn dma_allow`, la tabla en `kernel-core/src/dma.rs:16#pub const MAX` |
+| **Dónde vive** | `kernel-core/src/protocol.rs:1761#fn dma_allow`, la tabla en `kernel-core/src/dma.rs:16#pub const MAX` |
 
 No hay API de DMA, porque no hay drivers en el kernel (D4). El agente reclama la memoria que quiere con `mem.claim` —él elige la dirección, no hay asignador ([[Falsos-amigos#10]])— y después **declara** que tal aparato puede tocar ese reclamo.
 

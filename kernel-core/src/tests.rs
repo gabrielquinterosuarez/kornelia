@@ -153,6 +153,9 @@ impl Platform for Fake {
     /// Una maquina de mentira devuelve bytes de mentira: lo que importa es que
     /// `describe` los publique, no que sean ejecutables.
     const EXEC_RETURN: &'static [u8] = &[0x00];
+    const EXEC_SERVICE: &'static [u8] = &[0xCD, 0x81];
+
+    unsafe fn set_service_gate(&mut self, _addr: u64) {}
 
     unsafe fn install_serial_interrupt(
         &mut self,

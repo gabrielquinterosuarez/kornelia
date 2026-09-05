@@ -124,19 +124,19 @@ Es también por qué un [[Fault|fault]] se puede devolver como dato: cuando el c
 
 El reloj de este kernel es el contador que **ya viene andando** en el silicio: `TSC` en x86_64, `CNTPCT_EL0` en aarch64. Se lee con una instrucción y no hace falta [[Driver|driver]] ninguno, que es lo más cerca del silicio que se puede estar:
 
-- `kernel-aarch64/src/main.rs:366#cntpct_el0` — leer el contador en aarch64.
+- `kernel-aarch64/src/main.rs:374#cntpct_el0` — leer el contador en aarch64.
 - `kernel-x86_64/src/main.rs:138#fn clock` — lo mismo del otro lado.
 
 Lo interesante no es leerlo: es que **las dos máquinas no coinciden en si te dicen a qué ritmo sube**.
 
 | | Cómo se sabe la frecuencia |
 |---|---|
-| **aarch64** | La máquina lo informa en un registro: `CNTFRQ_EL0` (`kernel-aarch64/src/main.rs:354#cntfrq_el0`). Se lee y listo. |
+| **aarch64** | La máquina lo informa en un registro: `CNTFRQ_EL0` (`kernel-aarch64/src/main.rs:362#cntfrq_el0`). Se lee y listo. |
 | **x86_64** | Puede no decirlo. Entonces **se mide**: se cuenta cuánto sube el TSC contra el contador de frecuencia fija que informa [[ACPI]]. |
 
 Y si nadie lo dice, el kernel **dice que no lo sabe** en vez de calcular un tiempo falso. Eso es P4 en su forma más chica: la máquina se describe a sí misma, y cuando no se describe, el kernel no rellena el hueco con una suposición. Un tiempo inventado es peor que no tener tiempo, porque parece un dato.
 
-Hay un detalle de silicio escondido ahí que vale la pena, y está comentado en el código (`kernel-x86_64/src/main.rs:505#"lfence",`): antes de `rdtsc` hay que poner una barrera, porque **el procesador puede adelantar la lectura del contador** y medir menos de lo que pasó. El procesador ejecuta fuera de orden, y el reloj no es una excepción. Ver [[03-Que-hace-realmente-una-instruccion]].
+Hay un detalle de silicio escondido ahí que vale la pena, y está comentado en el código (`kernel-x86_64/src/main.rs:513#"lfence",`): antes de `rdtsc` hay que poner una barrera, porque **el procesador puede adelantar la lectura del contador** y medir menos de lo que pasó. El procesador ejecuta fuera de orden, y el reloj no es una excepción. Ver [[03-Que-hace-realmente-una-instruccion]].
 
 ### Para qué le sirve el reloj a este kernel
 

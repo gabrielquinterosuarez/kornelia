@@ -65,7 +65,7 @@ x86 tiene un **segundo [[Espacio-de-direcciones|espacio de direcciones]]**, ante
 | Tamaño del espacio | 2⁶⁴ | 65.536 |
 | Existe en ARM / RISC-V | — | **nunca existió** |
 
-Viene del 8080 y es historia, pero **historia que todavía corre**: el [[UART|cable serie]] de una PC está en el puerto `0x3F8`, la configuración PCI vieja se hace con el par `0xCF8`/`0xCFC`, y el contador del reloj de ACPI vive en un puerto. Kornelia usa los tres primeros y el último: `kernel-x86_64/src/uart.rs:6#const COM1: u16 = 0x3F8;` para hablar, y `kernel-x86_64/src/main.rs:452#in eax, dx` para medir la frecuencia del TSC contra el contador de ACPI, que es un puerto y no una dirección. El comentario de al lado lo dice sin vueltas: `kernel-x86_64/src/main.rs:448#Los puertos no son memoria`.
+Viene del 8080 y es historia, pero **historia que todavía corre**: el [[UART|cable serie]] de una PC está en el puerto `0x3F8`, la configuración PCI vieja se hace con el par `0xCF8`/`0xCFC`, y el contador del reloj de ACPI vive en un puerto. Kornelia usa los tres primeros y el último: `kernel-x86_64/src/uart.rs:6#const COM1: u16 = 0x3F8;` para hablar, y `kernel-x86_64/src/main.rs:460#in eax, dx` para medir la frecuencia del TSC contra el contador de ACPI, que es un puerto y no una dirección. El comentario de al lado lo dice sin vueltas: `kernel-x86_64/src/main.rs:456#Los puertos no son memoria`.
 
 Todo lo nuevo es MMIO. Ver [[MMIO]].
 
@@ -97,7 +97,7 @@ En x86 casi siempre **no hay rastro**, que es el punto de la sección anterior.
 | | |
 |---|---|
 | **Decisiones** | D4 (el kernel no tiene drivers), D12 (MMIO no cacheable), P1, P4, P5 |
-| **Dónde vive** | `kernel-core/src/memory.rs:109#Unreported,` y `kernel-core/src/protocol.rs:1248#access-refused` |
+| **Dónde vive** | `kernel-core/src/memory.rs:109#Unreported,` y `kernel-core/src/protocol.rs:1258#access-refused` |
 
 El kernel **no enumera aparatos ni asigna BARs**: eso es trabajo de driver, y los drivers los escribe el agente (D4). Lo que hace es lo que el agente no puede hacer solo:
 

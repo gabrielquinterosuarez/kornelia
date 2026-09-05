@@ -58,7 +58,7 @@ Acá aparece una de las decisiones más chicas y más ilustrativas del proyecto 
 
 x86_64 tiene RAX; ARM64 tiene X0–X30; RISC-V tiene x0–x31. Si el protocolo dijera "poné esto en RAX", el protocolo sería de x86 disfrazado de genérico. Entonces la máquina **informa qué registros tiene**, y el agente los nombra como los nombra esa máquina:
 
-- `describe exec` publica cuáles se pueden poner, y por cuáles pasan los argumentos: `kernel-x86_64/src/exec.rs:293#pub const ARGUMENTS`.
+- `describe exec` publica cuáles se pueden poner, y por cuáles pasan los argumentos: `kernel-x86_64/src/exec.rs:365#pub const ARGUMENTS`.
 - El orden de esa lista es el orden en que el ensamblador deja los valores. **Cambiar uno sin el otro hace que el kernel informe un registro con el nombre de otro** — ya pasó, en aarch64. Ver [[Indice-de-sintomas]].
 
 Y la razón por la que `ARGUMENTS` **se publica en vez de deducirse** es un bug que costó caro: la convención de llamada no la pone la arquitectura, la pone el *target*. Ver [[27-La-ABI-la-pone-el-target-no-el-silicio]].

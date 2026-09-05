@@ -59,6 +59,18 @@ pub const WINDOW_VECTOR: usize = 0x80;
 /// Los bytes de `int 0x80`, que es lo que `describe` publica.
 pub const RETURN_BYTES: &[u8] = &[0xCD, 0x80];
 
+/// La otra puerta: **atendeme esto y devolveme el control**.
+///
+/// Va aparte de la de retorno y no distinguida por un registro, por dos
+/// razones. Una: el codigo que vuelve ya usa `rax` para dejar su resultado, y
+/// robarselo cambiaria una convencion que ya existe. Dos: dos puertas con dos
+/// significados se leen; un registro con dos significados hay que explicarlo.
+pub const SERVICE_VECTOR: usize = 0x81;
+
+/// Los bytes de `int 0x81`. Tambien se publican (P4): el agente no tiene que
+/// saber que esto es un `int`, solo que emitiendo estos bytes le contestan.
+pub const SERVICE_BYTES: &[u8] = &[0xCD, 0x81];
+
 core::arch::global_asm!(
     r#"
 .section .text
@@ -230,6 +242,33 @@ exec_window:
 3:
     iretq
 
+.globl exec_service
+// La otra ventanilla: el codigo del agente pide un verbo y **sigue corriendo**.
+//
+// A diferencia de `exec_window`, esta SI vuelve por `iretq`: el codigo retoma
+// en la instruccion siguiente, que es lo que hace cualquier llamada al sistema.
+// La de al lado es la rara — termina el `exec` en vez de volver.
+//
+// Los cuatro argumentos ya vienen donde la ABI de este target los pone (rcx,
+// rdx, r8, r9), asi que no hay que moverlos. Lo unico que hay que cuidar es no
+// pisarle al agente los registros que la ABI deja en manos del que llama.
+exec_service:
+    push rax
+    push r10
+    push r11
+    // La ABI de este target (UEFI, o sea la de Windows) exige 32 bytes de pila
+    // vacia antes de la llamada. Sin eso, la funcion escribe donde no debe.
+    sub rsp, 40
+    call exec_service_rust
+    add rsp, 40
+    // El resultado queda en rax, pero rax se restaura abajo: se guarda en el
+    // lugar de la pila donde estaba el rax viejo, asi el agente lo recibe.
+    mov [rsp + 16], rax
+    pop r11
+    pop r10
+    pop rax
+    iretq
+
 exec_recovery:
     // Aca aterriza el `iretq` del handler cuando hubo fault. La pila del agente
     // puede estar rota, asi que lo primero es recuperar la nuestra — y eso se
@@ -253,6 +292,8 @@ extern "sysv64" {
     fn exec_trampoline(entry: u64, supervised: u64) -> u64;
     /// La ventanilla. La engancha `idt` con una compuerta de `DPL=3`.
     pub fn exec_window();
+    /// Y la de servicio, con la misma compuerta pero que vuelve al agente.
+    pub fn exec_service();
 }
 
 // El ensamblador de arriba lleva los selectores escritos a mano, porque un
@@ -290,6 +331,37 @@ pub const INITIAL: &[&str] = &[
 /// registros. Importa porque asi el codigo del agente puede ser una funcion
 /// compilada para este mismo target y recibir lo que el kernel le pasa sin
 /// traduccion.
+/// A donde va un pedido que entra por la ventanilla de servicio.
+///
+/// Es un puntero y no una llamada directa porque quien atiende es generico
+/// sobre la arquitectura, y un stub de ensamblador no puede nombrar algo
+/// generico. Se fija una vez, al arrancar.
+static mut SERVICE: usize = 0;
+
+/// Deja dicho quien atiende los pedidos de la ventanilla de servicio.
+///
+/// # Safety
+///
+/// `addr` tiene que ser una `extern "C" fn(*const u8, usize, *mut u8, usize)
+/// -> usize` viva.
+pub unsafe fn set_service(addr: u64) {
+    SERVICE = addr as usize;
+}
+
+/// Lo que llama el stub. Si nadie dejo a quien llamar, contesta que no hay
+/// nada — que es mejor que saltar a cero.
+#[no_mangle]
+extern "C" fn exec_service_rust(req: *const u8, len: usize, out: *mut u8, cap: usize) -> usize {
+    let who = unsafe { SERVICE };
+    if who == 0 {
+        return 0;
+    }
+    // SAFETY: lo dejo `set_service`, y apunta a una funcion del kernel.
+    let who: extern "C" fn(*const u8, usize, *mut u8, usize) -> usize =
+        unsafe { core::mem::transmute(who) };
+    who(req, len, out, cap)
+}
+
 pub const ARGUMENTS: &[usize] = &[2, 3]; // rcx, rdx
 
 /// El primero de esos: donde `exec` deja la direccion de entrada.

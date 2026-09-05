@@ -249,6 +249,14 @@ impl Platform for AArch64 {
     /// `svc #0`. El agente no tiene que saber que es un `svc`: los recibe como
     /// bytes por `describe` y los pega al final de lo que emite (D3).
     const EXEC_RETURN: &'static [u8] = exec::RETURN_BYTES;
+
+    /// La otra puerta: pedir un verbo y seguir. Con esta, codigo sin privilegio
+    /// puede hablar el protocolo sin nadie del otro lado.
+    const EXEC_SERVICE: &'static [u8] = exec::SERVICE_BYTES;
+
+    unsafe fn set_service_gate(&mut self, addr: u64) {
+        exec::set_service(addr);
+    }
 }
 
 /// Escritor sobre el UART pelado, sin pasar por `Platform`.
