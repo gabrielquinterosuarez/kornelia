@@ -31,7 +31,7 @@ líneas. Escribí en español. Los comentarios del código van en español.
 
 ## Decisiones ya tomadas
 
-**29 decisiones (D1–D29) están cerradas en `docs/DISENO.md`, cada una con su
+**30 decisiones (D1–D30) están cerradas en `docs/DISENO.md`, cada una con su
 justificación. No las reabras sin motivo nuevo.** Las más importantes:
 
 - **D1** El agente es externo (cliente), no residente — pero la puerta a residente queda abierta.
@@ -50,6 +50,7 @@ justificación. No las reabras sin motivo nuevo.** Las más importantes:
 - **D29** En el núcleo del kernel **manda el kernel**: una interrupción ahí tiene prioridad sobre el código del agente. En un núcleo `dedicated` la prioridad la decide el agente. Implica que en el núcleo del protocolo el agente corre `supervised` — si quiere `raw`, que reclame uno propio.
 - **D28** `listen` es el verbo **once**: el agente arma un buzón en memoria y se lo entrega como segundo canal. Se agregó en vez de esconderlo en un acuerdo implícito — un número redondo no es un principio.
 - **D27** El agente **declara** si su código corre `supervised` (anillo bajo, no puede colgar la máquina) o `raw` (privilegio completo). El kernel ofrece los dos y no elige (P6): `mode` es obligatorio en `exec`, porque un valor por omisión sería el kernel eligiendo. **Solo cubre `exec`:** un handler de `irq.install` corre siempre privilegiado porque el hardware no entrega interrupciones sin privilegio.
+- **D30** El cable **no se puede cerrar**. La autenticación vive en el transporte que escribe el agente o en dónde está enchufado el cable, no en el kernel: cerrarlo cambiaría seguridad por la posibilidad de perder la máquina para siempre.
 - **D26** El serie va **crudo**: `-serial stdio`, nunca `mon:stdio`. El multiplexor se come el `0x01` como escape y por ahí viaja CBOR. Se sale de QEMU con `Ctrl-C`.
 
 ## Superficie del kernel
