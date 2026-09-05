@@ -225,6 +225,13 @@ contesta por donde le llegó el pedido; esto agrega una tercera puerta, no un
 mecanismo. Se comprueba mirando los reclamos después del arranque: el que pidió
 el blob está, y con el blob cancelado no está.
 
+**Y lo que el agente graba sobrevive al reinicio.** El driver de NVMe —que corre
+del lado del agente y usa **sólo los once verbos**— lee *y escribe* el disco, así
+que un programa se puede dejar grabado y aparece solo en el próximo arranque. Se
+comprueba con **dos arranques**: uno graba un programa distinto del que había,
+otro —máquina nueva, sin escribir nada— lo encuentra y lo corre. En un solo
+arranque no se podría distinguir de haberlo dejado en memoria.
+
 **Ojo: del blob está el mecanismo, no el contenido.** No hay driver de red ni de
 NVMe ni un `blob.bin` en el repo — el único blob que existe es el de prueba que
 genera `client.py`. Los drivers que nombran D19 y D20 son lo que *va* a ir ahí.

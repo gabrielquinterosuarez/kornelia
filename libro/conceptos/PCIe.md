@@ -55,7 +55,7 @@ El principio y el final del espacio de configuración son iguales en todo aparat
 | `0x34` | Puntero a la lista de **capacidades**: una lista enlazada de cosas opcionales (MSI, MSI-X, PCIe nativo, gestión de energía). |
 | `0x3C` | Línea y pin de interrupción del camino viejo (INTx). |
 
-Buscar por clase y no por fabricante es lo que hace que un driver ande contra hardware que no existía cuando se escribió. En Kornelia el driver de [[NVMe]] busca los tres bytes `01.08.02` —"almacenamiento / no volátil / NVMe"— y nada más: `scripts/client.py:1614#NVME_CLASS = (0x01, 0x08, 0x02)`.
+Buscar por clase y no por fabricante es lo que hace que un driver ande contra hardware que no existía cuando se escribió. En Kornelia el driver de [[NVMe]] busca los tres bytes `01.08.02` —"almacenamiento / no volátil / NVMe"— y nada más: `scripts/client.py:1620#NVME_CLASS = (0x01, 0x08, 0x02)`.
 
 ### La enumeración
 
@@ -96,7 +96,7 @@ En `/sys/bus/pci/devices/*/` está todo lo que se lee del formato fijo, un archi
 | **El verbo** | `describe {what:["pcie"]}` → `base`, `segment`, `bus_start`, `bus_end` |
 | **Dónde vive** | `kernel-core/src/protocol.rs:596#if q.pcie`, `kernel-core/src/acpi.rs:660#unsafe fn read_mcfg`, `boot-uefi/src/lib.rs:497#unsafe fn add_pcie_window` |
 
-**El kernel publica dónde se pregunta, no la respuesta.** No enumera, no arma una lista de aparatos, no tiene tabla de drivers. Da la ventana ECAM y se corre: el recorrido lo hace el agente con `mem.claim` sobre la ventana y `mem.read` adentro (`scripts/client.py:1617#def pcie_scan`). Esa función es lo más parecido a `lspci` que hay acá, y está del lado del cliente, no del kernel (D4).
+**El kernel publica dónde se pregunta, no la respuesta.** No enumera, no arma una lista de aparatos, no tiene tabla de drivers. Da la ventana ECAM y se corre: el recorrido lo hace el agente con `mem.claim` sobre la ventana y `mem.read` adentro (`scripts/client.py:1623#def pcie_scan`). Esa función es lo más parecido a `lspci` que hay acá, y está del lado del cliente, no del kernel (D4).
 
 **Qué se quitó:** el emparejamiento driver-aparato, `probe()`, los ids de módulo, la reasignación de recursos y `sysfs` entero. La capa no se reemplazó por otra más chica: se dejó vacía (P2). Lo que queda es una dirección y once verbos.
 

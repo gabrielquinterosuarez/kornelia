@@ -31,7 +31,7 @@ Cada BAR son 4 bytes, y los bits de abajo **no son dirección**: son la declarac
 | 3 | *Prefetchable*: leer no tiene efectos colaterales y las escrituras se pueden combinar. |
 | resto | La dirección base, alineada al tamaño de la región. |
 
-Un BAR de 64 bits que se lee como si fuera de 32 da una dirección **truncada**, que es peor que ninguna: apunta a algún lado. Por eso el recorrido de Kornelia mira esos dos bits antes de seguir: `scripts/client.py:1647#wide = (bar0 & 0x6) == 0x4`.
+Un BAR de 64 bits que se lee como si fuera de 32 da una dirección **truncada**, que es peor que ninguna: apunta a algún lado. Por eso el recorrido de Kornelia mira esos dos bits antes de seguir: `scripts/client.py:1653#wide = (bar0 & 0x6) == 0x4`.
 
 ### Prefetchable no es una optimización menor
 
@@ -85,7 +85,7 @@ pci_set_master(pdev);                           // el bit de bus master, para DM
 |---|---|
 | **Decisiones** | D4 (el agente lee los BARs), D12 (MMIO no cacheable), P1, P4 |
 | **Los verbos** | `mem.read` sobre la ventana ECAM para leer el BAR; `mem.claim {at}` para alcanzar lo que apunta |
-| **Dónde vive** | `scripts/client.py:1617#def pcie_scan` (del lado del agente), `kernel-core/src/protocol.rs:1119#p.map_device` (del lado del kernel) |
+| **Dónde vive** | `scripts/client.py:1623#def pcie_scan` (del lado del agente), `kernel-core/src/protocol.rs:1119#p.map_device` (del lado del kernel) |
 
 El kernel no sabe qué es un BAR. Lo que sabe es entregar un rango que el agente pidió, y para eso el BAR ya está leído: el agente lo lee del espacio de configuración, le enmascara los bits de tipo, y hace `mem.claim {at: esa_dirección}`.
 

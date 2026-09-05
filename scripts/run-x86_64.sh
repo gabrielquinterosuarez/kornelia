@@ -36,7 +36,9 @@ cp -f "$OVMF_VARS" target/OVMF_VARS-x86_64.fd
 
 # El disco del que el cargador se trae el payload (D19). Se arma aca y no en el
 # repo: es estado de la maquina de prueba, no fuente.
-DISK=target/nvme-x86_64.img
+# DISK=<ruta> usa otro disco. Sirve para correr dos maquinas a la vez sin que
+# se peleen: QEMU bloquea la imagen, y la segunda no arranca.
+DISK=${DISK:-target/nvme-x86_64.img}
 if [ ! -f "$DISK" ]; then
     dd if=/dev/zero of="$DISK" bs=1M count=16 status=none
 fi

@@ -202,6 +202,27 @@ else
                 || bad "$arch no reserva la pagina del trampolin en el mapa"
         fi
 
+        # Y la persistencia (D18/D19), que necesita **dos arranques**: uno graba
+        # un programa distinto del que el disco traia, y otro —maquina nueva,
+        # sin grabar nada— lo encuentra y lo corre. En un solo arranque no se
+        # podria distinguir de haberlo dejado en memoria.
+        disk="$payload_dir/$arch-persist.img"
+        rm -f "$disk"
+        grab=$(DISK="$disk" PAYLOAD="$payload_dir/$arch.bin" timeout 240 \
+            ./scripts/client.py --arch "$arch" --smp 4 --persist 2>&1 || true)
+        grep -qFe "persistencia: ok" <<<"$grab" \
+            || { bad "$arch no pudo grabar en el disco"
+                 printf '%s\n' "$grab" | grep -E "FALLA:|no arranco" | head -5; }
+
+        vuelta=$(DISK="$disk" timeout 240 \
+            ./scripts/client.py --arch "$arch" --smp 4 --persist-check 2>&1 || true)
+        if ! grep -qFe "persistencia: ok" <<<"$vuelta"; then
+            bad "$arch no encontro lo grabado despues del reinicio"
+            printf '%s\n' "$vuelta" | grep -E "FALLA:|no arranco" | head -5
+        fi
+        grep -qFe "dejo 0xbeef" <<<"$vuelta" \
+            || bad "$arch corrio otra cosa que lo que se habia grabado"
+
         # Y que el puerto serie en uso sea el que dice la maquina, no el
         # horneado (deuda 2). La prueba no es que lo informe: es que **todo lo
         # que sigue sale por ahi**, asi que si esa direccion fuera mala esta

@@ -112,7 +112,7 @@ Escalón por escalón, qué hay y qué no:
 | Registros | Los publica `describe`: la máquina informa **cuáles se pueden poner**, sin nombres horneados (P4, regla 3). Ver [[Registro]]. |
 | Cachés | Un atributo por bloque de 1 GiB, con dos valores: normal o dispositivo (D12). Ver [[Cache]]. |
 | RAM | Identity map de toda la RAM, y `mem.claim` para llevarse un pedazo. No hay asignador. |
-| NVMe | **El kernel no tiene [[Driver|driver]]** (D4). El que hay está escrito con los once verbos, del lado del cliente: `scripts/client.py:1733#Le habla a un controlador NVMe`. Ver [[NVMe]]. |
+| NVMe | **El kernel no tiene [[Driver|driver]]** (D4). El que hay está escrito con los once verbos, del lado del cliente: `scripts/client.py:1739#Le habla a un controlador NVMe`. Ver [[NVMe]]. |
 | Disco / swap | No hay, y por eso no hay demand paging: no existe el escalón de abajo al que ir a buscar una página. |
 | Red | Tampoco. El transporte rápido que D5 le deja al agente **no lo escribió nadie todavía**; hoy el único camino es el cordón umbilical. |
 

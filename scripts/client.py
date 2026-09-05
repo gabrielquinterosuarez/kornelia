@@ -292,6 +292,9 @@ PROGRAMS = {
     "x86_64": {
         # mov rax, 0x00C0FFEE ; ret
         "ok": bytes([0x48, 0xC7, 0xC0, 0xEE, 0xFF, 0xC0, 0x00, 0xC3]),
+        # mov rax, 0xBEEF ; ret — otro programa, para distinguir "se grabo lo
+        # nuevo" de "quedo lo que ya estaba".
+        "otro": bytes([0x48, 0xC7, 0xC0, 0xEF, 0xBE, 0x00, 0x00, 0xC3]),
         # mov rax, 0x0000400000000000 ; mov [rax], rax ; ret
         "falla": bytes([0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00,
                         0x48, 0x89, 0x00, 0xC3]),
@@ -308,6 +311,9 @@ PROGRAMS = {
         # movz x0, #0xFFEE ; movk x0, #0xC0, lsl #16 ; ret
         "ok": bytes([0xC0, 0xFD, 0x9F, 0xD2, 0x00, 0x18, 0xA0, 0xF2,
                      0xC0, 0x03, 0x5F, 0xD6]),
+        # movz x0, #0xBEEF ; ret — otro programa, para distinguir "se grabo lo
+        # nuevo" de "quedo lo que ya estaba".
+        "otro": bytes([0xE0, 0xDD, 0x97, 0xD2, 0xC0, 0x03, 0x5F, 0xD6]),
         # movz x9, #0x4000, lsl #32 ; str x9, [x9] ; ret
         "falla": bytes([0x09, 0x00, 0xC8, 0xD2, 0x29, 0x01, 0x00, 0xF9,
                         0xC0, 0x03, 0x5F, 0xD6]),
@@ -2045,6 +2051,74 @@ class Nvme:
         shift = lbaf[2]
         return {"blocks": blocks, "block_bytes": 1 << shift}, None
 
+    def write_from(self, claim, off, lba, count, ns, nsid=1, qid=1):
+        """Escribe bloques al disco desde memoria del agente.
+
+        Es el mismo camino que `read_into` al reves, y por eso comparte todo:
+        misma cola, mismo DMA, mismo timbre. Lo unico que cambia es el opcode y
+        hacia donde van los bytes — aca el aparato **lee** de la memoria del
+        agente en vez de escribirla, pero el permiso del IOMMU es el mismo: se
+        declara una vez y sirve para las dos direcciones.
+        """
+        per_page = 4096 // ns["block_bytes"]
+        done = 0
+        while done < count:
+            chunk = min(per_page, count - done)
+            here = claim["start"] + off + done * ns["block_bytes"]
+            # Opcode 1 = Write.
+            _, why = self.command(qid, 0x01, nsid=nsid, prp1=here,
+                                  cdw10=(lba + done) & 0xFFFFFFFF,
+                                  cdw11=((lba + done) >> 32) & 0xFFFFFFFF,
+                                  cdw12=chunk - 1)
+            if why:
+                return f"escribiendo el bloque {lba + done}: {why}"
+            done += chunk
+        return None
+
+    def flush(self, nsid=1, qid=1):
+        """Le pide que baje a disco lo que tenga en vuelo.
+
+        Sin esto, "escribi" quiere decir "lo tome", no "esta en el disco". La
+        diferencia se ve recien en el proximo arranque, que es el peor momento
+        para enterarse.
+        """
+        _, why = self.command(qid, 0x00, nsid=nsid)
+        return why
+
+    def store(self, body, ns, entry=0, nsid=1, qid=1):
+        """Graba un payload en el disco, con su cabecera. El reverso de `load`.
+
+        Esto es lo que cierra el ciclo: un agente sube un programa por el cable,
+        lo deja grabado, y en el proximo arranque el cargador lo encuentra sin
+        que haya nadie del otro lado.
+        """
+        block = ns["block_bytes"]
+        header = payload_header(body, entry)
+        # Cabecera y payload de una: un solo reclamo, y se escribe seguido.
+        padded = bytes(header) + body + bytes((-len(body)) % block)
+        room = (len(padded) + 4095) // 4096 * 4096
+        ok, claim = self.ask(self._id(), "mem.claim", {"bytes": room, "align": 4096})
+        if not ok:
+            return f"sin memoria para armar lo que se graba: {claim}"
+        self.claims.append(claim)
+        ok, e = self.ask(self._id(), "dma.allow",
+                         {"device": self.bdf, "handle": claim["handle"]})
+        if not ok:
+            return f"el IOMMU no dejo declarar el origen: {e}"
+
+        # Subir los bytes por el cable a esa memoria, y de ahi al disco por DMA.
+        ok, _ = self.ask(self._id(), "mem.write",
+                         {"handle": claim["handle"], "off": 0, "bytes": padded})
+        if not ok:
+            return "no se pudo dejar en memoria lo que se va a grabar"
+
+        blocks = len(padded) // block
+        if (why := self.write_from(claim, 0, 0, blocks, ns, nsid=nsid, qid=qid)):
+            return why
+        if (why := self.flush(nsid=nsid, qid=qid)):
+            return f"no se pudo bajar a disco: {why}"
+        return None
+
     def read_into(self, claim, off, lba, count, ns, nsid=1, qid=1):
         """Lee bloques directo a un reclamo del agente, sin pasar por el cable.
 
@@ -2212,6 +2286,85 @@ def payload_image(blocks=4, block_bytes=512, body=None):
 def payload_pattern_lba(body=b"", block_bytes=512):
     """En que bloque empieza el patron reconocible, despues del payload."""
     return 1 + (len(body) + block_bytes - 1) // block_bytes
+
+
+def test_persist(proc, timeout, arch, only_check=False):
+    """El ciclo entero: grabar un programa en el disco y correr el que estaba.
+
+    Es la prueba de la persistencia, y esta hecha para que **no pueda pasar por
+    casualidad**: se graba un programa distinto del que ya habia, se lo relee
+    del disco, y recien despues se comprueba. Si la escritura no ocurriera, lo
+    que se relee seria el viejo y daria el valor viejo.
+    """
+    def ask_verb(n, verb, args):
+        resp, _ = ask(proc, [n, verb, args], timeout)
+        _, ok, load = resp
+        return ok, load
+
+    ok, d = ask_verb(500, "describe", {"what": ["pcie"]})
+    if not ok or not d["pcie"]:
+        print("  esta maquina no informa PCIe")
+        return 1
+
+    core = core_for_raw(ask_verb, 501)
+    nvme = Nvme(ask_verb, 502)
+    if (why := nvme.find(d["pcie"]["base"])):
+        print(f"  {why}")
+        return 1
+    spec = nvme.describe()
+    if (why := nvme.start(spec)) or (why := nvme.io_queue()):
+        print(f"  FALLA: {why}")
+        nvme.release()
+        return 1
+    ns, why = nvme.namespace()
+    if why:
+        print(f"  FALLA: {why}")
+        nvme.release()
+        return 1
+
+    # Un programa **distinto** del que el disco ya tiene: deja 0xbeef en vez de
+    # 0xc0ffee. Si la escritura no ocurriera, al releer saldria el viejo.
+    body = PROGRAMS[arch]["otro"]
+    if only_check:
+        # Segunda mitad de la prueba: esta es una maquina **recien arrancada**,
+        # y lo unico que hay en el disco es lo que grabo la corrida anterior.
+        # Aca no se escribe nada: si sale 0xbeef, sobrevivio al reinicio.
+        print("  sin grabar nada: se lee lo que dejo el arranque anterior")
+    else:
+        if (why := nvme.store(body, ns)):
+            print(f"  FALLA al grabar: {why}")
+            nvme.release()
+            return 1
+        print(f"  grabados {len(body)} bytes en el disco, con su cabecera")
+
+    # Y ahora se lo relee **del disco**, como lo haria el cargador en el proximo
+    # arranque. Nada de esto mira lo que quedo en memoria.
+    loaded, why = nvme.load(ns)
+    if why:
+        print(f"  FALLA al releer lo grabado: {why}")
+        nvme.release()
+        return 1
+    print(f"  releidos del disco: {loaded['size']} bytes")
+
+    if core is None:
+        print("  (sin un nucleo libre donde correrlo)")
+        nvme.release()
+        return 0
+    ok, out = ask_verb(520, "exec", {"handle": loaded["claim"]["handle"],
+                                     "mode": "raw", "core": core,
+                                     "off": loaded["entry"], "deadline_ms": 1000})
+    if not ok or out.get("faulted"):
+        print(f"  FALLA al correr lo grabado: {out}")
+        nvme.release()
+        return 1
+    first = list(out["registers"].values())[0] if out.get("registers") else 0
+    print(f"  y corre lo que se grabo: dejo {first:#x}")
+    nvme.release()
+    if first != 0xBEEF:
+        print("  FALLA: corrio el programa viejo, asi que no se grabo nada")
+        return 1
+    print("\n  persistencia: ok")
+    return 0
 
 
 def test_nvme(proc, timeout, arch):
@@ -3092,6 +3245,10 @@ def main():
                     help="que el codigo lo ejecute el silicio de verdad, no la emulacion")
     ap.add_argument("--write-payload", metavar="RUTA",
                     help="escribe un payload de prueba para el disco y sale")
+    ap.add_argument("--persist-check", action="store_true",
+                    help="comprueba lo grabado por una corrida anterior, sin grabar")
+    ap.add_argument("--persist", action="store_true",
+                    help="graba un programa en el disco y comprueba que quedo")
     ap.add_argument("--nvme", action="store_true",
                     help="le habla al controlador NVMe con los once verbos")
     ap.add_argument("--lspci", action="store_true",
@@ -3190,11 +3347,26 @@ def main():
         print(f"enganchado a la maquina en {args.connect}")
     else:
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                stderr=subprocess.DEVNULL, cwd=ROOT, bufsize=0, env=env)
+                                stderr=None if args.raw else subprocess.PIPE,
+                                cwd=ROOT, bufsize=0, env=env)
     try:
         if not args.connect:
             print(f"arrancando {args.arch} en QEMU...")
-            read_until_marker(proc, args.timeout, show=True, cancel_blob=args.cancel_blob)
+            try:
+                read_until_marker(proc, args.timeout, show=True,
+                                  cancel_blob=args.cancel_blob)
+            except (EOFError, TimeoutError) as e:
+                # Sin esto, un script que muere por `set -e` —un `dd` que no
+                # encuentra su archivo, por ejemplo— se ve como "QEMU se cerro"
+                # y no dice por que. Costo un rato largo averiguarlo una vez.
+                print(f"\nno arranco: {e}")
+                if proc.stderr is not None:
+                    said = proc.stderr.read().decode("utf-8", "replace").strip()
+                    if said:
+                        print("lo que dijo el script:")
+                        for line in said.splitlines()[-8:]:
+                            print(f"  {line}")
+                return 1
 
         argumentos = {}
         if args.what:
@@ -3269,6 +3441,12 @@ def main():
         if args.nvme:
             print("\n== un driver de NVMe, escrito con los once verbos ==")
             rc |= test_nvme(proc, args.timeout, args.arch)
+        if args.persist or args.persist_check:
+            titulo = ("comprobar que lo grabado sobrevivio al reinicio"
+                      if args.persist_check else "grabar un programa en el disco")
+            print(f"\n== {titulo} (D18/D19) ==")
+            rc |= test_persist(proc, args.timeout, args.arch,
+                               only_check=args.persist_check)
         # La consola va ultima: se queda con la maquina hasta que la suelten, asi
         # que cualquier prueba pedida en la misma corrida ya paso por aca.
         if args.console:
