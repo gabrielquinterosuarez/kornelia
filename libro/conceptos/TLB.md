@@ -74,7 +74,7 @@ Si el TLB solo guarda `virtual → física`, cambiar de [[Espacio-de-direcciones
 La solución es agregarle al par una etiqueta de dueño: ASID en ARM, PCID en x86. Las entradas de dos dueños conviven, y cambiar de dueño no tira nada. El costo se mueve a otro lado: las etiquetas son pocas (256 o 65.536), así que hay que reciclarlas, y reciclar una sí obliga a invalidar.
 
 > [!info] No es la única caché de traducciones
-> El procesador también cachea los **niveles intermedios** del recorrido (*paging-structure caches*). Por eso cambiar una entrada de nivel alto no se arregla con un `invlpg` de una página: hay que tirar más. Y el [[47-IOMMU-VT-d-y-SMMUv3|IOMMU]] tiene su propio TLB, con sus propias invalidaciones, que se piden por registros o por una cola de comandos.
+> El procesador también cachea los **niveles intermedios** del recorrido (*paging-structure caches*). Por eso cambiar una entrada de nivel alto no se arregla con un `invlpg` de una página: hay que tirar más. Y el [[IOMMU|IOMMU]] tiene su propio TLB, con sus propias invalidaciones, que se piden por registros o por una cola de comandos.
 
 ## Cómo lo hace Linux
 

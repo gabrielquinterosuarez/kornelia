@@ -24,7 +24,7 @@ Eso tiene tres agujeros y ninguno se arregla arriba:
 2. **Dos aparatos pueden querer el mismo rango**, y el que pierde no avisa: contesta a medias.
 3. **Un [[Driver|driver]] no puede saber si el aparato que tiene enfrente es el suyo.**
 
-PCI resuelve las tres con la misma idea: cada aparato tiene un **espacio de configuración** —chico, de formato fijo, en un lugar que no depende del aparato— donde declara quién es y qué necesita. Recién después se le asignan direcciones. Ver [[17-PCIe-buses-funciones-y-BARs]].
+PCI resuelve las tres con la misma idea: cada aparato tiene un **espacio de configuración** —chico, de formato fijo, en un lugar que no depende del aparato— donde declara quién es y qué necesita. Recién después se le asignan direcciones. Ver [[PCIe]].
 
 ## Cómo funciona
 
@@ -138,4 +138,4 @@ En Kornelia, ¿el kernel enumera el bus?::No. Publica **dónde se pregunta** (`d
 
 - [[BAR]] — el campo del espacio de configuración donde el aparato dice cuánto espacio necesita.
 - [[MMIO]] · [[DMA]] · [[IOMMU]] · [[NVMe]] · [[MSI]]
-- [[15-Enumerar-sin-adivinar-ACPI]] · [[16-El-otro-dialecto-device-tree]] · [[18-Lo-que-la-maquina-no-dice]]
+- [[ACPI]] · [[Device-tree]] · [[18-Lo-que-la-maquina-no-dice]]

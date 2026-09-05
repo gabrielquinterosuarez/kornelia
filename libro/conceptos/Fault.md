@@ -102,7 +102,7 @@ Dos detalles de implementación que valen por sí solos:
 1. **Se puede volver incluso destruyendo el puntero de pila**, porque las excepciones entran en una pila aparte: IST en x86_64, `SP_EL1` en aarch64. Sin eso, romper `RSP` y después fallar escalaba a doble y triple fault. Ver [[31-La-pila-que-sobrevive]].
 2. **`Cause::resumable`** dice si tiene sentido seguir después: solo un breakpoint, que es un alto pedido a propósito. Lo demás volvería a fallar en la misma instrucción, para siempre (`kernel-core/src/fault.rs:66#pub fn resumable`). Eso es exactamente la diferencia entre fault y trap.
 
-Y P5 no se cumple solo por existir el mecanismo de `exec`: **el kernel también toca memoria que puede fallar.** `mem.read` y `mem.write` corren en el camino del protocolo, donde no había punto de recuperación, y en aarch64 leer con el ancho equivocado dejaba la máquina muda. Ahora van con el mismo punto que usa `exec`, armado alrededor de **una sola instrucción**, y el rechazo vuelve como `access-refused`. Ver [[33-Recuperar-un-acceso-que-el-bus-rechaza]] y [[MMIO]].
+Y P5 no se cumple solo por existir el mecanismo de `exec`: **el kernel también toca memoria que puede fallar.** `mem.read` y `mem.write` corren en el camino del protocolo, donde no había punto de recuperación, y en aarch64 leer con el ancho equivocado dejaba la máquina muda. Ahora van con el mismo punto que usa `exec`, armado alrededor de **una sola instrucción**, y el rechazo vuelve como `access-refused`. Ver [[MMIO]] y [[MMIO]].
 
 ## Cómo se ve roto
 
@@ -139,4 +139,4 @@ En Kornelia, ¿por qué un `exec` que falla responde con `ok: true`?::Porque el 
 
 - [[Oops-y-panic]] · [[Registro]] · [[Modo-privilegiado]] · [[Interrupcion]]
 - [[Falsos-amigos#2]] — interrupción, excepción, trap, fault, abort.
-- [[31-La-pila-que-sobrevive]] · [[33-Recuperar-un-acceso-que-el-bus-rechaza]] · [[39-Plazos-y-cortes]]
+- [[31-La-pila-que-sobrevive]] · [[MMIO]] · [[39-Plazos-y-cortes]]

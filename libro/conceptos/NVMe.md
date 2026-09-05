@@ -12,7 +12,7 @@ capitulos: [48-Colas-en-memoria-el-patron-de-NVMe, 49-Escribir-un-driver, 46-DMA
 
 > El disco de hoy no se maneja con registros: se le **dejan pedidos en una cola que vive en la RAM**, se toca un timbre, y él escribe las respuestas en otra cola.
 
-*Non-Volatile Memory Express.* Lo interesante no es que sea rápido: es **el patrón**. Colas en memoria, timbres, y el [[Aparato|aparato]] haciendo [[46-DMA-el-aparato-lee-memoria-solo|DMA]] a la memoria del huésped. Una placa de red moderna y una GPU se manejan igual. Si entendés NVMe, entendiste la forma del hardware de los últimos veinte años.
+*Non-Volatile Memory Express.* Lo interesante no es que sea rápido: es **el patrón**. Colas en memoria, timbres, y el [[Aparato|aparato]] haciendo [[DMA|DMA]] a la memoria del huésped. Una placa de red moderna y una GPU se manejan igual. Si entendés NVMe, entendiste la forma del hardware de los últimos veinte años.
 
 ## Qué problema resuelve
 
@@ -54,7 +54,7 @@ sequenceDiagram
 Tres detalles que no se ven en el dibujo y son los que rompen todo:
 
 - **El bit de fase.** ¿Cómo sabe el driver que una entrada de la CQ es nueva? No alcanza con "hay algo escrito", porque lo de la vuelta anterior también está escrito. Hay un bit que **alterna en cada vuelta del anillo**: si vale lo contrario que la última vez, es nueva.
-- **El aparato tiene que poder alcanzar esa memoria.** Las colas viven en la RAM del huésped y el aparato las lee por [[DMA]] — así que pasan por el [[47-IOMMU-VT-d-y-SMMUv3|IOMMU]], y si no están declaradas no llegan.
+- **El aparato tiene que poder alcanzar esa memoria.** Las colas viven en la RAM del huésped y el aparato las lee por [[DMA]] — así que pasan por el [[IOMMU|IOMMU]], y si no están declaradas no llegan.
 - **La separación entre timbres la dice el aparato**, en un campo de su registro de capacidades (`CAP.DSTRD`). Suponer que es 4 anda en [[QEMU]] y falla en silencio donde no lo sea.
 
 El [[MSI]] es un **opcional**: con las colas ya se puede sondear la CQ. La interrupción sirve para no gastar núcleo esperando, no para enterarse.
@@ -145,8 +145,8 @@ En Kornelia, ¿qué verbos usa el driver de NVMe?::`describe` para dónde se con
 
 ## Ver también
 
-- [[48-Colas-en-memoria-el-patron-de-NVMe]] · [[49-Escribir-un-driver]] · [[17-PCIe-buses-funciones-y-BARs]]
+- [[NVMe]] · [[Driver]] · [[PCIe]]
 - [[MMIO]] — los timbres son MMIO; el resto del pedido no.
-- [[47-IOMMU-VT-d-y-SMMUv3]] — por qué una cola sin declarar no existe para el aparato.
+- [[IOMMU]] — por qué una cola sin declarar no existe para el aparato.
 - [[51-El-blob-y-la-ventana-de-rescate]] — para qué se quería leer un disco (D19).
 - [[Falsos-amigos#9]] — driver, módulo, [[Firmware|firmware]] y blob no son lo mismo.

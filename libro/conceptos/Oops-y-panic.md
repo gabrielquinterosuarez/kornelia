@@ -151,4 +151,4 @@ Y una diferencia de fondo con `oops`, que es D11: **el kernel no deshace nada.**
 - [[Fault]] · [[Modo-privilegiado]] · [[Interrupcion]]
 - [[Indice-de-sintomas]] — la tabla de mensajes de `dmesg` y qué significan de verdad.
 - [[Falsos-amigos#2]] — por qué P5 dice "los faults son datos" y no "los aborts son datos".
-- [[32-Los-faults-como-datos]] · [[39-Plazos-y-cortes]]
+- [[Fault]] · [[39-Plazos-y-cortes]]

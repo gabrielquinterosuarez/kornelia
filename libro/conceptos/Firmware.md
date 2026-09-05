@@ -130,5 +130,5 @@ Firmware de la máquina contra firmware de un aparato: ¿en qué se diferencian?
 ## Ver también
 
 - [[UEFI]] · [[ACPI]] · [[Device-tree]] · [[BAR]] · [[PCIe]]
-- [[11-Reset-vector-firmware-BIOS-y-UEFI]] — la cadena completa desde el reset.
+- [[Firmware]] — la cadena completa desde el reset.
 - [[18-Lo-que-la-maquina-no-dice]] — huecos y `unreported`, que son el límite de P4.

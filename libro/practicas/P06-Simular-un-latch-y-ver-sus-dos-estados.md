@@ -74,7 +74,7 @@ soltando R primero  ->  Q=1
 Las dos últimas líneas lo confirman: soltando las patas de a una, el resultado es perfectamente predecible. El problema nunca fue el circuito, fue la **simultaneidad**.
 
 > [!tip] Por qué esto vale más que el circuito que enseña
-> Es la primera aparición en el libro de un patrón que va a volver en cada parte: **el hardware acepta sin quejarse combinaciones que no significan nada**, y el resultado depende de tiempos. Volvés a ver exactamente esto en [[42-Ordenamiento-de-memoria|las carreras entre núcleos]], en [[36-Nivel-contra-flanco|el pulso que se perdía]], y en el bug de este proyecto que tardó 400 corridas en reproducirse.
+> Es la primera aparición en el libro de un patrón que va a volver en cada parte: **el hardware acepta sin quejarse combinaciones que no significan nada**, y el resultado depende de tiempos. Volvés a ver exactamente esto en [[42-Ordenamiento-de-memoria|las carreras entre núcleos]], en [[MSI|el pulso que se perdía]], y en el bug de este proyecto que tardó 400 corridas en reproducirse.
 
 ## Para jugar
 

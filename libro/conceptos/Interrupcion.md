@@ -102,7 +102,7 @@ Y D29: en el núcleo que atiende el protocolo, **una interrupción tiene priorid
 
 | Síntoma | Causa |
 |---|---|
-| La interrupción no llega nunca. | Llega como **pulso** y el controlador la trata como **nivel**. Ver [[MSI]] y [[36-Nivel-contra-flanco]]. |
+| La interrupción no llega nunca. | Llega como **pulso** y el controlador la trata como **nivel**. Ver [[MSI]] y [[MSI]]. |
 | La máquina se duerme con un pedido esperando. | Se durmió **antes** de habilitar el timbre, y el despertador quedó pendiente sin nadie que lo tome. |
 | Anda una vez y no vuelve a sonar. | Falta el EOI: el controlador cree que todavía se está atendiendo la anterior. |
 | El cordón deja de contestar cuando el aparato del agente habla mucho. | La interrupción del agente quedó con prioridad igual o mayor que la del cable. |

@@ -126,4 +126,4 @@ En x86 el privilegio más alto es el anillo…::0. Y en aarch64 EL1 para un kern
 
 - [[Syscall]] · [[Fault]] · [[Handler]] · [[Registro]]
 - [[Falsos-amigos#3]] — anillo: tres cosas distintas.
-- [[25-Como-se-baja-de-privilegio]] · [[39-Plazos-y-cortes]] · [[22-Identity-map-la-mentira-mas-simple]]
+- [[25-Como-se-baja-de-privilegio]] · [[39-Plazos-y-cortes]] · [[Memoria-virtual]]

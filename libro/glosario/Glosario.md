@@ -19,9 +19,9 @@ Si dos términos te suenan iguales, el lugar es [[Falsos-amigos]].
 - **ABI** (*Application Binary Interface*) — El acuerdo de **cómo** se pasan los argumentos, por qué registros y en qué orden. Distinto de la API: la ABI la fija el compilador y el *target*, no la arquitectura. Ver [[27-La-ABI-la-pone-el-target-no-el-silicio]].
 - **ACPI** — El dialecto de tablas con que el firmware de una PC describe la máquina: cuántos núcleos, dónde está la consola, dónde el IOMMU. Ver [[ACPI]].
 - **Aborto** (*abort*) — Excepción de la que no se puede volver de forma confiable, porque el estado quedó incierto. Ver [[Falsos-amigos#2]].
-- **AML** — Un lenguaje de programación entero embebido dentro de ACPI. Interpretarlo es lo que hace caro averiguar qué cable le toca a un aparato, y es por qué [[35-MSI-interrupciones-sin-cable|MSI]] lo vuelve innecesario.
+- **AML** — Un lenguaje de programación entero embebido dentro de ACPI. Interpretarlo es lo que hace caro averiguar qué cable le toca a un aparato, y es por qué [[MSI|MSI]] lo vuelve innecesario.
 - **Anillo** (*ring*) — Tres cosas distintas. Ver [[Falsos-amigos#3]].
-- **APIC** — El controlador de interrupciones moderno de x86: reparte interrupciones entre núcleos y deja que un núcleo le toque el timbre a otro. Ver [[34-Del-cable-al-numero-PIC-APIC-GIC]].
+- **APIC** — El controlador de interrupciones moderno de x86: reparte interrupciones entre núcleos y deja que un núcleo le toque el timbre a otro. Ver [[Interrupcion]].
 - **Aparato** — Todo lo que hay en la máquina que **no es el procesador ni la memoria** y con lo que el procesador puede hablar. Se define por cuatro canales: registros, avisos, DMA y descubrimiento. Ver [[Aparato]].
 - **Atómico** — Una operación que ocurre entera o no ocurre; ningún otro núcleo la ve a mitad de camino.
 
@@ -74,7 +74,7 @@ Si dos términos te suenan iguales, el lugar es [[Falsos-amigos]].
 ## G
 
 - **GDT** (*Global Descriptor Table*) — La tabla de x86 donde viven los descriptores de segmento. En 64 bits casi no direcciona nada, pero sigue mandando el privilegio.
-- **GIC** — El controlador de interrupciones de ARM. Hace lo mismo que el APIC y no se parece. Ver [[34-Del-cable-al-numero-PIC-APIC-GIC]].
+- **GIC** — El controlador de interrupciones de ARM. Hace lo mismo que el APIC y no se parece. Ver [[Interrupcion]].
 - **Grupo** (del GIC) — La partición de interrupciones que decide si se entregan como IRQ o como FIQ. Ver [[39-Plazos-y-cortes]].
 
 ## H
@@ -85,8 +85,8 @@ Si dos términos te suenan iguales, el lugar es [[Falsos-amigos]].
 
 ## I
 
-- **Identity map** — Mapear cada dirección virtual a la misma física. La mentira más simple que sirve, y la que elige Kornelia (D12). Ver [[22-Identity-map-la-mentira-mas-simple]].
-- **IDT** (*Interrupt Descriptor Table*) — La tabla de x86 donde se anota qué función atiende cada uno de los 256 vectores. Ver [[30-Capturar-un-fault-IDT-y-vectores]].
+- **Identity map** — Mapear cada dirección virtual a la misma física. La mentira más simple que sirve, y la que elige Kornelia (D12). Ver [[Memoria-virtual]].
+- **IDT** (*Interrupt Descriptor Table*) — La tabla de x86 donde se anota qué función atiende cada uno de los 256 vectores. Ver [[Fault]].
 - **Instrucción** — Un puñado de bytes en memoria que el procesador trae, decodifica y ejecuta. **No es una idea: son bytes**, y se pueden mirar con `objdump -d`. Ver [[03-Que-hace-realmente-una-instruccion]].
 - **IOMMU** — Una MMU para los aparatos: traduce y **filtra** lo que un aparato pide de la memoria. En Kornelia arranca encendido y vacío (D8). Ver [[IOMMU]].
 - **Interrupción** — El aparato avisa en vez de que el procesador pregunte. Ver [[Interrupcion]] y [[Falsos-amigos#2]].
@@ -117,7 +117,7 @@ Si dos términos te suenan iguales, el lugar es [[Falsos-amigos]].
 
 - **NMI** — Interrupción que no se puede tapar. El segundo escalón para cortar a un núcleo que dijo `cli`.
 - **`no_std`** — En Rust, compilar sin biblioteca estándar: sin sistema operativo abajo, no hay archivos, hilos ni `malloc`. Todo kernel escrito en Rust es `no_std`.
-- **NVMe** — El protocolo de los discos rápidos de hoy. Se maneja con [[48-Colas-en-memoria-el-patron-de-NVMe|colas en memoria]], que es el patrón de casi todo el hardware moderno. Ver [[NVMe]].
+- **NVMe** — El protocolo de los discos rápidos de hoy. Se maneja con [[NVMe|colas en memoria]], que es el patrón de casi todo el hardware moderno. Ver [[NVMe]].
 - **Núcleo** — En este libro, **siempre** un procesador. El programa se llama *kernel*. Ver [[Falsos-amigos#1]].
 
 ## O
@@ -140,8 +140,8 @@ Si dos términos te suenan iguales, el lugar es [[Falsos-amigos]].
 - **`raw`** (modo de `exec`) — Que el código del agente corra con privilegio completo, pudiendo colgar la máquina. Lo declara el agente (D27, P6).
 - **Reclamo** (*claim*) — El registro de que el agente pidió un recurso. No es una asignación: el agente elige **cuál**. Ver [[23-Asignadores-y-por-que-aca-no-hay]].
 - **Registro** (del procesador) — Un puñado de celdas adentro del procesador. La memoria más rápida y más escasa que existe. Ver [[Registro]].
-- **Registro** (de un aparato) — Una dirección que **no es memoria**: leerla y escribirla le habla al aparato. Ver [[45-Un-registro-no-es-RAM]].
-- **Reset vector** — La dirección desde la que el procesador empieza a ejecutar cuando se le da corriente. El primer byte de todo. Ver [[11-Reset-vector-firmware-BIOS-y-UEFI]].
+- **Registro** (de un aparato) — Una dirección que **no es memoria**: leerla y escribirla le habla al aparato. Ver [[MMIO]].
+- **Reset vector** — La dirección desde la que el procesador empieza a ejecutar cuando se le da corriente. El primer byte de todo. Ver [[Firmware]].
 
 ## S
 
@@ -178,4 +178,4 @@ Si dos términos te suenan iguales, el lugar es [[Falsos-amigos]].
 ## W
 
 - **`wfi`** (*wait for interrupt*) — El `hlt` de ARM.
-- **Width** (*ancho*) — De cuántos bytes es un acceso. Para RAM casi nunca importa; para un registro de aparato, es la diferencia entre andar y no. Ver [[45-Un-registro-no-es-RAM]].
+- **Width** (*ancho*) — De cuántos bytes es un acceso. Para RAM casi nunca importa; para un registro de aparato, es la diferencia entre andar y no. Ver [[MMIO]].

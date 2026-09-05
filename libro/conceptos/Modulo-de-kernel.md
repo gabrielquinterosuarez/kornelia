@@ -19,7 +19,7 @@ Un kernel monolítico con todo adentro tiene dos incomodidades, y ninguna se arr
 1. **La imagen es enorme y la mayoría no se usa.** Debian tiene que arrancar en máquinas que todavía no existen, así que trae drivers para miles de [[Aparato|aparatos]]. Ninguna máquina tiene más que un puñado.
 2. **Cambiar cualquier cosa cuesta un reinicio.** Recompilar el kernel para probar veinte líneas de un driver, y reiniciar para probarlas, es un ciclo de minutos donde debería ser de segundos.
 
-Y hay un tercero que es el más interesante: **el huevo y la gallina del arranque**. El driver del disco raíz tiene que estar disponible *antes* de poder leer el disco raíz. La salida es un sistema de archivos chiquito en memoria que el arrancador carga junto al kernel —el `initramfs`— con los pocos módulos que hacen falta para llegar al disco de verdad. Ver [[50-initramfs-modulos-y-el-huevo-y-la-gallina]].
+Y hay un tercero que es el más interesante: **el huevo y la gallina del arranque**. El driver del disco raíz tiene que estar disponible *antes* de poder leer el disco raíz. La salida es un sistema de archivos chiquito en memoria que el arrancador carga junto al kernel —el `initramfs`— con los pocos módulos que hacen falta para llegar al disco de verdad. Ver [[Modulo-de-kernel]].
 
 ## Cómo funciona
 
@@ -165,5 +165,5 @@ Y el blob de arranque (D18, `kernel-core/src/lib.rs:224#fn run_blob`) es lo más
 
 - [[Driver]] — el contenido más común de un módulo, y por qué acá no hay ninguno (D4).
 - [[Modo-privilegiado]] · [[Fault]] · [[Oops-y-panic]] · [[Syscall]]
-- [[50-initramfs-modulos-y-el-huevo-y-la-gallina]] · [[51-El-blob-y-la-ventana-de-rescate]] · [[39-Plazos-y-cortes]]
+- [[Modulo-de-kernel]] · [[51-El-blob-y-la-ventana-de-rescate]] · [[39-Plazos-y-cortes]]
 - [[Falsos-amigos#9]] — driver, módulo, [[Firmware|firmware]] y blob no son lo mismo.

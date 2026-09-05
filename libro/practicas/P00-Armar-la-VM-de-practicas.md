@@ -118,7 +118,7 @@ EOF
 cloud-localds seed.img seed.yaml
 ```
 
-`linux-headers-amd64` y `build-essential` son lo que hace falta para **compilar un [[Modulo-de-kernel|módulo de kernel]]**, que es la práctica de [[49-Escribir-un-driver]].
+`linux-headers-amd64` y `build-essential` son lo que hace falta para **compilar un [[Modulo-de-kernel|módulo de kernel]]**, que es la práctica de [[Driver]].
 
 ## Arrancarla
 
@@ -137,7 +137,7 @@ qemu-system-x86_64 \
 | `-machine q35` | **Obligatorio acá.** Es la [[Maquina-virtual|máquina virtual]] que [[QEMU]] emula: por omisión usa `pc` (el chipset i440fx de 1996), y ahí el IOMMU de Intel **no existe**. Sin esto QEMU se niega a arrancar. Es lo mismo que hace `scripts/run-x86_64.sh` (`scripts/run-x86_64.sh:78#-machine q35`). |
 | `-enable-kvm -cpu host` | Que el silicio corra el código en vez de emularlo. Sin esto va diez veces más lento, y no verías las capacidades reales de tu procesador. |
 | `-smp 2` | Dos núcleos: hace falta para todo lo de la **Parte IX**. |
-| `-device intel-iommu` | Un IOMMU emulado, para las prácticas de [[47-IOMMU-VT-d-y-SMMUv3]]. Igual que hacen los `scripts/run-*.sh` de Kornelia. |
+| `-device intel-iommu` | Un IOMMU emulado, para las prácticas de [[IOMMU]]. Igual que hacen los `scripts/run-*.sh` de Kornelia. |
 | `hostfwd=tcp::2222-:22` | `ssh -p 2222 gabriel@localhost` desde otra terminal, cómodo para copiar archivos. |
 | `-nographic` | Sin ventana: la consola sale por esta terminal. **Se sale con `Ctrl-A` y después `X`.** |
 

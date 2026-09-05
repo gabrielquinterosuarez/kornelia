@@ -123,4 +123,4 @@ Y un contraste que aclara todo el concepto: **el blob no usa ventanilla.** El bl
 
 - [[Modo-privilegiado]] · [[Fault]] · [[Registro]]
 - [[Falsos-amigos#2]] — trap contra fault: del trap se vuelve a la **siguiente** instrucción.
-- [[26-La-llamada-al-sistema]] · [[27-La-ABI-la-pone-el-target-no-el-silicio]] · [[51-El-blob-y-la-ventana-de-rescate]]
+- [[Syscall]] · [[27-La-ABI-la-pone-el-target-no-el-silicio]] · [[51-El-blob-y-la-ventana-de-rescate]]

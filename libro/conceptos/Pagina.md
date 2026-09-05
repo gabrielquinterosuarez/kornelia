@@ -96,7 +96,7 @@ El segundo es el que da sorpresas: la promoción cuesta compactar, y compactar f
 ## Cómo se ve roto
 
 > [!danger] Una alineación mayor que la página es una promesa que el cargador no cumple
-> `#[repr(align(8192))]` deja el símbolo alineado **adentro de la imagen**, pero [[UEFI]] carga la imagen en una dirección alineada a 4 KiB, y ahí una alineación de 8 KiB se pierde. Lo caro no es que la estructura quede desalineada: es que **el compilador le cree al `align`** y, dando por cierto que los bits de abajo son cero, simplifique las máscaras con las que se arma la dirección. El síntoma fue un SMMU leyendo ceros una página más abajo de donde habíamos escrito, que no se parece en nada a la causa. La salida es pedir el doble de lugar y alinear **a mano en runtime**, para que la dirección sea un dato y no una suposición: `kernel-aarch64/src/smmu.rs:152#struct StreamL1` y `kernel-aarch64/src/smmu.rs:158#static mut STRTAB`. Ver [[24-Alineacion-la-promesa-que-el-cargador-no-cumple]].
+> `#[repr(align(8192))]` deja el símbolo alineado **adentro de la imagen**, pero [[UEFI]] carga la imagen en una dirección alineada a 4 KiB, y ahí una alineación de 8 KiB se pierde. Lo caro no es que la estructura quede desalineada: es que **el compilador le cree al `align`** y, dando por cierto que los bits de abajo son cero, simplifique las máscaras con las que se arma la dirección. El síntoma fue un SMMU leyendo ceros una página más abajo de donde habíamos escrito, que no se parece en nada a la causa. La salida es pedir el doble de lugar y alinear **a mano en runtime**, para que la dirección sea un dato y no una suposición: `kernel-aarch64/src/smmu.rs:152#struct StreamL1` y `kernel-aarch64/src/smmu.rs:158#static mut STRTAB`. Ver [[Pagina]].
 
 | Síntoma | Causa |
 |---|---|
@@ -130,5 +130,5 @@ En Kornelia, ¿qué pasa si pedís memoria alcanzable sin privilegio?::El tamañ
 ## Ver también
 
 - [[MMU]] · [[Tabla-de-paginas]] · [[TLB]] · [[Memoria-virtual]] · [[Espacio-de-direcciones]]
-- [[24-Alineacion-la-promesa-que-el-cargador-no-cumple]] · [[23-Asignadores-y-por-que-aca-no-hay]]
+- [[Pagina]] · [[23-Asignadores-y-por-que-aca-no-hay]]
 - [[Falsos-amigos#11]] — página, palabra y byte: los tres tamaños que se confunden.

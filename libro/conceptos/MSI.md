@@ -124,4 +124,4 @@ En Kornelia, ¿quién elige el número de una interrupción MSI y por qué?::El 
 - [[Interrupcion]] · [[Handler]] · [[MMIO]]
 - [[Falsos-amigos#12]] — IRQ, línea, vector, MSI.
 - [[Falsos-amigos#4]] — direcciones física, virtual, de [[Bus|bus]], IOVA.
-- [[36-Nivel-contra-flanco]] · [[47-IOMMU-VT-d-y-SMMUv3]] · [[46-DMA-el-aparato-lee-memoria-solo]]
+- [[MSI]] · [[IOMMU]] · [[DMA]]

@@ -33,7 +33,7 @@ flowchart LR
     BUS -->|nadie| ERR[Abort / ceros / basura]
 ```
 
-Quién responde a cada rango lo decide un árbol de ruteo del [[Bus|bus]], y **quién lo configura es el [[Firmware|firmware]] o el kernel**, escribiendo los [[17-PCIe-buses-funciones-y-BARs|BARs]] del aparato. Un aparato no elige su dirección: se la asignan.
+Quién responde a cada rango lo decide un árbol de ruteo del [[Bus|bus]], y **quién lo configura es el [[Firmware|firmware]] o el kernel**, escribiendo los [[PCIe|BARs]] del aparato. Un aparato no elige su dirección: se la asignan.
 
 La rama de abajo es la que hace daño: si nadie responde, lo que pasa **depende de la arquitectura**, y eso está en la sección de cómo se rompe.
 
@@ -43,7 +43,7 @@ Un registro de aparato se parece a memoria y se comporta distinto en tres cosas.
 
 ### 1. No se puede cachear
 
-Si la escritura se queda en la [[05-Caches-y-la-primera-mentira-util|caché]], nunca llega al aparato. Si la lectura sale de la [[Cache|caché]], devuelve la copia vieja en vez del valor de ahora — y el valor de ahora es justamente el punto: un registro de estado **cambia solo**.
+Si la escritura se queda en la [[Cache|caché]], nunca llega al aparato. Si la lectura sale de la [[Cache|caché]], devuelve la copia vieja en vez del valor de ahora — y el valor de ahora es justamente el punto: un registro de estado **cambia solo**.
 
 Entonces el mapeo se marca como "no cacheable" o "dispositivo" en la [[Tabla-de-paginas|tabla de páginas]]. En Kornelia eso es D12 y vive en `kernel-x86_64/src/paging.rs:68#pub unsafe fn map_device`; el comentario de al lado (`kernel-x86_64/src/paging.rs:54#PCD: cache disable`) explica qué bits se prenden.
 
@@ -88,7 +88,7 @@ Tres cosas de este kernel salen directo de que MMIO no es RAM:
 
 1. **La clase `unreported`.** Un rango que cae en un hueco del mapa —donde quedan los [[BAR|BARs]] que el firmware no listó— se entrega con esa clase, que **no es `mmio`** (`kernel-core/src/memory.rs:131#Kind::Unreported`). El agente se lleva el rango **y** la advertencia de que la máquina nunca dijo qué hay ahí. Alcanzarlo no es enterarse (P4).
 2. **Se mapea aunque esté fuera del mapa.** Si el rango cae más arriba de lo que las tablas cubren, el kernel lo mapea y reintenta en vez de contestar `unmapped`. No es comodidad: en aarch64 los BARs de [[PCIe]] caen en 512 GiB y el mapa del firmware llega a 257, así que el controlador [[NVMe]] era **inalcanzable** — o sea, el kernel era la razón por la que no se podía usar un aparato, que es exactamente lo que prohíbe P1.
-3. **Un acceso rechazado no mata al kernel.** `mem.read`/`mem.write` corren en el camino del protocolo, y ahí no había punto de recuperación. Ahora van con el mismo que usa `exec`, armado alrededor de **una sola instrucción**, y el rechazo vuelve como `access-refused` con la dirección que cortó (P5). Ver [[33-Recuperar-un-acceso-que-el-bus-rechaza]].
+3. **Un acceso rechazado no mata al kernel.** `mem.read`/`mem.write` corren en el camino del protocolo, y ahí no había punto de recuperación. Ahora van con el mismo que usa `exec`, armado alrededor de **una sola instrucción**, y el rechazo vuelve como `access-refused` con la dirección que cortó (P5). Ver [[MMIO]].
 
 ## Cómo se ve roto
 
@@ -126,5 +126,5 @@ Leer un registro de 4 bytes de a un byte: ¿qué pasa en x86 y qué en ARM?::En 
 
 ## Ver también
 
-- [[45-Un-registro-no-es-RAM]] · [[17-PCIe-buses-funciones-y-BARs]] · [[46-DMA-el-aparato-lee-memoria-solo]]
+- [[MMIO]] · [[PCIe]] · [[DMA]]
 - [[Falsos-amigos#4]] — MMIO no es [[DMA]]: en MMIO el procesador va al aparato; en DMA el aparato va a la memoria.

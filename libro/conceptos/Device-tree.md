@@ -148,4 +148,4 @@ Está elegido así a propósito: **el DMA es la prueba que usa todo lo que sale 
 
 - [[ACPI]] — el otro dialecto, y qué trae cada tabla.
 - [[Firmware]] · [[UEFI]] · [[PCIe]]
-- [[16-El-otro-dialecto-device-tree]] · [[59-Fronteras-verificadas]]
+- [[Device-tree]] · [[59-Fronteras-verificadas]]

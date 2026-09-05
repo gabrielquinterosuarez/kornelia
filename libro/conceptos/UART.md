@@ -25,7 +25,7 @@ El UART rompe el círculo porque no hay que descubrir nada:
 - En x86 sus registros están en direcciones fijas por convención desde 1981 (`0x3F8`).
 - En ARM no son fijos por arquitectura pero sí por placa, y son un puñado de escrituras.
 - No necesita interrupciones: se puede sondear.
-- No necesita [[46-DMA-el-aparato-lee-memoria-solo|DMA]], así que no necesita [[47-IOMMU-VT-d-y-SMMUv3|IOMMU]] ni tablas ni permisos.
+- No necesita [[DMA|DMA]], así que no necesita [[IOMMU|IOMMU]] ni tablas ni permisos.
 
 Un aparato que se usa sin descubrirlo es el único que sirve **antes** de descubrir nada.
 
@@ -82,7 +82,7 @@ earlycon                  # imprimir ya, con una direccion que sale de ACPI/DT
 earlyprintk=serial,ttyS0,115200   # la version vieja de x86, con la direccion horneada
 ```
 
-`earlycon` sin argumentos saca la dirección de la tabla **SPCR** de [[15-Enumerar-sin-adivinar-ACPI|ACPI]] o del `stdout-path` del [[16-El-otro-dialecto-device-tree|device tree]]. `earlyprintk` la lleva escrita a mano. Los dos existen porque un kernel que se cuelga durante el arranque sin haber podido imprimir nada es indepurable.
+`earlycon` sin argumentos saca la dirección de la tabla **SPCR** de [[ACPI|ACPI]] o del `stdout-path` del [[Device-tree|device tree]]. `earlyprintk` la lleva escrita a mano. Los dos existen porque un kernel que se cuelga durante el arranque sin haber podido imprimir nada es indepurable.
 
 ## Cómo lo hace Kornelia
 

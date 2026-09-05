@@ -12,7 +12,7 @@ capitulos: [01-El-reloj-y-el-transistor, 02-Registros-y-RAM-no-son-lo-mismo]
 
 > Un puñado de celdas adentro del procesador. La única memoria que no cuesta ciclos alcanzar, y la única que las instrucciones pueden nombra directamente.
 
-Ojo con la palabra: **"registro" también se dice de los registros de un [[Aparato|aparato]]**, que son una cosa completamente distinta —una dirección de memoria que no es memoria— y viven en [[45-Un-registro-no-es-RAM]]. Esta nota es sobre los del procesador.
+Ojo con la palabra: **"registro" también se dice de los registros de un [[Aparato|aparato]]**, que son una cosa completamente distinta —una dirección de memoria que no es memoria— y viven en [[MMIO]]. Esta nota es sobre los del procesador.
 
 ## Qué problema resuelve
 
@@ -32,14 +32,14 @@ Así que el procesador tiene un juego chiquito de celdas con **nombre propio**, 
 
 Los nombres de x86 arrastran cuarenta años: `rax` es el mismo registro que `eax` (32 bits), que `ax` (16), que `al` (8 bits bajos). Escribir en `eax` **pone en cero la mitad de arriba** de `rax`, y escribir en `al` no. Es una de las asimetrías que hacen que el ensamblador de x86 se lea raro.
 
-Y hay registros que no son de propósito general y mandan más que ellos: los **de control**. `cr3` en x86_64 apunta a la [[20-Tablas-de-paginas-de-verdad|tabla de páginas]] activa; `ttbr0_el1` hace lo mismo en aarch64. Cambiar uno de esos cambia el mundo entero que ve el código.
+Y hay registros que no son de propósito general y mandan más que ellos: los **de control**. `cr3` en x86_64 apunta a la [[Tabla-de-paginas|tabla de páginas]] activa; `ttbr0_el1` hace lo mismo en aarch64. Cambiar uno de esos cambia el mundo entero que ve el código.
 
 ## Por qué importan tanto en un kernel
 
 **El estado visible de un procesador es un puñado de números.** Los registros más unos de control, y nada más. De ahí salen dos cosas centrales:
 
 - **Un cambio de contexto es copiar registros.** Guardar los de un programa y poner los de otro *es* cambiar de programa. No hay más magia.
-- **Un [[32-Los-faults-como-datos|fault]] se puede contar entero.** Cuando el código se rompe, "qué estaba pasando" cabe en una respuesta: los registros, más la causa.
+- **Un [[Fault|fault]] se puede contar entero.** Cuando el código se rompe, "qué estaba pasando" cabe en una respuesta: los registros, más la causa.
 
 ## Cómo lo hace Linux
 
@@ -88,6 +88,6 @@ Y la razón por la que `ARGUMENTS` **se publica en vez de deducirse** es un bug 
 
 ## Ver también
 
-- [[45-Un-registro-no-es-RAM]] — el otro sentido de la palabra.
+- [[MMIO]] — el otro sentido de la palabra.
 - [[Jerarquia-de-memoria]]
 - [[31-La-pila-que-sobrevive]]

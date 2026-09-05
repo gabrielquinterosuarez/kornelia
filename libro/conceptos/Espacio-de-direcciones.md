@@ -93,7 +93,7 @@ La diferencia se nota en algo concreto: en Linux, lo que no está en tu mapa **n
 
 **Pero el mapa tiene dos vistas, y la elige el agente.** Un bloque de 2 MiB marcado como alcanzable sin privilegio es lo que hace posible `exec supervised` (D27); uno sin marcar no se alcanza desde ahí. Así que el espacio *efectivo* de un código depende del privilegio con el que el agente declaró que corre — y eso lo hace cumplir el hardware, no una política del kernel (P6). El protocolo lo dice al pie: `exec supervised` sobre memoria sin marcar se rechaza en vez de prometer algo que el hardware va a negar un microsegundo después.
 
-**Y hay un cuarto interlocutor con espacio propio: el aparato.** Lo que un dispositivo puede nombrar cuando hace [[DMA]] no lo define esta tabla sino el [[47-IOMMU-VT-d-y-SMMUv3|IOMMU]], y arranca **vacío**: sin declarar nada con `dma.allow`, ningún aparato llega a la memoria (D8). Son dos mapas distintos de la misma máquina. Ver [[Falsos-amigos#4]].
+**Y hay un cuarto interlocutor con espacio propio: el aparato.** Lo que un dispositivo puede nombrar cuando hace [[DMA]] no lo define esta tabla sino el [[IOMMU|IOMMU]], y arranca **vacío**: sin declarar nada con `dma.allow`, ningún aparato llega a la memoria (D8). Son dos mapas distintos de la misma máquina. Ver [[Falsos-amigos#4]].
 
 **Qué se quitó, y qué queda vacío en vez de reemplazado:** no hay reubicación, ni copy-on-write, ni mapear un archivo, ni una pila que crezca sola, ni la mitad alta reservada para el kernel. El agente que quiera un espacio propio arma tablas y las carga desde su código, corriendo en `raw` — con el aviso de que si no mapea el kernel y el [[UART]] pierde el cordón umbilical. La capa está vacía, no tapiada (P2).
 
@@ -132,5 +132,5 @@ La diferencia se nota en algo concreto: en Linux, lo que no está en tu mapa **n
 ## Ver también
 
 - [[Memoria-virtual]] · [[Tabla-de-paginas]] · [[Pagina]] · [[MMU]] · [[Modo-privilegiado]]
-- [[28-Que-es-un-proceso-y-que-queda-sin-procesos]] · [[22-Identity-map-la-mentira-mas-simple]]
+- [[28-Que-es-un-proceso-y-que-queda-sin-procesos]] · [[Memoria-virtual]]
 - [[Falsos-amigos#4]] — física, virtual, de [[Bus|bus]] e IOVA. · [[Falsos-amigos#6]] — proceso, hilo y tarea.

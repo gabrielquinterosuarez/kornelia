@@ -40,8 +40,8 @@ flowchart TD
 Tres hechos de ese dibujo:
 
 - **Se rutea por rango, no por identificador.** Nadie le pregunta a los aparatos quién es quién en cada acceso: cada puente compara la dirección contra sus ventanas. Es rápido y es la razón de que un aparato no pueda elegir su dirección.
-- **Las ventanas las programa el software.** El [[Firmware|firmware]] (o el kernel) recorre el árbol, reparte rangos y los escribe en los **[[BAR|BARs]]** de cada aparato y en los registros de ventana de cada puente. Ver [[17-PCIe-buses-funciones-y-BARs]].
-- **Hay un problema de huevo y gallina**, y se resuelve con una ventana especial: la de **configuración**. Un aparato recién encontrado todavía no tiene dirección, así que `bus:dispositivo:función` se convierte aritméticamente en un desplazamiento dentro de esa ventana, y ahí viven sus BARs. En [[PCIe]] moderno eso es **ECAM**, y dónde empieza lo dice la tabla `MCFG` de [[ACPI]] (o el nodo `pci-host-ecam-generic` del [[Device-tree|device tree]]). Ver [[15-Enumerar-sin-adivinar-ACPI]].
+- **Las ventanas las programa el software.** El [[Firmware|firmware]] (o el kernel) recorre el árbol, reparte rangos y los escribe en los **[[BAR|BARs]]** de cada aparato y en los registros de ventana de cada puente. Ver [[PCIe]].
+- **Hay un problema de huevo y gallina**, y se resuelve con una ventana especial: la de **configuración**. Un aparato recién encontrado todavía no tiene dirección, así que `bus:dispositivo:función` se convierte aritméticamente en un desplazamiento dentro de esa ventana, y ahí viven sus BARs. En [[PCIe]] moderno eso es **ECAM**, y dónde empieza lo dice la tabla `MCFG` de [[ACPI]] (o el nodo `pci-host-ecam-generic` del [[Device-tree|device tree]]). Ver [[ACPI]].
 
 ## Cuando no responde nadie
 
@@ -105,9 +105,9 @@ El kernel **no enumera aparatos ni asigna BARs**: eso es trabajo de driver, y lo
 2. **Hacer que esa ventana sea alcanzable.** El mapa de memoria de [[UEFI]] **no informa la ventana de configuración en aarch64**; la MCFG sí, así que se suma al mapa donde el mapa se arma. Antes de eso el kernel publicaba una dirección que él mismo hacía inalcanzable.
 3. **Mapear lo que cae fuera del mapa.** En aarch64 los BARs de PCIe caen en 512 GiB y el mapa que da el firmware llega a 257, así que el controlador NVMe era **inalcanzable**: el kernel era la razón por la que no se podía usar un aparato, que es exactamente lo que prohíbe P1. Ahora el rango se mapea y se reintenta. Se mapea como dispositivo porque no se sabe qué hay.
 4. **Decir que no sabe.** Un rango que cae en un **hueco** del mapa —donde quedan los BARs que el firmware asignó sin listar— se entrega con la clase `unreported`, que **no es `mmio`**. El agente se lleva el rango *y* la advertencia de que la máquina nunca dijo qué hay ahí: alcanzarlo no es enterarse (P4). Ver [[18-Lo-que-la-maquina-no-dice]].
-5. **Sobrevivir a un rechazo.** `mem.read` y `mem.write` van con un punto de recuperación armado alrededor de **una sola instrucción** —cuanto más corta la ventana, menos chance de capturar un [[Fault|fault]] que no era—, y el rechazo vuelve como `access-refused` con la dirección que cortó y los números crudos de la máquina (P5). Ver [[33-Recuperar-un-acceso-que-el-bus-rechaza]].
+5. **Sobrevivir a un rechazo.** `mem.read` y `mem.write` van con un punto de recuperación armado alrededor de **una sola instrucción** —cuanto más corta la ventana, menos chance de capturar un [[Fault|fault]] que no era—, y el rechazo vuelve como `access-refused` con la dirección que cortó y los números crudos de la máquina (P5). Ver [[MMIO]].
 
-**Qué se quitó:** no hay `request_mem_region`. Reservar un rango para que dos drivers no se peleen no tiene sentido cuando hay **un** agente (D13); el reclamo del agente es `mem.claim`, y el árbitro de verdad —del lado de los aparatos, que es donde el daño es silencioso— es el [[47-IOMMU-VT-d-y-SMMUv3|IOMMU]], que hace cumplir lo que el agente declaró con `dma.allow` (D8, P6). El kernel no impone una política de quién toca qué: hace cumplir la declarada.
+**Qué se quitó:** no hay `request_mem_region`. Reservar un rango para que dos drivers no se peleen no tiene sentido cuando hay **un** agente (D13); el reclamo del agente es `mem.claim`, y el árbitro de verdad —del lado de los aparatos, que es donde el daño es silencioso— es el [[IOMMU|IOMMU]], que hace cumplir lo que el agente declaró con `dma.allow` (D8, P6). El kernel no impone una política de quién toca qué: hace cumplir la declarada.
 
 ## Cómo se ve roto
 
@@ -147,6 +147,6 @@ El kernel **no enumera aparatos ni asigna BARs**: eso es trabajo de driver, y lo
 ## Ver también
 
 - [[MMIO]] · [[MMU]] · [[Cache]] · [[NVMe]]
-- [[17-PCIe-buses-funciones-y-BARs]] — cómo se encuentra un aparato y quién le asigna su rango.
+- [[PCIe]] — cómo se encuentra un aparato y quién le asigna su rango.
 - [[18-Lo-que-la-maquina-no-dice]] — los huecos del mapa y la clase `unreported`.
 - [[Falsos-amigos]] — el bus no es el IOMMU, y MMIO no es DMA.

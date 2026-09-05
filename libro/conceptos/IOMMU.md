@@ -108,7 +108,7 @@ Lo que `describe {what:["iommu"]}` publica, y por qué cada campo:
 | Todo el DMA pasa, con el IOMMU "encendido". | Se escribió una orden sin arrastrar el estado y se apagó la traducción. Ver arriba. |
 | El bloqueo funciona desde el primer intento y nunca falló. | Puede que la transferencia no esté ocurriendo. Comprobalo sin IOMMU antes de creerle. |
 | Un permiso recién dado no se ve: el aparato sigue rebotando. | Falta invalidar. El silicio se acuerda de haber negado esa dirección y sigue negándola. |
-| El SMMU lee ceros una página más abajo de donde escribiste. | Se pidió una alineación mayor que la página y el cargador no la cumplió — y el compilador, dando por cierto que los bits de abajo son cero, simplificó las máscaras. Ver [[24-Alineacion-la-promesa-que-el-cargador-no-cumple]]. |
+| El SMMU lee ceros una página más abajo de donde escribiste. | Se pidió una alineación mayor que la página y el cargador no la cumplió — y el compilador, dando por cierto que los bits de abajo son cero, simplificó las máscaras. Ver [[Pagina]]. |
 | Las direcciones que pide el aparato se recortan en silencio. | Se le pidió a la etapa 2 del SMMU un tamaño de entrada **menor** que el de salida. No se rechaza: se reinterpreta. |
 | El IOMMU nunca confirma que tomó su tabla. | La dirección de la tabla está mal, o el rango de registros del IOMMU no está mapeado. Por eso el encendido **espera la confirmación**: uno que no ocurrió se ve igual que uno que sí. |
 | Un aparato sigue alcanzando memoria que se soltó. | El permiso no se revocó en `release`. |

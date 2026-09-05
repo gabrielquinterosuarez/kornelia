@@ -38,13 +38,13 @@ Cinco palabras para cosas que se parecen. Se distinguen por **quién las causa**
 | **Abort** | Algo se rompió y **no se sabe dónde quedó**. | No de forma confiable. | Error del [[Bus|bus]], corrupción de memoria, doble fallo. |
 
 > [!important] La diferencia entre fault y abort es de qué se puede recuperar
-> Un fault se puede reintentar porque el silicio garantiza que no alcanzó a cambiar nada. Un abort no. Por eso [[32-Los-faults-como-datos|P5 dice "los faults son datos"]] y no "los aborts son datos": no es una elección de diseño, es lo que el silicio permite.
+> Un fault se puede reintentar porque el silicio garantiza que no alcanzó a cambiar nada. Un abort no. Por eso [[Fault|P5 dice "los faults son datos"]] y no "los aborts son datos": no es una elección de diseño, es lo que el silicio permite.
 
 Y una más, que no entra en la tabla:
 
 - **NMI** (*non-maskable interrupt*) — una interrupción que **no se puede tapar**. Existe para el caso en que el código dijo "no me interrumpan" y hay que interrumpirlo igual. Es el segundo escalón para [[39-Plazos-y-cortes|cortar un núcleo que se tapó los oídos]].
 
-Detalle histórico que confunde: en x86 el **número** que identifica una excepción y el que identifica una interrupción de aparato viven en la **misma tabla** (la IDT), del 0 al 255. Los primeros 32 son excepciones; el resto los reparte el sistema. En ARM están separados por construcción. Ver [[30-Capturar-un-fault-IDT-y-vectores]].
+Detalle histórico que confunde: en x86 el **número** que identifica una excepción y el que identifica una interrupción de aparato viven en la **misma tabla** (la IDT), del 0 al 255. Los primeros 32 son excepciones; el resto los reparte el sistema. En ARM están separados por construcción. Ver [[Fault]].
 
 ---
 
@@ -54,7 +54,7 @@ Detalle histórico que confunde: en x86 el **número** que identifica una excepc
 |---|---|
 | **Anillo de privilegio** (*ring 0…3*) | El nivel de permiso del código en x86. Anillo 0 es el kernel, anillo 3 es el usuario. Los anillos 1 y 2 existen y casi nadie los usa. |
 | **Buffer circular** (*ring buffer*) | Una estructura de datos: un arreglo donde el final vuelve al principio. El buzón del cable serie de Kornelia es uno, y [[UART|ser más chico que el pedido más grande le costó caro al proyecto]]. |
-| **Anillo de colas** | En aparatos modernos ([[NVMe]], tarjetas de red), la cola en memoria por la que el [[Driver|driver]] y el aparato se hablan. Es un buffer circular, pero se lo nombra distinto. Ver [[48-Colas-en-memoria-el-patron-de-NVMe]]. |
+| **Anillo de colas** | En aparatos modernos ([[NVMe]], tarjetas de red), la cola en memoria por la que el [[Driver|driver]] y el aparato se hablan. Es un buffer circular, pero se lo nombra distinto. Ver [[NVMe]]. |
 
 Y el equivalente del primero en otras arquitecturas, que **no se llama anillo**:
 
@@ -64,20 +64,20 @@ Y el equivalente del primero en otras arquitecturas, que **no se llama anillo**:
 | aarch64 | Nivel de excepción (*EL*) | EL0 (usuario) … EL3 ([[Firmware|firmware]]) — **el número sube al subir el privilegio** |
 | RISC-V | Modo | U (usuario), S (supervisor), M (máquina) |
 
-Que en x86 el privilegio alto sea el número **bajo** y en ARM el **alto** es una fuente inagotable de errores al leer código de las dos. Ver [[06-El-silicio-tiene-modos]].
+Que en x86 el privilegio alto sea el número **bajo** y en ARM el **alto** es una fuente inagotable de errores al leer código de las dos. Ver [[Modo-privilegiado]].
 
 ---
 
 ## 4. Direcciones: física, virtual, de bus, IOVA
 
-Cuatro nombres para "un número que apunta a algo", y confundirlos es la causa clásica de que un [[46-DMA-el-aparato-lee-memoria-solo|DMA]] escriba en el lugar equivocado.
+Cuatro nombres para "un número que apunta a algo", y confundirlos es la causa clásica de que un [[DMA|DMA]] escriba en el lugar equivocado.
 
 | Nombre | Quién la usa | Qué significa |
 |---|---|---|
-| **Virtual** | El código, siempre. | El número que pone tu programa. La [[20-Tablas-de-paginas-de-verdad|MMU]] la traduce. |
+| **Virtual** | El código, siempre. | El número que pone tu programa. La [[MMU]] la traduce. |
 | **Física** | La [[MMU]], después de traducir. | Dónde está de verdad en los chips de RAM. |
 | **De bus** / **[[DMA]]** | El **aparato**, no el procesador. | Lo que el aparato tiene que escribir en su registro para apuntar a esa memoria. En PCs suele coincidir con la física; en placas embebidas, a veces no. |
-| **IOVA** | El aparato, cuando hay [[47-IOMMU-VT-d-y-SMMUv3|IOMMU]]. | Una dirección virtual **del aparato**. El [[IOMMU]] la traduce igual que la MMU traduce la del procesador. |
+| **IOVA** | El aparato, cuando hay [[IOMMU|IOMMU]]. | Una dirección virtual **del aparato**. El [[IOMMU]] la traduce igual que la MMU traduce la del procesador. |
 
 > [!warning] Un aparato no ve la memoria como la ve el procesador
 > Es la idea que más cuesta y la que hace falta para entender el IOMMU. El aparato tiene su propia vista, con su propia tabla de traducción, y por omisión en Kornelia **está vacía**: sin declarar nada, ningún aparato llega a la memoria (D8).
@@ -117,9 +117,9 @@ En Kornelia no hay ninguna de las tres (D13): hay **un** agente, que se multipli
 | **[[Memoria-virtual|Memoria virtual]]**, en un libro de sistemas | El mecanismo de traducción de direcciones. Existe aunque tengas RAM de sobra. |
 | **Memoria virtual**, en el Panel de Control de Windows | El archivo de intercambio (*swap*): usar disco cuando falta RAM. |
 | **Memoria volátil** | Que se borra al cortar la luz. No tiene nada que ver con `volatile`. |
-| **`volatile`** (en C o Rust) | "No optimices este acceso": el compilador no puede reordenarlo ni suprimirlo, porque la dirección es un [[45-Un-registro-no-es-RAM|registro de un aparato]] y leerla dos veces **no** da lo mismo que leerla una. |
+| **`volatile`** (en C o Rust) | "No optimices este acceso": el compilador no puede reordenarlo ni suprimirlo, porque la dirección es un [[MMIO|registro de un aparato]] y leerla dos veces **no** da lo mismo que leerla una. |
 
-El swap es una **consecuencia** de la memoria virtual, no su definición. Kornelia tiene memoria virtual ([[22-Identity-map-la-mentira-mas-simple|mapeada uno a uno]]) y no tiene swap ni la va a tener.
+El swap es una **consecuencia** de la memoria virtual, no su definición. Kornelia tiene memoria virtual ([[Memoria-virtual|mapeada uno a uno]]) y no tiene swap ni la va a tener.
 
 ---
 
@@ -130,7 +130,7 @@ Los tres guardan algo para no ir a buscarlo, y se rompen distinto.
 | | Qué guarda | Cuándo miente |
 |---|---|---|
 | **[[Cache|Caché]] de datos/instrucciones** | Copias de memoria, por línea (típico: 64 bytes). | Cuando escribís un registro de aparato y la escritura se queda en la caché. Por eso el [[MMIO]] se marca **no-cacheable** (D12). |
-| **[[TLB]]** | Traducciones ya hechas de virtual a física. | Cuando cambiás la [[Tabla-de-paginas|tabla de páginas]]: el procesador **no se entera**. Hay que invalidarlo a mano. Ver [[21-TLB-invalidacion-y-barreras]]. |
+| **[[TLB]]** | Traducciones ya hechas de virtual a física. | Cuando cambiás la [[Tabla-de-paginas|tabla de páginas]]: el procesador **no se entera**. Hay que invalidarlo a mano. Ver [[TLB]]. |
 | **Buffer de escritura** | Escrituras que todavía no llegaron a destino. | Cuando el orden importa: le escribís a un aparato "arrancá" antes de que llegue el dato. Se arregla con una **barrera**. |
 
 Los tres son invisibles cuando andan y muy difíciles de ver cuando no. Y **x86 los esconde mejor que ARM**, que es exactamente por qué este proyecto insiste en compilar las dos (D22/D23): x86 tiene modelo de memoria fuerte y perdona barreras faltantes que ARM castiga.
@@ -190,7 +190,7 @@ flowchart LR
 - **Línea** es física: un cable que sube o baja.
 - **IRQ** es el número que el sistema le puso a esa línea. En un PC viejo eran 16 y estaban repartidos por convención (IRQ 0 = reloj, IRQ 4 = serie).
 - **Vector** es el índice en la tabla del procesador. El mapeo IRQ→vector lo decide el sistema, y es donde se confunde todo al leer código.
-- **[[MSI]]** rompe el modelo: no hay cable. El aparato **escribe un dato en una dirección**, y eso se convierte en interrupción. Ver [[35-MSI-interrupciones-sin-cable]].
+- **[[MSI]]** rompe el modelo: no hay cable. El aparato **escribe un dato en una dirección**, y eso se convierte en interrupción. Ver [[MSI]].
 
 ---
 

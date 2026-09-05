@@ -30,7 +30,7 @@ Todo driver, de cualquier aparato, hace las mismas cinco cosas. Vale la pena ten
 | 2 | **Configurarlo** | Prenderlo, resetearlo, decirle que puede responder a accesos de memoria y que puede iniciar accesos él mismo. |
 | 3 | **Alcanzar sus registros** | Mapearlos como no-cacheables y acceder con el **ancho exacto** ([[MMIO]]). |
 | 4 | **Atender sus avisos** | Instalar un [[Handler|handler]] para su [[Interrupcion|interrupción]] — o sondear. |
-| 5 | **Moverle datos** | Que el aparato alcance la memoria del sistema por [[46-DMA-el-aparato-lee-memoria-solo|DMA]], que hoy casi siempre es [[NVMe|colas en RAM]]. |
+| 5 | **Moverle datos** | Que el aparato alcance la memoria del sistema por [[DMA|DMA]], que hoy casi siempre es [[NVMe|colas en RAM]]. |
 
 Los pasos 2 y 5 tienen una trampa que aparece siempre: un aparato [[PCIe]] no puede leer memoria hasta que alguien le prende el bit de **bus master** en su espacio de configuración. Sin eso el driver arma las colas perfectas y el aparato no las lee nunca.
 
@@ -78,7 +78,7 @@ ls /sys/bus/pci/drivers/nvme/             # bind, unbind, y los aparatos atados
 echo 0000:01:00.0 | sudo tee /sys/bus/pci/drivers/nvme/unbind   # desatarlo en caliente
 ```
 
-En placas sin PCIe el intermediario es otro (`platform_driver` con un `of_match_table` que compara la cadena `compatible` del [[16-El-otro-dialecto-device-tree|device tree]]), pero el triángulo es idéntico.
+En placas sin PCIe el intermediario es otro (`platform_driver` con un `of_match_table` que compara la cadena `compatible` del [[Device-tree|device tree]]), pero el triángulo es idéntico.
 
 **Lo que el modelo compra:** un driver no repite el descubrimiento, ni la energía, ni el desate en caliente, ni la liberación de recursos. **Lo que cuesta:** el driver corre en el kernel, privilegiado, y no puede hacer nada que el bus no le ofrezca.
 
@@ -162,5 +162,5 @@ En Kornelia, ¿cómo encuentra el agente un aparato si no hay `probe`?::`describ
 - [[NVMe]] — el driver de verdad escrito con los once verbos, de punta a punta.
 - [[Modulo-de-kernel]] — el envase con el que Linux carga y descarga drivers sin reiniciar.
 - [[UART]] — el único driver que el kernel lleva adentro, y por qué ese.
-- [[49-Escribir-un-driver]] · [[17-PCIe-buses-funciones-y-BARs]] · [[51-El-blob-y-la-ventana-de-rescate]]
+- [[Driver]] · [[PCIe]] · [[51-El-blob-y-la-ventana-de-rescate]]
 - [[Falsos-amigos#9]] — driver, módulo, firmware y blob no son lo mismo.

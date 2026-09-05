@@ -169,4 +169,4 @@ Lo interesante es que **las dos arquitecturas codifican esa misma decisión de f
 
 - [[Jerarquia-de-memoria]] · [[MMIO]] · [[TLB]] · [[MMU]]
 - [[42-Ordenamiento-de-memoria]] — el store buffer y las barreras, que están **antes** de la caché.
-- [[46-DMA-el-aparato-lee-memoria-solo]] — el otro que toca la RAM sin pasar por tu caché.
+- [[DMA]] — el otro que toca la RAM sin pasar por tu caché.

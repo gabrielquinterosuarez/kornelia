@@ -60,7 +60,7 @@ El DSDT no es una tabla de datos: es **bytecode de AML** (*ACPI Machine Language
 
 O sea: para enumerar un aparato hace falta un intérprete de un lenguaje de programación adentro del kernel. Linux tiene uno —**ACPICA**, unas cien mil líneas de C heredadas de Intel— y es de las piezas más grandes que arrastra.
 
-Y esto es lo que hace que [[MSI]] no sea sólo una optimización: un aparato que dispara su interrupción **escribiendo en una dirección** no necesita que nadie averigüe qué cable tiene. El dato viaja por el bus, y el AML deja de hacer falta para eso. Ver [[35-MSI-interrupciones-sin-cable]].
+Y esto es lo que hace que [[MSI]] no sea sólo una optimización: un aparato que dispara su interrupción **escribiendo en una dirección** no necesita que nadie averigüe qué cable tiene. El dato viaja por el bus, y el AML deja de hacer falta para eso. Ver [[MSI]].
 
 ## Cómo lo hace Linux
 
@@ -143,4 +143,4 @@ Del mismo espíritu: el contador de frecuencia fija que informa ACPI se usa **pa
 
 - [[Device-tree]] — el otro dialecto, donde no hay ACPI. Cuál se usa no lo elige el kernel.
 - [[Firmware]] · [[UEFI]] · [[PCIe]] · [[MSI]]
-- [[15-Enumerar-sin-adivinar-ACPI]] · [[47-IOMMU-VT-d-y-SMMUv3]]
+- [[ACPI]] · [[IOMMU]]

@@ -137,5 +137,5 @@ Y si el archivo no entra, no se ejecuta nada. Se pregunta si quedó archivo afue
 ## Ver también
 
 - [[Firmware]] · [[ACPI]] · [[Device-tree]] · [[ELF-y-PE]]
-- [[12-Que-te-da-UEFI-y-que-te-saca]] · [[51-El-blob-y-la-ventana-de-rescate]]
+- [[UEFI]] · [[51-El-blob-y-la-ventana-de-rescate]]
 - [[Falsos-amigos]] — "blob" significa tres cosas distintas y esta nota toca dos.

@@ -72,10 +72,10 @@ Los que usa este libro:
 | `/proc/cpuinfo` | Qué procesador hay y qué capacidades tiene (`flags`). |
 | `/proc/self/maps` | Qué tiene mapeado **este** proceso y con qué permisos. Ver [[MMU]]. |
 | `/proc/vmstat` | Contadores del subsistema de memoria, incluidos los page [[Fault|faults]]. |
-| `/sys/bus/pci/devices/` | Un directorio por aparato [[PCIe]], con `vendor`, `device`, `class`, `resource0`. Ver [[17-PCIe-buses-funciones-y-BARs]]. |
-| `/sys/kernel/iommu_groups/` | Qué aparatos comparten grupo de aislamiento. Ver [[47-IOMMU-VT-d-y-SMMUv3]]. |
-| `/sys/firmware/acpi/tables/` | Las tablas de [[ACPI]] **crudas**, para volcarlas con `iasl`. Ver [[15-Enumerar-sin-adivinar-ACPI]]. |
-| `/sys/firmware/devicetree/base/` | El [[Device-tree|device tree]], un directorio por nodo. Ver [[16-El-otro-dialecto-device-tree]]. |
+| `/sys/bus/pci/devices/` | Un directorio por aparato [[PCIe]], con `vendor`, `device`, `class`, `resource0`. Ver [[PCIe]]. |
+| `/sys/kernel/iommu_groups/` | Qué aparatos comparten grupo de aislamiento. Ver [[IOMMU]]. |
+| `/sys/firmware/acpi/tables/` | Las tablas de [[ACPI]] **crudas**, para volcarlas con `iasl`. Ver [[ACPI]]. |
+| `/sys/firmware/devicetree/base/` | El [[Device-tree|device tree]], un directorio por nodo. Ver [[Device-tree]]. |
 
 ```bash
 sudo cat /proc/iomem | head -30
@@ -154,5 +154,5 @@ Que además haya trece secciones y no una, y que se pidan por nombre, es el mism
 ## Ver también
 
 - [[MMIO]] · [[MMU]] · [[Interrupcion]] · [[NVMe]]
-- [[18-Lo-que-la-maquina-no-dice]] · [[15-Enumerar-sin-adivinar-ACPI]] · [[16-El-otro-dialecto-device-tree]]
+- [[18-Lo-que-la-maquina-no-dice]] · [[ACPI]] · [[Device-tree]]
 - [[53-Sin-sistema-de-archivos]] · [[09-Que-cuesta-una-abstraccion]] · [[Falsos-amigos]]

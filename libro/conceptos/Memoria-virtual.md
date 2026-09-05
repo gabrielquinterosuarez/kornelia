@@ -114,7 +114,7 @@ No es que falte: **falta el piso entero**. El swap necesita tres cosas que este 
 | Kornelia arranca y avisa `mem.claim cannot be enabled like this.` | El `install` falló y se siguió con las tablas del [[Firmware|firmware]], que viven en memoria que el mapa informa como **libre**: `mem.claim` se las podría entregar al agente. |
 | Kornelia dice `the hardware does NOT enforce it`. | El bit de usuario está puesto pero SMEP no se pudo prender ([[QEMU]] lo deja apagado). El permiso se marca y no separa nada — y se dice, porque una garantía que no se cumple es peor que no tenerla: `kernel-core/src/paging.rs:158#pub struct Mapping`. |
 | Pediste 100 bytes alcanzables sin privilegio y te dieron 2 MiB. | No es un bug: el permiso no se puede decir más fino que un bloque de la tabla, así que el pedido redondea (`kernel-core/src/claims.rs:157#pub fn claim`). Ver [[Pagina]]. |
-| Un aparato responde por [[MMIO]] pero el DMA que le pediste no llega. | Ese acceso no pasa por la MMU: pasa por el [[47-IOMMU-VT-d-y-SMMUv3|IOMMU]], que traduce aparte y con tablas propias. |
+| Un aparato responde por [[MMIO]] pero el DMA que le pediste no llega. | Ese acceso no pasa por la MMU: pasa por el [[IOMMU|IOMMU]], que traduce aparte y con tablas propias. |
 
 ## Práctica
 
@@ -138,5 +138,5 @@ Kornelia tiene memoria virtual pero identity map, ¿qué gana y qué pierde?::Ga
 ## Ver también
 
 - [[MMU]] · [[Tabla-de-paginas]] · [[Pagina]] · [[TLB]] · [[Espacio-de-direcciones]]
-- [[22-Identity-map-la-mentira-mas-simple]] · [[23-Asignadores-y-por-que-aca-no-hay]]
+- [[Memoria-virtual]] · [[23-Asignadores-y-por-que-aca-no-hay]]
 - [[Falsos-amigos#7]] — memoria virtual, swap, memoria volátil y `volatile`.

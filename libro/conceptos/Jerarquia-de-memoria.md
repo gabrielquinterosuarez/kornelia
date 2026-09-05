@@ -65,13 +65,13 @@ Esta es la sección por la que existe la nota.
 
 **1 · Interrupciones en vez de sondear.** A 115.200 baudios, un byte del cable serie tarda unos 87 µs en llegar: **más de 170.000 ciclos**. Girar preguntando "¿ya llegó?" quema esos ciclos enteros por byte. Por eso el cable tiene timbre y el núcleo duerme. Ver [[38-Dormir-en-vez-de-girar]] e [[Interrupcion]].
 
-**2 · DMA.** Si el procesador copiara del disco palabra por palabra, pagaría la latencia del [[Aparato|aparato]] **y** ocuparía el núcleo el tiempo entero. Que el aparato escriba solo en la RAM convierte una espera de 200.000 ciclos en un aviso al final. Ver [[46-DMA-el-aparato-lee-memoria-solo]].
+**2 · DMA.** Si el procesador copiara del disco palabra por palabra, pagaría la latencia del [[Aparato|aparato]] **y** ocuparía el núcleo el tiempo entero. Que el aparato escriba solo en la RAM convierte una espera de 200.000 ciclos en un aviso al final. Ver [[DMA]].
 
-**3 · Colas en memoria en vez de registros.** Cada escritura a un registro MMIO es un viaje al [[Bus|bus]], sin caché que la amortigüe. Un aparato manejado a razón de un registro por operación está limitado por eso. NVMe deja los comandos en RAM —barata— y toca **un** registro para avisar. Ver [[48-Colas-en-memoria-el-patron-de-NVMe]] y [[NVMe]].
+**3 · Colas en memoria en vez de registros.** Cada escritura a un registro MMIO es un viaje al [[Bus|bus]], sin caché que la amortigüe. Un aparato manejado a razón de un registro por operación está limitado por eso. NVMe deja los comandos en RAM —barata— y toca **un** registro para avisar. Ver [[NVMe]] y [[NVMe]].
 
 **4 · Buzones e IPI en vez de que el otro núcleo pregunte.** Mandarle trabajo a otro núcleo se hace dejando el pedido en memoria y despertándolo con una interrupción, no haciendo que gire leyendo una variable — girar cuesta tráfico de coherencia sobre esa línea, en cada vuelta, en todos los núcleos que miran. Ver [[44-Mandar-trabajo-buzones-e-IPI]].
 
-**5 · Páginas grandes.** Un recorrido de página son cuatro lecturas; si pegan en RAM, son cuatro por 260 ciclos. De ahí sale que exista el [[TLB]], y que convenga que una entrada cubra 1 GiB en vez de 4 KiB. Ver [[22-Identity-map-la-mentira-mas-simple]].
+**5 · Páginas grandes.** Un recorrido de página son cuatro lecturas; si pegan en RAM, son cuatro por 260 ciclos. De ahí sale que exista el [[TLB]], y que convenga que una entrada cubra 1 GiB en vez de 4 KiB. Ver [[Memoria-virtual]].
 
 **6 · Y al revés: lo que no está en la tabla, no hace falta resolverlo.** Un kernel sin escalón debajo de la RAM no necesita demand paging, ni swap, ni page cache, ni readahead. Media docena de subsistemas de Linux existen para administrar **una** flecha de ese dibujo.
 

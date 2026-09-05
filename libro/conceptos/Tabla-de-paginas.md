@@ -108,7 +108,7 @@ Cuatro cosas concretas:
 | La máquina se reinicia en la instrucción siguiente a cargar la raíz. | Las tablas nuevas no mapean el código que está corriendo. La próxima instrucción se busca en una dirección que no existe. |
 | Marcaste el bloque como de usuario y sigue sin alcanzarse. | Algún nivel de arriba tiene el bit apagado. El permiso efectivo es el **AND** de la cadena entera: un nivel que dice que no gana sobre cuatro que dicen que sí. |
 | Marcaste una página para el agente y el **kernel** dejó de poder ejecutar la suya. | Es lo esperado, no un bug: SMEP en x86_64, el modelo de permisos en aarch64. Una página es del agente o la ejecuta el kernel, nunca las dos. Por eso los bits se prenden después de que el agente corra sin privilegio, no antes. |
-| Cambiaste una entrada y el procesador sigue traduciendo como antes. | El [[TLB]]. La tabla es memoria común: el hardware no se entera de que la escribiste. Ver [[21-TLB-invalidacion-y-barreras]]. |
+| Cambiaste una entrada y el procesador sigue traduciendo como antes. | El [[TLB]]. La tabla es memoria común: el hardware no se entera de que la escribiste. Ver [[TLB]]. |
 | En aarch64 anda todo hasta que arranca el segundo núcleo, y ahí se corrompe. | Falta el atributo de *shareable* en el descriptor. En x86 no existe el problema porque la coherencia es implícita; ARM lo hace explícito. |
 | Todo da fault en el primer acceso, aunque el mapeo esté bien. | `AF` en cero. En ARM el *access flag* no es informativo: si no lo prendés, el acceso no ocurre. |
 | Kornelia dice `more chunks contain kernel than can be split`. | Hay más gigabytes con kernel o memoria libre adentro que tablas de bloques estáticas. Se avisa en vez de mapear a medias. |
@@ -136,5 +136,5 @@ Si una entrada tiene el bit de presente en cero, ¿los otros bits importan?::Par
 ## Ver también
 
 - [[MMU]] · [[Pagina]] · [[TLB]] · [[Memoria-virtual]] · [[Espacio-de-direcciones]] · [[Modo-privilegiado]]
-- [[20-Tablas-de-paginas-de-verdad]] · [[22-Identity-map-la-mentira-mas-simple]]
-- [[47-IOMMU-VT-d-y-SMMUv3]] — otro árbol, otro formato, para las direcciones que pide un aparato.
+- [[Tabla-de-paginas]] · [[Memoria-virtual]]
+- [[IOMMU]] — otro árbol, otro formato, para las direcciones que pide un aparato.

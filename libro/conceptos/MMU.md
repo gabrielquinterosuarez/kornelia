@@ -49,10 +49,10 @@ Tres cosas de ese dibujo son las que importan:
 - **Un recorrido cuesta cuatro lecturas de memoria.** Por eso existe el [[TLB]], que es la [[Cache|caché]] de traducciones ya hechas. Sin él, cada acceso costaría cinco.
 - **Los niveles se pueden cortar antes.** Si una entrada intermedia dice "yo *soy* la página", el recorrido termina ahí y esa entrada mapea 2 MiB o 1 GiB de una. Menos lecturas y menos presión sobre el TLB.
 
-Cuando el recorrido no llega a ningún lado —una entrada sin el bit de presente, o un permiso que no da— la MMU no devuelve basura: **levanta una excepción**, el [[32-Los-faults-como-datos|page fault]], y ahí el kernel decide qué hacer.
+Cuando el recorrido no llega a ningún lado —una entrada sin el bit de presente, o un permiso que no da— la MMU no devuelve basura: **levanta una excepción**, el [[Fault|page fault]], y ahí el kernel decide qué hacer.
 
 > [!info] La MMU no es la única
-> Un [[Aparato|aparato]] que hace [[46-DMA-el-aparato-lee-memoria-solo|DMA]] no pasa por la MMU del procesador. Para eso hay un **segundo** traductor, el [[47-IOMMU-VT-d-y-SMMUv3|IOMMU]], con sus propias tablas y sus propios recorridos. Misma idea, otro silicio, otro formato.
+> Un [[Aparato|aparato]] que hace [[DMA|DMA]] no pasa por la MMU del procesador. Para eso hay un **segundo** traductor, el [[IOMMU|IOMMU]], con sus propias tablas y sus propios recorridos. Misma idea, otro silicio, otro formato.
 
 ## Cómo lo hace Linux
 
@@ -94,7 +94,7 @@ Tres cosas concretas:
 | La máquina se reinicia justo después de cargar el registro raíz. | Las tablas nuevas no mapean el código que está corriendo. La instrucción siguiente se busca en una dirección que no existe. |
 | Todo anda pero `mem.claim` entrega memoria del kernel. | El `install` falló y se siguió con las tablas del firmware, que viven en memoria que el mapa informa como libre. Por eso la raíz **se relee**. |
 | Un aparato responde por [[MMIO]] pero el [[DMA]] que pide no llega. | Ese acceso no pasa por la MMU sino por el [[IOMMU]]: son dos traductores distintos con dos tablas distintas. |
-| El SMMU lee ceros una página más abajo de donde escribiste. | Pediste una alineación mayor que la página y el cargador no la cumplió. Ver [[24-Alineacion-la-promesa-que-el-cargador-no-cumple]]. |
+| El SMMU lee ceros una página más abajo de donde escribiste. | Pediste una alineación mayor que la página y el cargador no la cumplió. Ver [[Pagina]]. |
 | Las direcciones que pide un aparato se recortan en silencio. | Se le pidió a la etapa 2 del SMMU un tamaño de entrada **menor** que el de salida. No se rechaza: se reinterpreta. Un límite que sobra puede ser tan inválido como uno que falta. |
 | Cambiaste una entrada y el procesador sigue usando la vieja. | El [[TLB]]. La MMU no releé la tabla si ya tiene la traducción guardada. |
 
@@ -118,4 +118,4 @@ En Kornelia la MMU traduce identity map, ¿para qué sirve entonces?::Para los a
 ## Ver también
 
 - [[Tabla-de-paginas]] · [[TLB]] · [[Pagina]] · [[Memoria-virtual]] · [[Espacio-de-direcciones]]
-- [[47-IOMMU-VT-d-y-SMMUv3]] — la misma idea, del lado de los aparatos.
+- [[IOMMU]] — la misma idea, del lado de los aparatos.

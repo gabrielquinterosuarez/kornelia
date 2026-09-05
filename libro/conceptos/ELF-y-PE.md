@@ -118,7 +118,7 @@ $ file target/aarch64-unknown-uefi/release/kernel.efi
 PE32+ executable for EFI (application), ARM64, 4 sections
 ```
 
-No es una rareza: **UEFI carga PE**, porque el estándar lo dice, y por eso el archivo se llama `.efi` y va a `EFI/BOOT/BOOTX64.EFI` (`scripts/run-x86_64.sh:24#BOOTX64.EFI`) o `BOOTAA64.EFI` (`scripts/run-aarch64.sh:24#BOOTAA64.EFI`). Ver [[11-Reset-vector-firmware-BIOS-y-UEFI]].
+No es una rareza: **UEFI carga PE**, porque el estándar lo dice, y por eso el archivo se llama `.efi` y va a `EFI/BOOT/BOOTX64.EFI` (`scripts/run-x86_64.sh:24#BOOTX64.EFI`) o `BOOTAA64.EFI` (`scripts/run-aarch64.sh:24#BOOTAA64.EFI`). Ver [[Firmware]].
 
 > [!danger] Y de ahí sale uno de los bugs más caros del proyecto
 > El target es `x86_64-unknown-uefi`, y ese target **no trae solo el formato: trae la ABI de Windows**. `extern "C"` ahí pasa los argumentos por **RCX, RDX, R8, R9** —no RDI y RSI— y además exige que quien llama reserve **32 bytes de pila vacía** antes de la llamada. El síntoma no se parece a la causa: una llamada del blob entraba **a la función correcta** y veía **punteros nulos**. Los cuatro argumentos estaban ahí, en otros cuatro registros. La moraleja: **la convención de llamada la pone el target, no el silicio.** Saber que la máquina es x86_64 no alcanza para saber por dónde pasan los argumentos.
@@ -177,7 +177,7 @@ El código que sube el agente, ¿en qué formato va?::En ninguno: bytes crudos. 
 
 ## Ver también
 
-- [[13-Cargar-una-imagen-PE-ELF-y-el-entry-point]] · [[27-La-ABI-la-pone-el-target-no-el-silicio]] · [[12-Que-te-da-UEFI-y-que-te-saca]]
+- [[ELF-y-PE]] · [[27-La-ABI-la-pone-el-target-no-el-silicio]] · [[UEFI]]
 - [[MMU]] — quién hace cumplir los permisos que declara un segmento.
-- [[24-Alineacion-la-promesa-que-el-cargador-no-cumple]] — el otro bug de cargador de este proyecto.
+- [[Pagina]] — el otro bug de cargador de este proyecto.
 - [[51-El-blob-y-la-ventana-de-rescate]] · [[Registro]]

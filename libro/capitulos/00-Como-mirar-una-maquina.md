@@ -66,7 +66,7 @@ sudo cat /proc/iomem       # el mapa: qué hay en cada rango de direcciones fisi
 c0000000-cfffffff : 0000:00:02.0        <- los registros de la placa de video
 ```
 
-Los rangos que dicen `0000:00:02.0` son [[17-PCIe-buses-funciones-y-BARs|BARs]]: direcciones que **no son memoria**, son un aparato. Ver [[04-El-bus-tocar-algo-que-no-es-memoria]].
+Los rangos que dicen `0000:00:02.0` son [[PCIe|BARs]]: direcciones que **no son memoria**, son un aparato. Ver [[Bus]].
 
 Necesita `sudo` porque el mapa de memoria le dice a un atacante dónde apuntar.
 
@@ -89,9 +89,9 @@ cat /proc/interrupts       # una fila por interrupcion, una columna por nucleo
 watch -n1 cat /proc/interrupts
 ```
 
-Las columnas son **cuántas veces llegó a cada núcleo**. Mové el mouse y mirá subir el contador del mouse: eso es una interrupción, la cosa más difícil de visualizar de todo el libro, convertida en un número que sube. Ver [[34-Del-cable-al-numero-PIC-APIC-GIC]].
+Las columnas son **cuántas veces llegó a cada núcleo**. Mové el mouse y mirá subir el contador del mouse: eso es una interrupción, la cosa más difícil de visualizar de todo el libro, convertida en un número que sube. Ver [[Interrupcion]].
 
-La columna del tipo dice `IO-APIC`, `PCI-MSI` o similar: ahí se ve de un vistazo cuántos aparatos ya no usan cable. Ver [[35-MSI-interrupciones-sin-cable]].
+La columna del tipo dice `IO-APIC`, `PCI-MSI` o similar: ahí se ve de un vistazo cuántos aparatos ya no usan cable. Ver [[MSI]].
 
 ### ACPI y device tree
 
@@ -101,7 +101,7 @@ sudo cat /sys/firmware/acpi/tables/APIC | xxd | head    # cruda
 ls /sys/firmware/devicetree/base/ 2>/dev/null           # si la maquina usa DT
 ```
 
-Estas tablas son de [[ACPI]] —o de [[Device-tree|device tree]], donde no hay ACPI— y son **la fuente** de lo que hace Kornelia en [[15-Enumerar-sin-adivinar-ACPI]]. Si tenés `acpica-tools` instalado, `iasl -d` las decompila a texto legible, y ahí se ve por qué interpretar AML es un problema: es un lenguaje de programación.
+Estas tablas son de [[ACPI]] —o de [[Device-tree|device tree]], donde no hay ACPI— y son **la fuente** de lo que hace Kornelia en [[ACPI]]. Si tenés `acpica-tools` instalado, `iasl -d` las decompila a texto legible, y ahí se ve por qué interpretar AML es un problema: es un lenguaje de programación.
 
 ### El IOMMU
 
@@ -111,7 +111,7 @@ ls /sys/kernel/iommu_groups/         # los grupos de dispositivos
 dmesg | grep -iE 'dmar|iommu|smmu'
 ```
 
-Los **grupos** son el concepto que no se ve en QEMU y que cambia cómo se piensa el aislamiento: el IOMMU no siempre puede distinguir dos aparatos, y entonces los trata como uno. Ver [[47-IOMMU-VT-d-y-SMMUv3]].
+Los **grupos** son el concepto que no se ve en QEMU y que cambia cómo se piensa el aislamiento: el IOMMU no siempre puede distinguir dos aparatos, y entonces los trata como uno. Ver [[IOMMU]].
 
 ### La tabla de arriba, resumida
 
@@ -175,7 +175,7 @@ sudo cat /proc/kallsyms | head   # los simbolos del kernel corriendo, con su dir
 cat /proc/self/maps              # el espacio de direcciones de un proceso (este)
 ```
 
-`/proc/self/maps` merece un minuto: cada línea es un rango de direcciones **virtuales** con sus permisos. Ahí se ve que un proceso no tiene "la memoria": tiene pedazos mapeados, con huecos enormes en el medio. Es la salida que hace tangible [[20-Tablas-de-paginas-de-verdad|la tabla de páginas]].
+`/proc/self/maps` merece un minuto: cada línea es un rango de direcciones **virtuales** con sus permisos. Ahí se ve que un proceso no tiene "la memoria": tiene pedazos mapeados, con huecos enormes en el medio. Es la salida que hace tangible [[Tabla-de-paginas|la tabla de páginas]].
 
 Y las herramientas de trazado, que son la parte de Linux que Kornelia no tiene ni va a tener:
 
@@ -185,7 +185,7 @@ sudo perf top                            # donde esta gastando tiempo el kernel,
 sudo bpftrace -e 'tracepoint:syscalls:sys_enter_openat { printf("%s %s\n", comm, str(args->filename)); }'
 ```
 
-Ese `bpftrace` de una línea imprime cada archivo que cualquier programa de la máquina intenta abrir. Miralo correr diez segundos: es la mejor demostración de qué es [[26-La-llamada-al-sistema|una llamada al sistema]] y de cuántas hay.
+Ese `bpftrace` de una línea imprime cada archivo que cualquier programa de la máquina intenta abrir. Miralo correr diez segundos: es la mejor demostración de qué es [[Syscall|una llamada al sistema]] y de cuántas hay.
 
 ---
 
@@ -248,7 +248,7 @@ Dos trampas, las dos aprendidas a golpes:
 1. **Instrumentar puede cambiar el fenómeno.** Escribir una letra desde el [[Handler|handler]] del reloj movió los tiempos lo suficiente para que un `exec` dejara de volver. Si el bug depende de tiempos, el dato va a un estático y se publica por `describe`.
 2. **Las letras rompen el protocolo.** Salen después del marcador, y el cliente se las come como CBOR. El error aparece en otro lugar.
 
-Y la técnica que resolvió más casos que cualquier otra: **separar las dos mitades**. Si el aparato escribe y la interrupción no llega, hacé sonar la interrupción a mano, sin aparato. Una de las dos mitades anda, y ya sabés cuál. Así se encontró que [[36-Nivel-contra-flanco|el GIC trataba un pulso como nivel]].
+Y la técnica que resolvió más casos que cualquier otra: **separar las dos mitades**. Si el aparato escribe y la interrupción no llega, hacé sonar la interrupción a mano, sin aparato. Una de las dos mitades anda, y ya sabés cuál. Así se encontró que [[MSI|el GIC trataba un pulso como nivel]].
 
 Todo esto vive junto en [[Indice-de-sintomas]], que es la nota a la que vas a volver más veces de todo el vault.
 

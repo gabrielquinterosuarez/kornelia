@@ -38,7 +38,7 @@ grep -c ^processor /proc/cpuinfo      # nucleos logicos
 lscpu -C                              # las caches, en una tabla
 ```
 
-**Qué estás viendo:** la columna `COHERENCY-SIZE` de `lscpu -C` es el tamaño de la línea de [[Cache|caché]], casi siempre 64 bytes. Ese número es la unidad real en la que tu máquina mueve memoria: no existe leer un byte. Ver [[05-Caches-y-la-primera-mentira-util]].
+**Qué estás viendo:** la columna `COHERENCY-SIZE` de `lscpu -C` es el tamaño de la línea de [[Cache|caché]], casi siempre 64 bytes. Ese número es la unidad real en la que tu máquina mueve memoria: no existe leer un byte. Ver [[Cache]].
 
 ---
 
@@ -86,7 +86,7 @@ cat /sys/bus/pci/devices/0000:$DEV/resource
 | Cuántos bytes ocupa | |
 | Su IRQ, y si dice `MSI` | |
 
-**Qué estás viendo:** ese `Memory at f7d00000 (32-bit, non-prefetchable) [size=128K]` es [[MMIO]]: 128 KiB de direcciones que **no son memoria**. Buscá esa misma dirección en `/proc/iomem` y vas a encontrarla atribuida al aparato. Ver [[17-PCIe-buses-funciones-y-BARs]].
+**Qué estás viendo:** ese `Memory at f7d00000 (32-bit, non-prefetchable) [size=128K]` es [[MMIO]]: 128 KiB de direcciones que **no son memoria**. Buscá esa misma dirección en `/proc/iomem` y vas a encontrarla atribuida al aparato. Ver [[PCIe]].
 
 Los bytes de `lspci -xxx` son **el mismo formato** que lee Kornelia: los definió la especificación de PCIe, no Linux. Los primeros cuatro bytes son *vendor ID* y *device ID*: `8086` es Intel, y está guardado al revés (little-endian), así que en el volcado lo vas a ver como `86 80`.
 
@@ -115,7 +115,7 @@ watch -n0.5 'grep -iE "i8042|xhci|nvme|eth|wlan" /proc/interrupts'
 | ¿Qué fila sube al mover el mouse? | |
 | ¿Se reparten entre núcleos o van todas al 0? | |
 
-La proporción de `PCI-MSI` contra `IO-APIC` te dice cuántos de tus aparatos **ya no tienen cable**. Ver [[35-MSI-interrupciones-sin-cable]].
+La proporción de `PCI-MSI` contra `IO-APIC` te dice cuántos de tus aparatos **ya no tienen cable**. Ver [[MSI]].
 
 ---
 
@@ -193,7 +193,7 @@ Eso trae, entre otras cosas, **el contador de bytes que el cable perdió**. Exis
 | `iasl: command not found` | `sudo apt install acpica-tools`. |
 | `client.py` no contesta | ¿Está el kernel corriendo? Necesita `./scripts/run-x86_64.sh` en otra terminal, o dejá que `client.py` arranque su propio [[QEMU]]. |
 | `cargo: command not found` | `export PATH="$HOME/.cargo/bin:$PATH"`. |
-| `/sys/firmware/acpi` no existe | La máquina arrancó por BIOS legacy, o es una VM sin [[ACPI]]. Ahí la descripción vendría por [[16-El-otro-dialecto-device-tree|device tree]]. |
+| `/sys/firmware/acpi` no existe | La máquina arrancó por BIOS legacy, o es una VM sin [[ACPI]]. Ahí la descripción vendría por [[Device-tree|device tree]]. |
 
 ## Anotaciones
 

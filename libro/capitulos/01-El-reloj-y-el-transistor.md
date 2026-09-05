@@ -101,9 +101,9 @@ Los números son aproximados y varían por máquina; lo que importa son los **ó
 Cuatro segundos contra tres días. Esa es la diferencia entre un dato que está en la caché y un dato que está en el disco, y explica de una sola vez por qué:
 
 - Un kernel se pasa la vida **evitando** ir a buscar cosas lejos.
-- Un aparato lento no se atiende esperándolo: se atiende con [[34-Del-cable-al-numero-PIC-APIC-GIC|una interrupción]] que avisa cuando terminó. Si el procesador esperara al NVMe girando, perdería 250.000 ciclos por lectura.
+- Un aparato lento no se atiende esperándolo: se atiende con [[Interrupcion|una interrupción]] que avisa cuando terminó. Si el procesador esperara al NVMe girando, perdería 250.000 ciclos por lectura.
 - Cuando el kernel [[38-Dormir-en-vez-de-girar|duerme en vez de girar]] no está siendo prolijo: está devolviendo días de escala humana.
-- Un [[DMA]] existe: hacer que el aparato mueva los datos **por su cuenta** en vez de que el procesador copie byte por byte desde tan lejos. Ver [[46-DMA-el-aparato-lee-memoria-solo]].
+- Un [[DMA]] existe: hacer que el aparato mueva los datos **por su cuenta** en vez de que el procesador copie byte por byte desde tan lejos.
 
 > [!tip] La pregunta que conviene hacerse en cada capítulo
 > "¿A cuántos ciclos está la cosa que este mecanismo va a buscar?" Casi todo el diseño de un kernel se deduce de esa tabla.
@@ -116,7 +116,7 @@ En cada flanco del reloj, el procesador guarda su resultado en registros. Los [[
 
 Y acá aparece por primera vez la naturaleza de un kernel: **el estado visible de un procesador es un puñado de números**. Los registros, más unos cuantos de control. Eso es todo lo que hay que guardar para congelar un programa y reanudarlo después, y eso es lo que hace un cambio de contexto.
 
-Es también por qué un [[32-Los-faults-como-datos|fault]] se puede devolver como dato: cuando el código del agente se rompe, "qué estaba pasando" se puede escribir entero —los registros más la causa— y mandar por un cable. No hay nada más que contar.
+Es también por qué un [[Fault|fault]] se puede devolver como dato: cuando el código del agente se rompe, "qué estaba pasando" se puede escribir entero —los registros más la causa— y mandar por un cable. No hay nada más que contar.
 
 ---
 

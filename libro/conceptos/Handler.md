@@ -114,4 +114,4 @@ Dos cosas del `Handler` que valen por sí solas:
 
 - [[Interrupcion]] · [[MSI]] · [[Modo-privilegiado]] · [[MMIO]]
 - [[Falsos-amigos#12]] — IRQ, línea, vector, MSI.
-- [[49-Escribir-un-driver]] — el modelo de Linux contra los once verbos.
+- [[Driver]] — el modelo de Linux contra los once verbos.
