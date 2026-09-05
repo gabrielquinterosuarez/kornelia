@@ -251,6 +251,14 @@ comprueba con **dos arranques**: uno graba un programa distinto del que había,
 otro —máquina nueva, sin escribir nada— lo encuentra y lo corre. En un solo
 arranque no se podría distinguir de haberlo dejado en memoria.
 
+**Lo único que falta para que el blob sea útil de verdad es un driver de red.**
+El de NVMe ya existe y anda (escrito con los once verbos, del lado del agente),
+así que el camino disco→memoria→ejecución está entero. Con red, el agente deja
+de depender del cordón para subir cosas — que es lo que D5 dice que tiene que
+pasar. Las placas ya están en la máquina de prueba: `e1000` (`8086:10d3`, clase
+`02.00.00`) en x86_64 y `virtio-net` (`1af4:1000`) en aarch64, y `--lspci` las
+lista.
+
 **Ojo: del blob está el mecanismo, no el contenido.** No hay driver de red ni de
 NVMe ni un `blob.bin` en el repo — el único blob que existe es el de prueba que
 genera `client.py`. Los drivers que nombran D19 y D20 son lo que *va* a ir ahí.
