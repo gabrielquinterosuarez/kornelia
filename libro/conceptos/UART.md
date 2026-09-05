@@ -110,7 +110,7 @@ El UART es lentísimo. La decisión no es "el protocolo va por serie": es que el
 ### Qué sale por ahí
 
 - **ASCII puro** (regla 4 del proyecto). El kernel manda **bytes**, no texto: los acentos salen rotos porque nadie del otro lado acordó una codificación.
-- **Y en inglés**: `kernel-core/src/lib.rs:422#== agent-centric kernel ==`. Lo que el kernel *dice* es parte del protocolo, y el operador que este proyecto supone es un agente (D1).
+- **Y en inglés**: `kernel-core/src/lib.rs:463#== agent-centric kernel ==`. Lo que el kernel *dice* es parte del protocolo, y el operador que este proyecto supone es un agente (D1).
 - **Hasta la marca.** `kernel-core/src/lib.rs:111#u.line(protocol::MARKER);` es lo último legible: de ahí en adelante lo que sale es CBOR (D6), y cualquier texto posterior es basura para el cliente.
 
 ### El timbre y el buzón

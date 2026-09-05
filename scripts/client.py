@@ -344,48 +344,41 @@ BLOB_REPLY_CAP = 256
 def blob_program(arch, request_len):
     """El codigo del blob: le pide algo al kernel y devuelve el largo de la respuesta.
 
-    Recibe en el primer registro de argumento su propia direccion y en el
-    segundo la ventanilla del protocolo — cuales son esos dos registros lo dice
-    la maquina en `describe exec arguments` (P4). La ventanilla es una funcion
-    comun, porque el blob corre privilegiado y en el mismo espacio: no hay
-    trampa, hay una llamada.
+    Corre **sin privilegio** (D27), asi que no puede llamar a una funcion del
+    kernel: pide por la puerta que `describe exec` publica como `service`, y
+    vuelve por la que publica como `return`. Los dos son bytes, no nombres de
+    instrucciones: el agente los pega y no tiene que saber sobre que silicio
+    corre (D3).
+
+    Recibe en el primer registro de argumento su propia direccion, que es lo
+    unico que necesita — la puerta es una instruccion, no una direccion.
     """
     if arch == "x86_64":
-        # rcx = base, rdx = ventanilla. **No rdi/rsi**: el kernel se compila para
-        # UEFI, donde la ABI de C es la de Windows. Esa misma ABI pide dos cosas
-        # mas que en Linux no hacen falta: 32 bytes de "shadow space" que reserva
-        # el que llama, y la pila alineada a 16 en el `call`.
+        # rcx = base. **No rdi**: el kernel se compila para UEFI, donde la ABI
+        # de C es la de Windows. Los cuatro argumentos del pedido van por rcx,
+        # rdx, r8 y r9, que es lo que publica `describe exec arguments`.
         return (
-            bytes([0x49, 0x89, 0xD2])                      # mov r10, rdx  (ventanilla)
-            + bytes([0x48, 0x89, 0xC8])                    # mov rax, rcx  (base)
-            + bytes([0x48, 0x89, 0xE3])                    # mov rbx, rsp  (para volver)
-            + bytes([0x48, 0x83, 0xE4, 0xF0])              # and rsp, -16
-            + bytes([0x48, 0x83, 0xEC, 0x20])              # sub rsp, 32   (shadow space)
+            bytes([0x48, 0x89, 0xC8])                      # mov rax, rcx  (base)
             + bytes([0x48, 0x8D, 0x88]) + BLOB_REQUEST_AT.to_bytes(4, "little")   # lea rcx,[rax+..]
             + bytes([0xBA]) + request_len.to_bytes(4, "little")                   # mov edx, len
             + bytes([0x4C, 0x8D, 0x80]) + BLOB_REPLY_AT.to_bytes(4, "little")     # lea r8,[rax+..]
             + bytes([0x41, 0xB9]) + BLOB_REPLY_CAP.to_bytes(4, "little")          # mov r9d, cap
-            + bytes([0x41, 0xFF, 0xD2])                    # call r10
-            + bytes([0x48, 0x89, 0xDC])                    # mov rsp, rbx
-            + bytes([0xC3])                                # ret (deja rax como vino)
+            + bytes([0xCD, 0x81])                          # int 0x81: atendeme
+            + bytes([0xCD, 0x80])                          # int 0x80: termine
         )
 
-    # x0 = base, x1 = ventanilla. Hay que guardar x30: `blr` lo pisa, y por ahi
-    # es por donde el blob vuelve al kernel.
+    # x0 = base. Los cuatro argumentos van por x0-x3.
     def word(w):
         return w.to_bytes(4, "little")
 
     return (
-        word(0xF81F0FFE)                                   # str x30, [sp, #-16]!
-        + word(0xAA0103E9)                                 # mov x9, x1
-        + word(0xAA0003E8)                                 # mov x8, x0
+        word(0xAA0003E8)                                   # mov x8, x0
         + word(0x91000100 | (BLOB_REQUEST_AT << 10))       # add x0, x8, #req
         + word(0xD2800001 | (request_len << 5))            # mov x1, #len
         + word(0x91000102 | (BLOB_REPLY_AT << 10))         # add x2, x8, #reply
         + word(0xD2800003 | (BLOB_REPLY_CAP << 5))         # mov x3, #cap
-        + word(0xD63F0120)                                 # blr x9
-        + word(0xF84107FE)                                 # ldr x30, [sp], #16
-        + word(0xD65F03C0)                                 # ret (deja x0 como vino)
+        + word(0xD4000021)                                 # svc #1: atendeme
+        + word(0xD4000001)                                 # svc #0: termine
     )
 
 

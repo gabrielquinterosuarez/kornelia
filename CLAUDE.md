@@ -213,6 +213,24 @@ de D25— y el kernel lo corre antes de escuchar el cable, con la misma red que
 máquina inútil en cada arranque y habría que sacarle el disco. La ventana dura
 **dos segundos de verdad**, no un número de vueltas, porque ahora hay reloj.
 
+**Y el blob corre sin privilegio** (`supervised`), que era el último lugar donde
+el kernel se salteaba su propia regla. Corría `raw` justo en el núcleo que
+atiende el protocolo, así que podía enmascarar las interrupciones y dejar el
+cordón sordo **para siempre**: no se recuperaba ni reiniciando, porque en cada
+arranque volvía a correr. Ahora el silicio no lo deja, así que el timbre entra
+siempre. No hizo falta un plazo —que sería el kernel opinando sobre cuánto puede
+tardar el código del agente (D27)— ni un núcleo aparte, que no existe en una
+máquina de un solo núcleo. **Lo que lo hizo posible es que un cargador no
+necesita privilegio:** pide memoria, declara DMA y toca registros por el
+protocolo, que es como se escribió el driver de NVMe entero.
+
+Para eso hay **dos puertas** y no una. La de siempre (`int 0x80` / `svc #0`)
+dice "terminé"; la nueva (`int 0x81` / `svc #1`) dice "atendeme esto y devolveme
+el control", y vuelve al código en la instrucción siguiente. Van dos puertas en
+vez de un registro que las distinga porque el código que vuelve ya usa el primer
+registro para su resultado, y porque dos puertas con dos significados se leen.
+`describe exec` publica las dos en bytes (D3, P4).
+
 **Y el blob le habla al kernel.** Corre antes de que exista el protocolo, así que
 lo único que tenía era la máquina cruda: alcanzaba para un cargador (D19), no para
 algo que quisiera reclamar memoria. Ahora recibe en el segundo registro de

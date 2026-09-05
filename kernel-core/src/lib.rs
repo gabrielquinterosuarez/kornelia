@@ -194,6 +194,12 @@ const RESCUE_ROUNDS_WITH_CLOCK: u64 = 200_000_000;
 /// Dos segundos: alcanzan para que un cliente conectado mande un byte y para que
 /// alguien que está mirando la terminal llegue a apretar una tecla, y no son
 /// tantos como para que moleste en cada arranque.
+/// Cuanta pila se le deja al blob, arriba de su propio tamano.
+///
+/// En `supervised` la pila sale del final de la region (D27), asi que la region
+/// tiene que ser mas grande que el codigo o la pila le pisa las instrucciones.
+const STACK_FOR_BLOB: u64 = 64 * 1024;
+
 const RESCUE_MS: u64 = 2000;
 
 /// Cada cuántas vueltas se mira el cable.
@@ -289,43 +295,78 @@ fn run_blob<P: Platform>(p: &mut P, m: &Machine, hw: &acpi::Hardware, with_doorb
         core::hint::spin_loop();
     }
 
-    let entry = bytes.as_ptr() as u64;
-    let region = (entry, bytes.len() as u64);
-    {
+    // El blob se muda a memoria del agente, y no por prolijidad: corre
+    // `supervised`, y ahi el silicio no deja que una pagina sea alcanzable por
+    // el agente y ejecutable por el kernel a la vez. Los bytes venian de un
+    // estatico adentro de la imagen, que es memoria del kernel.
+    //
+    // De paso queda lugar para la pila, que en `supervised` sale del final de la
+    // region: si la region fuera exactamente el tamano del blob, la pila le
+    // pisaria el codigo.
+    let room = (bytes.len() as u64 + STACK_FOR_BLOB).next_multiple_of(paging::BLOCK);
+    let claimed = claims::claim(
+        m,
+        claims::Request { bytes: room, align: paging::BLOCK, user: true, ..Default::default() },
+    );
+    let Ok(spot) = claimed else {
         let mut u = Umbilical::new(p);
-        let _ = write!(u, "  running at {:#x}\r\n", entry);
+        u.line("blob: no agent memory to run it in");
+        return;
+    };
+    // SAFETY: el rango salio de un reclamo vigente y quedo alineado al bloque.
+    if unsafe { p.set_user_access(spot.start, spot.bytes, true) }.is_err() {
+        claims::release(spot.handle);
+        let mut u = Umbilical::new(p);
+        u.line("blob: could not mark its memory as the agent's");
+        return;
+    }
+    // SAFETY: destino recien reclamado y del tamano suficiente; origen, el
+    // estatico donde el firmware dejo el blob.
+    unsafe {
+        core::ptr::copy_nonoverlapping(bytes.as_ptr(), spot.start as *mut u8, bytes.len());
     }
 
-    // `raw`: el blob es un cargador de drivers, y un driver toca registros de
-    // dispositivo y tablas de páginas. Bajarlo a `supervised` sería el kernel
-    // decidiendo con qué privilegio corre el código del agente, que es justo lo
-    // que D27 le devuelve al agente.
+    let entry = spot.start;
+    let region = (spot.start, spot.bytes);
+    {
+        let mut u = Umbilical::new(p);
+        let _ = write!(u, "  running at {:#x}, supervised\r\n", entry);
+    }
+
+    // **`supervised`, y esto es lo que cierra el agujero.** El blob era el único
+    // código que se salteaba D29: corría con privilegio completo en el mismo
+    // núcleo que después atiende el protocolo, así que podía enmascarar las
+    // interrupciones y dejar el cordón sordo para siempre — sin que nadie
+    // pudiera recuperar la máquina, ni reiniciando, porque en cada arranque
+    // volvía a correr.
     //
-    // Y con qué le habla al kernel. El blob corre antes de que el protocolo
-    // exista, así que si no fuera por esto lo único que tendría es la máquina
-    // cruda: alcanza para un cargador (D19), no para algo que quiera reclamar
-    // memoria o instalar un handler. Como corre privilegiado y en el mismo
-    // espacio de direcciones, la ventanilla es literalmente una función que
-    // puede llamar — no hizo falta un verbo nuevo ni un mecanismo nuevo.
+    // Corriendo sin privilegio el problema **desaparece en vez de gestionarse**:
+    // el silicio no lo deja enmascarar nada, así que el timbre del cable entra
+    // siempre. No hace falta un plazo (que sería el kernel opinando sobre cuánto
+    // puede tardar el código del agente, justo lo que D27 evita) ni un núcleo
+    // aparte (que no existe en una máquina de un solo núcleo).
+    //
+    // Lo que hacía falta para poder bajarlo era que un cargador **no necesite
+    // privilegio**, y no lo necesita: pide memoria, declara DMA y toca registros
+    // por el protocolo. El driver de NVMe entero se escribió así.
     //
     // SAFETY: se cierra apenas el blob vuelve, unas líneas más abajo.
     let gate = unsafe { protocol::open_blob_gate(p, m, hw) };
+    // Y por dónde entra: desde `supervised` no se puede llamar a una función del
+    // kernel, hay que pasar por la puerta que publica `describe exec`.
+    //
+    // SAFETY: `gate` apunta a la función que atiende, viva mientras el blob corra.
+    unsafe { p.set_service_gate(gate) };
 
-    // El primer argumento lo pone `exec`: la dirección de entrada. El segundo lo
-    // ponemos acá. Cuáles son esos dos registros lo dice la máquina (P4), y lo
-    // mismo que se usa acá se publica en `describe exec`.
-    let mut initial = [None; 64];
-    let second = P::ARGUMENTS.get(1).copied();
-    if let Some(i) = second {
-        initial[i] = Some(gate);
-    }
-    let initial = &initial[..P::REGISTERS.len().min(initial.len())];
-
-    // SAFETY: los bytes están en la imagen del kernel, que el identity map
-    // cubre. Lo que haya ahí puede ser cualquier cosa — de eso se trata (P2).
-    let outcome = unsafe { p.exec(entry, region, false, initial) };
+    // SAFETY: los bytes están en memoria del agente recién reclamada, que el
+    // identity map cubre. Lo que haya ahí puede ser cualquier cosa — de eso se
+    // trata (P2).
+    let outcome = unsafe { p.exec(entry, region, true, &[]) };
 
     protocol::close_blob_gate();
+    // SAFETY: nadie más va a entrar por esa puerta hasta el próximo `exec`.
+    unsafe { p.set_service_gate(0) };
+    claims::release(spot.handle);
 
     let mut u = Umbilical::new(p);
     if outcome.faulted {

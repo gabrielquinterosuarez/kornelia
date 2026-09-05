@@ -91,7 +91,7 @@ Tres decisiones que se ven acá:
 2. **Las del agente van abajo del cable, a propósito.** En x86_64 el serie está en el vector `0x40` y las del agente arrancan en `0x31`, que es un grupo más abajo; en aarch64 el serie tiene prioridad `0x00` (la más alta del GIC) y las del agente `0xA0`. Un aparato del agente que se vuelva loco **no puede tapar el cordón** (D17, P6).
 3. **El cable serie no se entrega.** Pedir la interrupción del [[UART]] devuelve `is-kernel-interrupt`: sería quedarse sin cordón umbilical.
 
-**Y el cable tiene timbre.** Antes el núcleo que atiende el protocolo giraba preguntándole al UART si había llegado un byte; ahora el UART levanta la mano y el núcleo **duerme** entre pedidos: `kernel-x86_64/src/irq.rs:532#pub fn sleep()` y `kernel-aarch64/src/irq.rs:220#pub fn sleep()`. El kernel lo anuncia al arrancar (`kernel-core/src/lib.rs:397#the core sleeps between requests`).
+**Y el cable tiene timbre.** Antes el núcleo que atiende el protocolo giraba preguntándole al UART si había llegado un byte; ahora el UART levanta la mano y el núcleo **duerme** entre pedidos: `kernel-x86_64/src/irq.rs:532#pub fn sleep()` y `kernel-aarch64/src/irq.rs:220#pub fn sleep()`. El kernel lo anuncia al arrancar (`kernel-core/src/lib.rs:438#the core sleeps between requests`).
 
 > [!important] El orden de dos instrucciones es todo el mecanismo
 > En x86 se hace `sti; hlt` **pegados y en ese orden**. El bucle corre con el timbre apagado, así que si un byte llegó justo antes, su interrupción quedó pendiente y el `hlt` vuelve enseguida. Al revés —dormir y después habilitar— se pierde ese despertador y la máquina se duerme para siempre con el pedido esperando.

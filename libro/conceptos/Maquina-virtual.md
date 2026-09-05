@@ -106,7 +106,7 @@ Kornelia **no virtualiza nada**: es un huésped, no un hipervisor. La VM es dón
 | | |
 |---|---|
 | **Emulado por omisión** | `./scripts/run-x86_64.sh`, `./scripts/run-aarch64.sh` |
-| **Sobre el silicio** | `./scripts/client.py --kvm` — "que el codigo lo ejecute el silicio de verdad, no la emulacion" (`scripts/client.py:3245#que el codigo lo ejecute el silicio`) |
+| **Sobre el silicio** | `./scripts/client.py --kvm` — "que el codigo lo ejecute el silicio de verdad, no la emulacion" (`scripts/client.py:3238#que el codigo lo ejecute el silicio`) |
 | **Por qué las dos** | Emulado, corre aarch64 en una máquina x86 — que es lo que hace posible D22 (las dos arquitecturas en verde desde el primer commit) sin tener dos máquinas. |
 
 Que `--kvm` exista como opción aparte no es un detalle de rendimiento: **es una prueba distinta**. Emulado, el código del agente lo interpreta un programa; con KVM lo ejecuta el procesador de verdad, con su [[Cache|caché]] real, su predicción de saltos y su ejecución fuera de orden. Un kernel que anda emulado y no anda con KVM tiene un bug de verdad, casi siempre de [[42-Ordenamiento-de-memoria|ordenamiento de memoria]].
