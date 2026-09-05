@@ -138,9 +138,10 @@ pub fn serve<P: Platform>(p: &mut P, m: &Machine, hw: &Hardware, with_doorbell: 
                 // Nada que hacer: dormir hasta que alguien hable. Es lo que
                 // convierte un núcleo quemado en un núcleo reservado.
                 //
-                // TODO: mientras el buzón no tenga timbre propio, un pedido que
-                // llega solo por ahí espera hasta la próxima vez que el cable
-                // despierte al núcleo. Está anotado en DISENO.md.
+                // Y despierta por los dos lados: el cable tiene su timbre y el
+                // buzón el suyo, así que un pedido que llega solo por el buzón
+                // no espera a que alguien toque el cable. Acá hubo un TODO que
+                // decía lo contrario y quedó viejo cuando el buzón tuvo timbre.
                 p.sleep();
             } else {
                 core::hint::spin_loop();
