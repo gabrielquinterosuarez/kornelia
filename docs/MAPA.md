@@ -3,10 +3,11 @@
 > Para no tener que reconstruirlo leyendo todo. `docs/DISENO.md` dice **por qué**
 > es así; esto dice **dónde está**.
 
-## Los cuatro crates
+## Los cinco crates
 
 | Crate | Qué es | Regla |
 |---|---|---|
+| `blob/` | `blob.bin`: la distribución reemplazable de D19/D20. **No es el kernel** — es código del agente pre-armado, y sólo puede pedirle cosas a la máquina por los once verbos. | Sale a **binario plano**, no a un ejecutable: sin GOT y sin `.bss`, con la entrada en el byte cero. Lo comprueba `blob/blob.ld`. |
 | `kernel-core/` | Todo lo portable: protocolo, reclamos, faults, mapa de memoria, ACPI y device tree. | **Cero `asm!`, cero `target_arch`, y no puede nombrar a `boot-uefi`** (D23/D24). |
 | `boot-uefi/` | Cómo se le pide la máquina al firmware. Compartido por las dos arquitecturas. | Sin `asm!`: UEFI no varía por arquitectura. |
 | `kernel-x86_64/` | Lo que solo existe en x86: GDT, IDT, APIC, VT-d, trampolín de arranque. | |
@@ -29,6 +30,7 @@ Lo verifica `./scripts/check-boundary.sh`, dentro del portón.
 | IOMMU | `kernel-x86_64/src/iommu.rs` (VT-d) y `kernel-aarch64/src/smmu.rs` (SMMUv3). Hacen lo mismo y no se parecen en nada: empezar por el de x86, que es el más simple. |
 | El segundo canal | `kernel-core/src/channel.rs`. |
 | El reloj | `clock` en el `main.rs` de cada arquitectura. En x86 incluye la calibración contra el contador de ACPI. |
+| Lo que va adentro del blob | `blob/src/main.rs` (qué hace) + `blob/src/gate.rs` (las dos puertas) + `blob/blob.ld` (cómo se arma). Se compila con `./scripts/build-blob.sh <arch>`. |
 | El blob de arranque | `boot-uefi/src/lib.rs::load_blob` (traerlo del disco) + `kernel-core/src/lib.rs::run_blob` (ventana de rescate y ejecución) + `protocol.rs::open_blob_gate` (con qué le pide cosas al kernel). |
 | Un driver del agente (NVMe, red) | `scripts/client.py`. **No son del kernel** (D4): usan sólo los once verbos y viven del lado del cliente. Buscar la clase `Nvme` o la clase `E1000`. |
 | El transporte de D5 | `scripts/client.py`: `transport_program` (el bucle, en código máquina) y la clase `Asm` que lo ensambla. El buzón que usa es `kernel-core/src/channel.rs`. |
@@ -36,7 +38,7 @@ Lo verifica `./scripts/check-boundary.sh`, dentro del portón.
 
 ## El portón
 
-`./scripts/check.sh` es todo lo que CI corre. Ocho pasos, en orden:
+`./scripts/check.sh` es todo lo que CI corre. Nueve pasos, en orden:
 
 1. **Frontera** (`check-boundary.sh`) — que los crates portables no filtren arquitectura.
 2. **Idioma** (`check-language.py`) — identificadores en inglés. Es una lista de
@@ -48,8 +50,9 @@ Lo verifica `./scripts/check-boundary.sh`, dentro del portón.
 4. **Los tests** de `kernel-core`.
 5. **Compilan las dos.**
 6. **Arrancan las dos en QEMU y contestan el protocolo**, con `scripts/client.py`.
-7. **El blob se carga, corre, le habla al kernel y se puede cancelar** (D18), en las dos.
-8. **Y aarch64 arranca una vez más sin ACPI**, para que se describa por device
+7. **El blob compilado** (`blob/`) corre y le pide memoria al kernel, en las dos.
+8. **El blob se carga, corre, le habla al kernel y se puede cancelar** (D18), en las dos.
+9. **Y aarch64 arranca una vez más sin ACPI**, para que se describa por device
    tree. Ahí se le exige el IOMMU contra un aparato de verdad, que es la prueba
    que usa todo lo que sale de la descripción junto.
 
@@ -67,6 +70,7 @@ SKIP_QEMU=1 ./scripts/check.sh       # sin bootear, para iterar rápido
 NETPORT=15555 ./scripts/run-x86_64.sh                # fijar el puerto del host
 ./scripts/client.py --arch x86_64 --write-blob /tmp/blob.bin
 BLOB=/tmp/blob.bin ./scripts/run-x86_64.sh           # con blob (D18)
+./scripts/build-blob.sh x86_64                       # compilar blob/ de verdad
 ```
 
 `cargo` no está en el PATH: `export PATH="$HOME/.cargo/bin:$PATH"`.

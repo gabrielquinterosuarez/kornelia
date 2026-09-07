@@ -234,15 +234,46 @@ registro para su resultado, y porque dos puertas con dos significados se leen.
 
 **Y el blob le habla al kernel.** Corre antes de que exista el protocolo, así que
 lo único que tenía era la máquina cruda: alcanzaba para un cargador (D19), no para
-algo que quisiera reclamar memoria. Ahora recibe en el segundo registro de
-argumento la dirección de **una función** que atiende un pedido y deja la
-respuesta en un buffer suyo. No hizo falta un verbo nuevo ni una ventanilla como
-la de `supervised`: el blob corre privilegiado y en el mismo espacio de
-direcciones, así que llamar al kernel es una instrucción. Y adentro es el mismo
-`dispatch` de los once verbos, con un origen más — D17 ya decía que el kernel
-contesta por donde le llegó el pedido; esto agrega una tercera puerta, no un
-mecanismo. Se comprueba mirando los reclamos después del arranque: el que pidió
-el blob está, y con el blob cancelado no está.
+algo que quisiera reclamar memoria. Ahora deja el pedido en un buffer suyo y lo
+pide por la **puerta de servicio**; el kernel atiende uno y le devuelve el control
+en la instrucción siguiente. Al entrar recibe **su propia dirección** en el primer
+registro de argumento, y nada más: con eso alcanza, porque todo lo demás lo pide
+por la puerta. Adentro es el mismo `dispatch` de los once verbos, con un origen
+más — D17 ya decía que el kernel contesta por donde le llegó el pedido; esto
+agrega una tercera puerta, no un mecanismo. Se comprueba mirando los reclamos
+después del arranque: el que pidió el blob está, y con el blob cancelado no está.
+
+> Cuidado al leer commits o docs viejas: antes de que D29 lo bajara a
+> `supervised`, el blob recibía en el segundo registro **un puntero a una función
+> del kernel** y la llamaba directo. Sin privilegio eso no se puede ni sabiendo
+> dónde está, así que ese camino ya no existe.
+
+**Y el blob se compila** (`blob/`, `./scripts/build-blob.sh`). Es un crate
+`no_std` que sale a **binario plano** para las dos arquitecturas, con la entrada
+en el byte cero y sin ningún envoltorio, que es lo único que el kernel sabe
+cargar. Eso es lo que faltaba para que ahí adentro pueda entrar un driver: el
+blob de bytes escritos a mano alcanzaba para probar el mecanismo y nada más.
+
+Dos cosas que ese camino impone, y conviene saberlas antes de escribir código
+para adentro del blob:
+
+- **No puede haber GOT.** Es la tabla de direcciones que normalmente rellena un
+  enlazador dinámico, y acá no hay ninguno: el kernel copia los bytes y salta.
+  Queda con las direcciones de tiempo de enlace —basadas en cero, no en dónde lo
+  cargaron— y el blob salta a cualquier lado; compilado independiente de la
+  posición queda en cero y salta a la dirección cero. Aparece cuando el código
+  llama a un **símbolo global**, que en la práctica quiere decir `memset` o
+  `memcpy`, los que el compilador inventa solo al ver una copia o una
+  inicialización grande. Por eso el blob no pone buffers en cero y hace sus
+  copias con bucles propios. **Lo hace cumplir el enlazador** (`ASSERT` en
+  `blob/blob.ld`), así que es un error de compilación y no una máquina muda.
+  Arreglarlo de verdad sería que el blob relocalice sus propias entradas al
+  arrancar, como hace un cargador — y no alcanza con escribirlo en Rust, porque
+  llegar a las puntas de la tabla también pasa por la GOT: necesita un arranque
+  en ensamblador. Se intentó y por eso se sabe.
+- **No puede haber `.bss`.** Un binario plano no la trae —son ceros que nadie
+  escribe— así que un `static` mutable arrancaría con lo que hubiera en esa
+  memoria. También lo comprueba el enlazador.
 
 **Y lo que el agente graba sobrevive al reinicio.** El driver de NVMe —que corre
 del lado del agente y usa **sólo los once verbos**— lee *y escribe* el disco, así
@@ -328,7 +359,15 @@ cubría todavía:
    punta, pero viven en Python del lado del cliente. D19 y D20 los quieren
    compilados adentro de `blob.bin`, que es lo que haría que una máquina arranque
    con red **sin que haya nadie del otro lado del cable**. La lógica no cambia:
-   cambia quién consigue los recursos. Es el paso que vuelve útil todo lo demás.
+   cambia quién consigue los recursos.
+
+   **El andamiaje ya está**: `blob/` compila a binario plano en las dos
+   arquitecturas y le habla al kernel por la ventanilla, con un escritor de CBOR
+   propio. Lo que falta es el contenido. El orden que conviene es el que dice
+   D19 — **NVMe primero**, porque con eso el blob es un *cargador* y trae del
+   disco un payload tan grande como haga falta; la red va ahí adentro, no en el
+   blob. Y ojo con la regla de la GOT: donde el compilador quiera un `memcpy`,
+   el enlazador corta la compilación.
 2. **El buzón entrega bytes, no mensajes, y por ahora eso lo paga el agente.** El
    transporte no puede saber dónde termina una respuesta sin decodificar CBOR, así
    que es un caño y quien arma los mensajes son las puntas. Anda, y para el cliente

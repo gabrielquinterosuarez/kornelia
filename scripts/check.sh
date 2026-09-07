@@ -358,6 +358,36 @@ else
     # La (2) no se cree por lo que devuelve la ventanilla: se comprueba mirando
     # los reclamos de la maquina, que es donde tiene que haber quedado la huella
     # de un pedido que nunca paso por el cable.
+    # --- Y el blob de verdad: compilado, no armado a mano -------------------
+    #
+    # El de abajo son bytes escritos a mano, que alcanzan para probar el
+    # mecanismo. Este es un blob **compilado desde Rust** a un binario plano, que
+    # es lo que D19/D20 quieren adentro de la particion: la unica forma de que
+    # ahi entre un driver.
+    #
+    # Se exige lo mismo que al otro y por la misma razon: que corra (deja un
+    # numero reconocible) y que **le pida algo al kernel** por la ventanilla. Lo
+    # segundo no se cree por lo que devuelve — se mira el reclamo, que es la
+    # huella de un pedido que nunca paso por el cable.
+    step "el blob compilado corre y le habla al kernel"
+    for arch in x86_64 aarch64; do
+        if ! ./scripts/build-blob.sh "$arch" >/dev/null 2>&1; then
+            bad "$arch: no se pudo compilar blob/"
+            ./scripts/build-blob.sh "$arch" 2>&1 | grep -E 'error' | head -5
+            continue
+        fi
+        output=$(BLOB="target/blob-$arch.bin" timeout 240 ./scripts/client.py \
+            --arch "$arch" --what claims 2>&1 || true)
+        grep -qFe "the blob returned, leaving 0xb10b" <<<"$output" \
+            || { bad "$arch: el blob compilado no corrio"
+                 printf '%s\n' "$output" | grep -aE "blob|faulted" | head -4; }
+        # 36864 = 0x9000, que lo pide este blob y nadie mas.
+        grep -qFe "'bytes': 36864" <<<"$output" \
+            || bad "$arch: el blob compilado no le pudo pedir memoria al kernel"
+        grep -qFe "ok=True" <<<"$output" \
+            || bad "$arch: no contesta despues del blob compilado"
+    done
+
     step "el blob se carga, le habla al kernel y se puede cancelar"
     blob_dir=$(mktemp -d)
     trap 'rm -rf "$blob_dir"' EXIT

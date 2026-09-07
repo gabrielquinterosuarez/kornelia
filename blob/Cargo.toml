@@ -1,0 +1,16 @@
+[package]
+name = "blob"
+version = "0.1.0"
+edition = "2021"
+
+# `blob.bin` de D19/D20: la distribucion reemplazable que el firmware trae de la
+# particion. **No es el kernel** — es codigo del agente pre-armado, exactamente
+# lo que hubiera subido el por el cable.
+#
+# Por eso este crate no comparte nada con los del kernel y no puede: corre sin
+# privilegio (D29) y lo unico que tiene para pedirle a la maquina son los once
+# verbos, por la ventanilla.
+
+[[bin]]
+name = "blob"
+path = "src/main.rs"
