@@ -655,6 +655,283 @@ def emit_writes(arch, writes, con_ret=True):
     return code + ((0xD65F03C0).to_bytes(4, "little") if con_ret else b"")  # ret
 
 
+# --- Un ensamblador chiquito ------------------------------------------------
+#
+# `emit_writes` alcanzaba mientras el codigo del agente fuera "escribi esto
+# aca". El transporte de D5 no entra ahi: tiene un bucle, condiciones y dos
+# copias de largo variable, y escribirlo a mano en bytes dos veces —una por
+# arquitectura— es la clase de cosa que sale mal en silencio.
+#
+# Asi que hay un ensamblador, con **solo** las instrucciones que ese programa
+# usa y ni una mas. No es un ensamblador de verdad y no quiere serlo: es lo
+# minimo para que el bucle se pueda leer como codigo en vez de como un hexa.
+#
+# Los registros se numeran 0..13 y cada arquitectura los mapea a los suyos. Se
+# eligieron los que no obligan a casos especiales: en x86_64 quedan afuera `rsp`
+# y `r12`, que como base de un acceso a memoria necesitan un byte extra que
+# ninguna otra instruccion necesita.
+X86_REGS = [0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15]
+
+
+class Asm:
+    """Ensambla un programa con etiquetas, para x86_64 o aarch64.
+
+    Dos pasadas: la primera anota donde cayo cada etiqueta y la segunda emite.
+    Para que las dos pasadas coincidan, **todas las instrucciones miden lo
+    mismo siempre** — los saltos se emiten con el desplazamiento mas grande
+    aunque sobre. Un salto que cambia de tamano segun a donde va hace que las
+    etiquetas se muevan mientras se las calcula.
+    """
+
+    def __init__(self, arch):
+        self.arch = arch
+        self.items = []       # (tamano, funcion que emite dado el mapa de etiquetas)
+        self.labels = {}
+        self.here = 0
+
+    # -- lo que se usa para armar el programa --------------------------------
+
+    def label(self, name):
+        self.labels[name] = self.here
+
+    def _put(self, size, fn):
+        self.items.append((self.here, size, fn))
+        self.here += size
+
+    def assemble(self):
+        out = b""
+        for at, size, fn in self.items:
+            chunk = fn(self.labels, at)
+            assert len(chunk) == size, f"instruccion de tamano variable en {at}"
+            out += chunk
+        return out
+
+    # -- las instrucciones ---------------------------------------------------
+
+    def movi(self, r, value):
+        """Un valor de 64 bits en un registro."""
+        if self.arch == "x86_64":
+            n = X86_REGS[r]
+            code = bytes([0x48 | (n >> 3), 0xB8 + (n & 7)]) + (value & (2**64 - 1)).to_bytes(8, "little")
+            self._put(len(code), lambda l, a, c=code: c)
+        else:
+            code = _a64_movi(r, value)
+            self._put(len(code), lambda l, a, c=code: c)
+
+    def mov(self, dst, src):
+        if self.arch == "x86_64":
+            d, s = X86_REGS[dst], X86_REGS[src]
+            code = bytes([0x48 | ((s >> 3) << 2) | (d >> 3), 0x89,
+                          0xC0 | ((s & 7) << 3) | (d & 7)])
+        else:
+            # `orr xd, xzr, xs` es como se escribe un `mov` de registro a
+            # registro: no hay opcode propio.
+            code = (0xAA0003E0 | (src << 16) | dst).to_bytes(4, "little")
+        self._put(len(code), lambda l, a, c=code: c)
+
+    def load(self, dst, base, off, width):
+        """dst = [base + off], leyendo `width` bytes y rellenando con ceros."""
+        if self.arch == "x86_64":
+            d, b = X86_REGS[dst], X86_REGS[base]
+            rex = 0x40 | ((d >> 3) << 2) | (b >> 3)
+            modrm = bytes([0x80 | ((d & 7) << 3) | (b & 7)]) + _s32(off)
+            if width == 8:
+                code = bytes([rex | 8, 0x8B]) + modrm
+            elif width == 4:
+                code = bytes([rex, 0x8B]) + modrm
+            elif width == 2:
+                code = bytes([rex, 0x0F, 0xB7]) + modrm
+            else:
+                code = bytes([rex, 0x0F, 0xB6]) + modrm
+        else:
+            # Las formas "sin escalar" (LDUR) toman el offset tal cual, en vez
+            # de dividirlo por el ancho. Con una sola forma alcanza para todos
+            # los anchos y no hay que preocuparse por si el offset es multiplo.
+            op = {1: 0x38400000, 2: 0x78400000, 4: 0xB8400000, 8: 0xF8400000}[width]
+            code = (op | ((off & 0x1FF) << 12) | (base << 5) | dst).to_bytes(4, "little")
+        self._put(len(code), lambda l, a, c=code: c)
+
+    def store(self, base, off, src, width):
+        """[base + off] = src, escribiendo `width` bytes."""
+        if self.arch == "x86_64":
+            s, b = X86_REGS[src], X86_REGS[base]
+            rex = 0x40 | ((s >> 3) << 2) | (b >> 3)
+            modrm = bytes([0x80 | ((s & 7) << 3) | (b & 7)]) + _s32(off)
+            if width == 8:
+                code = bytes([rex | 8, 0x89]) + modrm
+            elif width == 4:
+                code = bytes([rex, 0x89]) + modrm
+            elif width == 2:
+                code = bytes([0x66, rex, 0x89]) + modrm
+            else:
+                # El prefijo va **siempre** aunque no haga falta por el numero
+                # de registro: sin el, guardar un byte desde rsi/rdi/rbp no
+                # escribe ese registro sino la mitad de arriba de otro. Es un
+                # rincon de x86 que viene de 1978 y no perdona.
+                code = bytes([rex, 0x88]) + modrm
+        else:
+            op = {1: 0x38000000, 2: 0x78000000, 4: 0xB8000000, 8: 0xF8000000}[width]
+            code = (op | ((off & 0x1FF) << 12) | (base << 5) | src).to_bytes(4, "little")
+        self._put(len(code), lambda l, a, c=code: c)
+
+    def addi(self, r, imm):
+        if self.arch == "x86_64":
+            n = X86_REGS[r]
+            code = bytes([0x48 | (n >> 3), 0x81, 0xC0 | (n & 7)]) + _s32(imm)
+        else:
+            code = (0x91000000 | (imm << 10) | (r << 5) | r).to_bytes(4, "little")
+        self._put(len(code), lambda l, a, c=code: c)
+
+    def andi(self, r, bits):
+        """r &= (2**bits - 1). Solo mascaras de unos seguidos desde abajo.
+
+        No es una limitacion que moleste: todas las mascaras de este programa
+        son "dar la vuelta a un anillo", que es exactamente esa forma. Y en
+        aarch64 las mascaras arbitrarias se codifican de una manera que no
+        vale la pena escribir para no usarla.
+        """
+        if self.arch == "x86_64":
+            n = X86_REGS[r]
+            code = bytes([0x48 | (n >> 3), 0x81, 0xE0 | (n & 7)]) + _s32((1 << bits) - 1)
+        else:
+            code = (0x92000000 | (1 << 22) | ((bits - 1) << 10)
+                    | (r << 5) | r).to_bytes(4, "little")
+        self._put(len(code), lambda l, a, c=code: c)
+
+    def add(self, dst, src):
+        if self.arch == "x86_64":
+            d, s = X86_REGS[dst], X86_REGS[src]
+            code = bytes([0x48 | ((s >> 3) << 2) | (d >> 3), 0x01,
+                          0xC0 | ((s & 7) << 3) | (d & 7)])
+        else:
+            code = (0x8B000000 | (src << 16) | (dst << 5) | dst).to_bytes(4, "little")
+        self._put(len(code), lambda l, a, c=code: c)
+
+    def sub(self, dst, src):
+        if self.arch == "x86_64":
+            d, s = X86_REGS[dst], X86_REGS[src]
+            code = bytes([0x48 | ((s >> 3) << 2) | (d >> 3), 0x29,
+                          0xC0 | ((s & 7) << 3) | (d & 7)])
+        else:
+            code = (0xCB000000 | (src << 16) | (dst << 5) | dst).to_bytes(4, "little")
+        self._put(len(code), lambda l, a, c=code: c)
+
+    def trunc32(self, r):
+        """Se queda con los 32 bits de abajo del registro.
+
+        Hace falta despues de restar dos indices del buzon: son contadores de 32
+        bits que **dan la vuelta** —el kernel los resta con `wrapping_sub`—, y
+        restarlos como si fueran de 64 daria, justo despues de la vuelta, un
+        numero enorme en vez de una diferencia chica. Pasaria una vez cada 4 GiB
+        de trafico, que es la clase de bug que aparece en produccion y nunca en
+        una prueba.
+        """
+        if self.arch == "x86_64":
+            n = X86_REGS[r]
+            # Escribir la mitad de abajo de un registro pone en cero la de
+            # arriba: es la unica regla de x86_64 que hace algo asi, y aca viene
+            # bien. Enmascarar con una constante no serviria — el inmediato de
+            # 32 bits se extiende con signo y 0xFFFFFFFF se volveria todo unos.
+            code = bytes([0x40 | ((n >> 3) << 2) | (n >> 3), 0x89,
+                          0xC0 | ((n & 7) << 3) | (n & 7)])
+        else:
+            code = (0x2A0003E0 | (r << 16) | r).to_bytes(4, "little")
+        self._put(len(code), lambda l, a, c=code: c)
+
+    def cmpi(self, r, imm):
+        if self.arch == "x86_64":
+            n = X86_REGS[r]
+            code = bytes([0x48 | (n >> 3), 0x81, 0xF8 | (n & 7)]) + _s32(imm)
+        else:
+            code = (0xF100001F | (imm << 10) | (r << 5)).to_bytes(4, "little")
+        self._put(len(code), lambda l, a, c=code: c)
+
+    def cmp(self, a, b):
+        if self.arch == "x86_64":
+            d, s = X86_REGS[a], X86_REGS[b]
+            code = bytes([0x48 | ((s >> 3) << 2) | (d >> 3), 0x39,
+                          0xC0 | ((s & 7) << 3) | (d & 7)])
+        else:
+            code = (0xEB00001F | (b << 16) | (a << 5)).to_bytes(4, "little")
+        self._put(len(code), lambda l, a_=None, c=code: c)
+
+    def _branch(self, kind, target):
+        if self.arch == "x86_64":
+            head = {"eq": b"\x0f\x84", "ne": b"\x0f\x85",
+                    "hs": b"\x0f\x83", "": b"\xe9"}[kind]
+            size = len(head) + 4
+
+            def emit(labels, at, head=head, size=size, target=target):
+                return head + _s32(labels[target] - (at + size))
+        else:
+            size = 4
+
+            def emit(labels, at, kind=kind, target=target):
+                delta = (labels[target] - at) // 4
+                if kind == "":
+                    return (0x14000000 | (delta & 0x3FFFFFF)).to_bytes(4, "little")
+                cond = {"eq": 0, "ne": 1, "hs": 2}[kind]
+                return (0x54000000 | ((delta & 0x7FFFF) << 5) | cond).to_bytes(4, "little")
+        self._put(size, emit)
+
+    def beq(self, target):
+        self._branch("eq", target)
+
+    def bne(self, target):
+        self._branch("ne", target)
+
+    def bhs(self, target):
+        """Salta si el ultimo `cmp` dio mayor o igual, sin signo."""
+        self._branch("hs", target)
+
+    def b(self, target):
+        self._branch("", target)
+
+    def barrier(self):
+        """Que lo escrito antes se vea antes que lo que se escriba despues.
+
+        No es adorno. El nucleo que corre esto y el que atiende el protocolo son
+        **distintos**, y el buzon dice explicitamente que los indices se leen con
+        orden de memoria: si el kernel viera el indice nuevo y los bytes viejos,
+        leeria basura. x86 lo da casi siempre y ARM no, que es justo la razon
+        por la que este proyecto compila las dos (D22).
+        """
+        code = b"\x0f\xae\xf0" if self.arch == "x86_64" else (0xD5033BBF).to_bytes(4, "little")
+        self._put(len(code), lambda l, a, c=code: c)
+
+    def ret(self):
+        code = b"\xc3" if self.arch == "x86_64" else (0xD65F03C0).to_bytes(4, "little")
+        self._put(len(code), lambda l, a, c=code: c)
+
+    def raw(self, code):
+        """Bytes ya armados, para pegar lo que genera `emit_writes`.
+
+        El timbre del kernel se publica como una lista de escrituras y ya habia
+        quien las convirtiera en codigo: se reusa en vez de repetirlo. Usa los
+        dos primeros registros, que en este programa son de descarte.
+        """
+        self._put(len(code), lambda l, a, c=code: c)
+
+
+def _s32(value):
+    """Un entero de 32 bits con signo, como lo quiere x86."""
+    return (value & 0xFFFFFFFF).to_bytes(4, "little")
+
+
+def _a64_movi(reg, value):
+    """movz/movk hasta armar un valor de 64 bits, siempre con las cuatro partes.
+
+    Se emiten las cuatro aunque alguna sea cero: el ensamblador necesita que
+    cada instruccion mida lo mismo en las dos pasadas, y saltear las partes en
+    cero haria que el tamano dependa del valor.
+    """
+    out = (0xD2800000 | ((value & 0xFFFF) << 5) | reg).to_bytes(4, "little")
+    for hw in range(1, 4):
+        chunk = (value >> (16 * hw)) & 0xFFFF
+        out += (0xF2800000 | (hw << 21) | (chunk << 5) | reg).to_bytes(4, "little")
+    return out
+
+
 def test_recover(proc, timeout, arch):
     """Un nucleo cuyo codigo no vuelve se puede recuperar (D13, D29).
 
@@ -2796,6 +3073,42 @@ class E1000:
                        | E1000_RCTL_SECRC)
         return None
 
+    def rearm(self):
+        """Deja los dos anillos como recien armados, en la ranura cero.
+
+        Hace falta antes de entregarle la placa al bucle del transporte: ese
+        codigo empieza a contar desde la ranura cero, y para entonces Python ya
+        mando y recibio unos cuantos paquetes. Si los indices no coincidieran,
+        el bucle miraria una ranura que la placa no esta usando — y eso se ve
+        como "la red no anda", que no se parece en nada a su causa.
+
+        Se apaga la placa para tocar los indices: mover la cabeza de un anillo
+        con el aparato recibiendo es pedirle que escriba en cualquier lado.
+        """
+        self.reg_write(E1000_RCTL, 0)
+        self.reg_write(E1000_TCTL, 0)
+
+        desc = bytearray(RING_SLOTS * DESC_BYTES)
+        for i in range(RING_SLOTS):
+            addr = self.rx_buf["start"] + i * RX_BUFFER
+            desc[i * DESC_BYTES:i * DESC_BYTES + 8] = addr.to_bytes(8, "little")
+        self.ask(self._id(), "mem.write",
+                 {"handle": self.rx_ring["handle"], "off": 0, "bytes": bytes(desc)})
+        self.ask(self._id(), "mem.write",
+                 {"handle": self.tx_ring["handle"], "off": 0,
+                  "bytes": bytes(RING_SLOTS * DESC_BYTES)})
+
+        self.reg_write(E1000_RDH, 0)
+        self.reg_write(E1000_RDT, RING_SLOTS - 1)
+        self.reg_write(E1000_TDH, 0)
+        self.reg_write(E1000_TDT, 0)
+        self.rx_next = 0
+        self.tx_next = 0
+
+        self.reg_write(E1000_TCTL, E1000_TCTL_EN | E1000_TCTL_PSP
+                       | (0x0F << 4) | (0x40 << 12))
+        self.reg_write(E1000_RCTL, E1000_RCTL_EN | E1000_RCTL_BAM | E1000_RCTL_SECRC)
+
     def link_up(self, timeout_s=3.0):
         """Espera a que la placa diga que el cable esta enchufado."""
         deadline = time.time() + timeout_s
@@ -3275,6 +3588,512 @@ def test_udp(proc, timeout, arch, port):
         print(f"  FALLA: volvio otra cosa que lo que el agente contesto")
         return 1
     print("  udp: ok")
+    return 0
+
+
+# --- El transporte de D5 ----------------------------------------------------
+#
+# Hasta aca el driver lo manejaba Python **por el cable**, que para probar el
+# driver esta bien y para el transporte no prueba nada: usar el cordon para
+# correr la red es exactamente lo que D5 dice que hay que dejar de hacer.
+#
+# Asi que esto es codigo maquina del agente, corriendo en un nucleo que reclamo
+# (D13, D29: ahi manda el, asi que puede correr `raw` y quedarse girando). El
+# bucle mueve bytes entre la placa y el buzon de `listen`, y el kernel contesta
+# por el buzon sin enterarse de que del otro lado hay una red (D4).
+#
+# Por que un bucle que gira y no una interrupcion: esta placa no tiene MSI —los
+# aparatos viejos avisan por un cable, y para saber que cable hay que interpretar
+# AML, un lenguaje entero adentro de ACPI—, asi que no hay a quien instalarle un
+# handler. Girar en un nucleo propio es justamente para lo que sirve un nucleo
+# propio.
+#
+# **El buzon es un flujo de bytes, no una cola de mensajes**, y eso decide la
+# forma del transporte. El kernel sabe donde termina un pedido porque va
+# escaneando el CBOR a medida que entra (`cbor::scan`); del lado del agente
+# hacer lo mismo seria un decodificador de CBOR en codigo maquina. Asi que el
+# bucle **no interpreta nada**: es un cano. Manda los bytes que haya cuando los
+# haya, y quien arma los mensajes es el que esta en las puntas —el kernel de un
+# lado, el cliente del otro, que decodifica CBOR y sabe cuando esta completo.
+# Un pedido o una respuesta pueden venir en varios datagramas.
+#
+# Y cada datagrama lleva **un largo adelante** porque las respuestas van de
+# tamano fijo. Eso no es capricho: con el datagrama de tamano fijo, la cabecera
+# de IP entera —incluido su checksum, que es lo unico que este transporte
+# tendria que calcular— es **constante**, y la arma Python una sola vez. El
+# bucle solo copia bytes.
+TRANSPORT_PAYLOAD = 512      # cuantos bytes de respuesta lleva cada datagrama
+TRANSPORT_MAX_REQUEST = 1024  # el pedido mas grande que acepta de una
+TRANSPORT_CAPACITY = 4096    # cuanto mide cada anillo del buzon
+TRANSPORT_CAP_BITS = 12      # ...y en bits, porque dar la vuelta es una mascara
+# Donde vive la senal de "pará", dentro del mismo reclamo que el codigo.
+TRANSPORT_STOP_AT = 2048
+# Y justo despues, lo que el bucle va anotando de lo que le pasa.
+#
+# Un transporte que no se puede mirar no se puede arreglar: no imprime nada
+# —no tiene por donde, y escribir por el cable desde adentro cambiaria los
+# tiempos, que en este proyecto ya costo caro— asi que deja numeros en su
+# memoria y se leen despues con `mem.read`. Cada uno separa una hipotesis de
+# la siguiente: si `vistos` es cero el paquete no llego a la placa, si
+# `aceptados` es cero llego pero no era para nosotros, y asi.
+TRANSPORT_COUNTERS_AT = 2064
+TRANSPORT_COUNTERS = ["vueltas", "vistos", "aceptados", "al_buzon", "contestados"]
+
+# Los registros que el bucle se guarda de una vuelta a la otra.
+_R_RXOFF, _R_RXBUF, _R_RXIDX, _R_TXOFF, _R_TXIDX = 9, 10, 11, 12, 13
+
+
+def transport_program(arch, where, bell):
+    """El bucle del transporte, en codigo maquina.
+
+    `where` trae las direcciones de todo lo que toca — la placa, sus anillos, el
+    buzon— porque un programa que las tuviera horneadas no serviria en otra
+    maquina. Se las pasa el que lo arma, que las supo por el protocolo (P4).
+    """
+    a = Asm(arch)
+    s = {n: n for n in range(9)}   # los registros de descarte, 0..8
+
+    def anotar(cual):
+        """Suma uno a un contador. Usa los dos primeros registros de descarte,
+        asi que solo se llama donde esos no tienen nada vivo."""
+        a.movi(s[0], where["counters"] + TRANSPORT_COUNTERS.index(cual) * 4)
+        a.load(s[1], s[0], 0, 4)
+        a.addi(s[1], 1)
+        a.store(s[0], 0, s[1], 4)
+
+    a.movi(_R_RXOFF, 0)
+    a.movi(_R_RXBUF, 0)
+    a.movi(_R_RXIDX, 0)
+    a.movi(_R_TXOFF, 0)
+    a.movi(_R_TXIDX, 0)
+
+    a.label("vuelta")
+    anotar("vueltas")
+    # ¿Le dijeron que pare? Es lo unico que lo saca del bucle, y existe para que
+    # la prueba pueda terminar: un transporte de verdad no para nunca.
+    a.movi(s[0], where["stop"])
+    a.load(s[1], s[0], 0, 4)
+    a.cmpi(s[1], 0)
+    a.bne("listo")
+
+    # --- ¿Llego un paquete? El descriptor lo dice en su byte de estado.
+    a.movi(s[0], where["rx_ring"])
+    a.add(s[0], _R_RXOFF)
+    a.load(s[1], s[0], 12, 1)
+    a.andi(s[1], 1)                      # el bit de "esto ya esta"
+    a.cmpi(s[1], 0)
+    a.beq("respuesta")
+    anotar("vistos")
+
+    # El paquete lo escribio la placa por DMA: hay que asegurarse de ver los
+    # bytes y no lo que hubiera antes.
+    a.barrier()
+    a.movi(s[2], where["rx_buf"])
+    a.add(s[2], _R_RXBUF)
+
+    # Tres preguntas antes de creerle a un paquete. Por una placa de red entra
+    # el ruido de toda la red, y meter cualquier cosa en el buzon seria darle
+    # al kernel un CBOR que no lo es.
+    a.load(s[1], s[2], 12, 2)            # ¿es IPv4?
+    a.cmpi(s[1], ETHERTYPE_IPV4 >> 8 | (ETHERTYPE_IPV4 & 0xFF) << 8)
+    a.bne("soltar")
+    a.load(s[1], s[2], 26, 4)            # ¿viene de quien esperamos?
+    a.movi(s[3], where["peer_ip"])
+    a.cmp(s[1], s[3])
+    a.bne("soltar")
+    a.load(s[1], s[2], 36, 2)            # ¿es para nuestro puerto?
+    a.movi(s[3], where["port_be"])
+    a.cmp(s[1], s[3])
+    a.bne("soltar")
+
+    anotar("aceptados")
+    # Guardarse a quien hay que contestarle. La direccion IP no se copia porque
+    # es siempre la misma —y por eso el checksum de la cabecera puede ser
+    # constante—, pero la MAC y el puerto salen del paquete que llego.
+    a.movi(s[4], where["tx_buf"])
+    for off in (0, 2, 4):
+        a.load(s[1], s[2], 6 + off, 2)
+        a.store(s[4], off, s[1], 2)
+    a.load(s[1], s[2], 34, 2)
+    a.store(s[4], 36, s[1], 2)
+
+    # Cuantos bytes trae. Si no entran, se descarta: mejor perder un pedido que
+    # escribir fuera del anillo.
+    a.load(s[5], s[2], 42, 2)
+    a.cmpi(s[5], TRANSPORT_MAX_REQUEST)
+    a.bhs("soltar")
+
+    # --- Del paquete al anillo de pedidos, byte por byte.
+    a.movi(s[6], where["mailbox"])
+    a.load(s[7], s[6], where["off_req_head"], 4)
+    a.movi(s[8], 0)
+    a.label("copia_entra")
+    a.cmp(s[8], s[5])
+    a.bhs("copia_entra_fin")
+    a.mov(s[0], s[2])
+    a.add(s[0], s[8])
+    a.load(s[1], s[0], 44, 1)
+    a.mov(s[3], s[7])
+    a.add(s[3], s[8])
+    a.andi(s[3], TRANSPORT_CAP_BITS)     # dar la vuelta al anillo
+    a.movi(s[0], where["req_ring"])
+    a.add(s[0], s[3])
+    a.store(s[0], 0, s[1], 1)
+    a.addi(s[8], 1)
+    a.b("copia_entra")
+    a.label("copia_entra_fin")
+    a.add(s[7], s[5])
+    # **Los bytes antes que el indice.** Si el kernel viera el indice nuevo y los
+    # bytes viejos leeria basura, y es un nucleo distinto el que mira.
+    a.barrier()
+    a.store(s[6], where["off_req_head"], s[7], 4)
+
+    anotar("al_buzon")
+    # Y avisarle, que es lo unico que lo despierta.
+    a.raw(emit_writes(arch, bell["writes"], con_ret=False))
+
+    a.label("soltar")
+    # Devolver la ranura: primero limpiarla, despues avisar que esta libre.
+    a.movi(s[0], where["rx_ring"])
+    a.add(s[0], _R_RXOFF)
+    a.movi(s[1], 0)
+    a.store(s[0], 8, s[1], 4)
+    a.store(s[0], 12, s[1], 4)
+    a.barrier()
+    a.addi(_R_RXOFF, DESC_BYTES)
+    a.andi(_R_RXOFF, 7)                  # 8 descriptores de 16 bytes
+    a.addi(_R_RXBUF, RX_BUFFER)
+    a.andi(_R_RXBUF, 14)                 # 8 buffers de 2048
+    a.addi(_R_RXIDX, 1)
+    a.andi(_R_RXIDX, 3)
+    a.mov(s[1], _R_RXIDX)                # la cola va una atras de la cabeza
+    a.addi(s[1], RING_SLOTS - 1)
+    a.andi(s[1], 3)
+    a.movi(s[0], where["rdt"])
+    a.store(s[0], 0, s[1], 4)
+
+    a.label("respuesta")
+    # --- ¿El kernel dejo algo? Sin interpretarlo: lo que haya, sale.
+    a.movi(s[6], where["mailbox"])
+    a.load(s[0], s[6], where["off_resp_head"], 4)
+    a.load(s[1], s[6], where["off_resp_tail"], 4)
+    a.cmp(s[0], s[1])
+    a.beq("vuelta")
+    a.barrier()
+
+    a.mov(s[5], s[0])
+    a.sub(s[5], s[1])                    # cuantos bytes hay
+    a.trunc32(s[5])                      # ...y los indices dan la vuelta
+    a.cmpi(s[5], TRANSPORT_PAYLOAD + 1)
+    a.bhs("recortar")
+    a.b("largo_listo")
+    a.label("recortar")
+    a.movi(s[5], TRANSPORT_PAYLOAD)      # lo que sobre va en el proximo
+    a.label("largo_listo")
+
+    a.movi(s[4], where["tx_buf"])
+    a.store(s[4], 42, s[5], 2)           # el largo, adelante del contenido
+
+    a.movi(s[8], 0)
+    a.label("copia_sale")
+    a.cmp(s[8], s[5])
+    a.bhs("copia_sale_fin")
+    a.mov(s[3], s[1])
+    a.add(s[3], s[8])
+    a.andi(s[3], TRANSPORT_CAP_BITS)
+    a.movi(s[0], where["resp_ring"])
+    a.add(s[0], s[3])
+    a.load(s[2], s[0], 0, 1)
+    a.mov(s[0], s[4])
+    a.add(s[0], s[8])
+    a.store(s[0], 44, s[2], 1)
+    a.addi(s[8], 1)
+    a.b("copia_sale")
+    a.label("copia_sale_fin")
+    a.add(s[1], s[5])
+    a.barrier()
+    a.store(s[6], where["off_resp_tail"], s[1], 4)
+
+    # --- Y mandarlo. El descriptor es casi todo constante porque el datagrama
+    #     es de tamano fijo: solo hay que rearmarlo y mover la cola.
+    a.movi(s[0], where["tx_ring"])
+    a.add(s[0], _R_TXOFF)
+    a.movi(s[1], where["tx_buf"])
+    a.store(s[0], 0, s[1], 8)
+    a.movi(s[1], where["tx_cmd"])
+    a.store(s[0], 8, s[1], 4)
+    a.movi(s[1], 0)
+    a.store(s[0], 12, s[1], 4)
+    a.barrier()
+    a.addi(_R_TXOFF, DESC_BYTES)
+    a.andi(_R_TXOFF, 7)
+    a.addi(_R_TXIDX, 1)
+    a.andi(_R_TXIDX, 3)
+    a.movi(s[0], where["tdt"])
+    a.store(s[0], 0, _R_TXIDX, 4)
+    anotar("contestados")
+    a.b("vuelta")
+
+    a.label("listo")
+    a.ret()
+    return a.assemble()
+
+
+def transport_header(our_mac, peer_ip=QEMU_GATEWAY_IP, our_ip=QEMU_GUEST_IP):
+    """La cabecera fija de cada datagrama de vuelta: 42 bytes que nunca cambian.
+
+    Que sea fija es lo que le saca al bucle el unico calculo que tendria: el
+    checksum de IP depende del largo total y de las direcciones, y con el
+    datagrama de tamano fijo y un solo destinatario los tres son constantes. Se
+    calcula aca, una vez, en Python.
+
+    Los unicos huecos son la MAC y el puerto del destinatario, que el bucle
+    copia del paquete que llego.
+    """
+    payload = 2 + TRANSPORT_PAYLOAD       # el largo va adelante del contenido
+    ip = bytearray(20)
+    ip[0] = 0x45
+    ip[2:4] = (20 + 8 + payload).to_bytes(2, "big")
+    ip[6:8] = (0x4000).to_bytes(2, "big")
+    ip[8] = 64
+    ip[9] = IP_PROTO_UDP
+    ip[12:16] = our_ip
+    ip[16:20] = peer_ip
+    ip[10:12] = ones_complement(bytes(ip)).to_bytes(2, "big")
+
+    udp = (AGENT_PORT.to_bytes(2, "big") + bytes(2)      # el puerto lo pone el bucle
+           + (8 + payload).to_bytes(2, "big") + bytes(2))
+    return (bytes(6) + our_mac + ETHERTYPE_IPV4.to_bytes(2, "big")
+            + bytes(ip) + udp)
+
+
+def transport_frames(data, buffer):
+    """Saca de los datagramas que llegaron los bytes del flujo, en orden.
+
+    Cada uno trae su largo adelante porque el datagrama es de tamano fijo: sin
+    eso no habria como distinguir el contenido del relleno.
+    """
+    if len(data) < 2:
+        return buffer
+    count = int.from_bytes(data[0:2], "little")
+    return buffer + data[2:2 + count]
+
+
+def test_transport(proc, timeout, arch, port):
+    """El kernel contesta el protocolo **por la red** (D5, D17, D28).
+
+    Es lo que el proyecto venia prometiendo desde el primer commit y no tenia:
+    un transporte que escribio el agente, entregado al kernel con `listen`, por
+    el que viaja el mismo CBOR que por el cable.
+
+    La prueba esta armada para que el cable no pueda estar ayudando. El pedido
+    **no sale por el cable**: sale de un socket del host, entra por la placa, y
+    lo mueve al buzon un bucle de codigo maquina del agente que corre en su
+    propio nucleo. El cable se usa solo para armar todo y para preguntar
+    despues, que es justo lo que D17 dice que tiene que seguir andando.
+    """
+    import struct
+    failures = []
+
+    def ask_verb(n, verb, args):
+        resp, _ = ask(proc, [n, verb, args], timeout)
+        _, ok, load = resp
+        return ok, load
+
+    ok, d = ask_verb(800, "describe", {"what": ["pcie", "channel"]})
+    if not ok or not d["pcie"]:
+        print("  esta maquina no informa PCIe")
+        return 1
+    ch = d["channel"]
+    bell = ch.get("doorbell")
+    if not bell:
+        print("  el kernel no publica timbre del buzon")
+        return 1
+    L = ch["layout"]
+
+    # El nucleo primero, **antes de reclamar memoria**: en x86_64 el trampolin
+    # que arranca un nucleo pasa por una pagina baja y fija, y si el driver la
+    # reclama antes, el kernel se queda sin poder arrancarlo.
+    core = core_for_raw(ask_verb, 801)
+    if core is None:
+        print("  no hay un nucleo libre donde correr el transporte")
+        return 1
+
+    nic, why = net_bring_up(ask_verb, 810, d["pcie"]["base"])
+    if nic is None:
+        print(f"  FALLA: {why}")
+        return 1
+    print(f"  placa lista, direccion {':'.join(f'{b:02x}' for b in nic.mac)}")
+
+    # El buzon, armado con los offsets que publica el kernel (D28: nada horneado).
+    ok, mb = ask_verb(830, "mem.claim", {"bytes": 16384, "align": 4096})
+    if not ok:
+        print(f"  no se pudo reclamar el buzon: {mb}")
+        nic.release()
+        return 1
+    head = bytearray(L["rings"])
+    struct.pack_into("<I", head, L["magic"], ch["magic"])
+    struct.pack_into("<I", head, L["version"], ch["version"])
+    struct.pack_into("<I", head, L["capacity"], TRANSPORT_CAPACITY)
+    ask_verb(831, "mem.write", {"handle": mb["handle"], "bytes": bytes(16384)})
+    ask_verb(832, "mem.write", {"handle": mb["handle"], "off": 0, "bytes": bytes(head)})
+    ok, r = ask_verb(833, "listen", {"handle": mb["handle"]})
+    if not ok:
+        print(f"  el kernel no adopto el buzon: {r}")
+        nic.release()
+        return 1
+    print(f"  buzon entregado al kernel con listen, anillos de"
+          f" {TRANSPORT_CAPACITY} bytes")
+
+    # La cabecera fija de las respuestas, ya con su checksum.
+    ok, code_mem = ask_verb(834, "mem.claim", {"bytes": 4096, "align": 4096})
+    if not ok:
+        print(f"  no se pudo reclamar memoria para el codigo: {code_mem}")
+        nic.release()
+        return 1
+    where = {
+        "stop": code_mem["start"] + TRANSPORT_STOP_AT,
+        "counters": code_mem["start"] + TRANSPORT_COUNTERS_AT,
+        "rx_ring": nic.rx_ring["start"],
+        "rx_buf": nic.rx_buf["start"],
+        "tx_ring": nic.tx_ring["start"],
+        "tx_buf": nic.tx_buf["start"],
+        "mailbox": mb["start"],
+        "req_ring": mb["start"] + L["rings"],
+        "resp_ring": mb["start"] + L["rings"] + TRANSPORT_CAPACITY,
+        "off_req_head": L["request_head"],
+        "off_resp_head": L["response_head"],
+        "off_resp_tail": L["response_tail"],
+        "rdt": nic.window["start"] + E1000_RDT,
+        "tdt": nic.window["start"] + E1000_TDT,
+        "peer_ip": int.from_bytes(QEMU_GATEWAY_IP, "little"),
+        "port_be": int.from_bytes(AGENT_PORT.to_bytes(2, "big"), "little"),
+        "tx_cmd": (44 + TRANSPORT_PAYLOAD)
+                  | ((E1000_TXD_EOP | E1000_TXD_IFCS | E1000_TXD_RS) << 24),
+    }
+    code = transport_program(arch, where, bell)
+    print(f"  el transporte son {len(code)} bytes de codigo maquina del agente")
+    ask_verb(836, "mem.write", {"handle": code_mem["handle"], "off": 0, "bytes": code})
+
+    # Un ARP antes de soltar el bucle: le ensena al otro extremo nuestra
+    # direccion, para que lo primero que mandemos desde el host se pueda
+    # entregar. Despues de esto Python no toca mas la placa — es del bucle.
+    nic.send(arp_request(nic.mac, QEMU_GATEWAY_IP))
+    while True:
+        frame, _ = nic.poll(timeout_s=1.0)
+        if frame is None:
+            break
+    # Y los anillos vuelven a cero, porque el bucle empieza a contar de ahi.
+    nic.rearm()
+
+    # La cabecera fija de las respuestas va **ultima**, y esto costo encontrarlo:
+    # `send` arma cada paquete en este mismo buffer, asi que el ARP de recien la
+    # pisaba entera. El sintoma no se parecia a la causa — el bucle contaba
+    # respuestas mandadas, la placa las mandaba de verdad, y del otro lado no
+    # llegaba nada, porque lo que salia tenia la cabecera de un ARP.
+    ask_verb(835, "mem.write", {"handle": nic.tx_buf["handle"], "off": 0,
+                                "bytes": transport_header(nic.mac)})
+
+    ok, r = ask_verb(837, "exec", {"handle": code_mem["handle"], "mode": "raw",
+                                   "core": core, "wait": False,
+                                   "deadline_ms": 60000})
+    if not ok:
+        print(f"  no se pudo arrancar el transporte: {r}")
+        nic.release()
+        return 1
+    print(f"  corriendo en un nucleo del agente; de aca en mas la placa es suya")
+
+    # --- Y ahora la prueba: hablarle al kernel **sin el cable**.
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(2.0)
+    want_id = 4242
+    request = enc([want_id, "describe", {"what": ["clock"]}])
+    datagram = bytes([len(request) & 0xFF, len(request) >> 8]) + request
+
+    answer, raw_back = None, b""
+    for intento in range(5):
+        sock.sendto(datagram, ("127.0.0.1", port))
+        deadline = time.time() + 3.0
+        while time.time() < deadline:
+            try:
+                back, _ = sock.recvfrom(4096)
+            except socket.timeout:
+                break
+            raw_back = transport_frames(back, raw_back)
+            try:
+                # CBOR se sabe terminar solo: por eso el bucle puede ser un cano
+                # que no interpreta nada y el que arma los mensajes es este lado.
+                answer, _ = dec(raw_back)
+                break
+            except Exception:
+                continue          # todavia no llego entero; viene otro datagrama
+        if answer is not None:
+            break
+        print(f"  (sin respuesta todavia; reintento {intento + 1})")
+
+    # Lo que el bucle fue anotando. Se lee siempre, no solo cuando falla: es la
+    # unica ventana a un codigo que corre en otro nucleo y no habla por el cable.
+    ok, r = ask_verb(844, "mem.read", {"handle": code_mem["handle"],
+                                       "off": TRANSPORT_COUNTERS_AT,
+                                       "len": 4 * len(TRANSPORT_COUNTERS)})
+    if ok:
+        cuenta = {name: int.from_bytes(r["bytes"][i * 4:i * 4 + 4], "little")
+                  for i, name in enumerate(TRANSPORT_COUNTERS)}
+        print("  lo que anoto el bucle: "
+              + ", ".join(f"{k}={v}" for k, v in cuenta.items()))
+
+    if answer is None:
+        failures.append("el kernel no contesto por la red")
+    else:
+        print(f"  por la RED contesto: id={answer[0]} ok={answer[1]}")
+        if answer[0] != want_id:
+            failures.append(f"contesto con otro id: {answer[0]} en vez de {want_id}")
+        if not answer[1]:
+            failures.append(f"contesto un error: {answer[2]}")
+        elif not isinstance(answer[2], dict) or "clock" not in answer[2]:
+            failures.append(f"la respuesta no es la que se pidio: {answer[2]}")
+        else:
+            print(f"  y lo que contesto es la maquina de verdad:"
+                  f" clock={answer[2]['clock']}")
+    sock.close()
+
+    # Pararlo, y comprobar que el cable siguio vivo todo el tiempo (D17).
+    ask_verb(838, "mem.write", {"handle": code_mem["handle"],
+                                "off": TRANSPORT_STOP_AT, "bytes": (1).to_bytes(4, "little")})
+    # Y esperar a que **de verdad** haya parado antes de soltar nada. Soltar la
+    # placa con el bucle todavia girando seria dejarlo escribiendo en memoria
+    # que ya no es nuestra: el IOMMU lo frenaria, pero confiar en eso es al
+    # reves de como se hace.
+    detenido = False
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        ok, d = ask_verb(839, "describe", {"what": ["cores"]})
+        if ok and any(c["handle"] == core and c["state"] == "idle"
+                      for c in (d.get("cores") or [])):
+            detenido = True
+            break
+    if not detenido:
+        failures.append("el transporte no paro cuando se le dijo que parara")
+    else:
+        print("  y para cuando se le dice: el nucleo volvio a quedar libre")
+
+    ok, d = ask_verb(842, "describe", {"what": ["cable"]})
+    if ok:
+        dropped = (d.get("cable") or {}).get("dropped")
+        print(f"  el cable nunca dejo de atender, y no perdio bytes: dropped={dropped}")
+        if dropped:
+            failures.append(f"se perdieron {dropped} bytes del cable")
+
+    nic.release()
+    ask_verb(840, "release", {"handle": mb["handle"]})
+    ask_verb(841, "release", {"handle": code_mem["handle"]})
+
+    print()
+    if failures:
+        for f in failures:
+            print(f"  FALLA: {f}")
+        return 1
+    print("  transporte: ok")
     return 0
 
 
@@ -4017,6 +4836,8 @@ def main():
                     help="le habla a la placa de red con los once verbos (D5)")
     ap.add_argument("--udp", action="store_true",
                     help="manda un datagrama del host al agente y espera la vuelta")
+    ap.add_argument("--transport", action="store_true",
+                    help="el kernel contesta el protocolo por la red, sin el cable (D5)")
     ap.add_argument("--lspci", action="store_true",
                     help="lista los aparatos del bus PCIe, que es el primer paso de un driver")
     ap.add_argument("--console", action="store_true",
@@ -4222,6 +5043,10 @@ def main():
             print(f"\n== un datagrama del host al agente y la vuelta"
                   f" (puerto {netport}) ==")
             rc |= test_udp(proc, args.timeout, args.arch, netport)
+        if args.transport:
+            print(f"\n== el kernel contesta el protocolo POR LA RED"
+                  f" (puerto {netport}) ==")
+            rc |= test_transport(proc, args.timeout, args.arch, netport)
         if args.persist or args.persist_check:
             titulo = ("comprobar que lo grabado sobrevivio al reinicio"
                       if args.persist_check else "grabar un programa en el disco")
