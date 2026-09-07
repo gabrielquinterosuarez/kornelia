@@ -95,6 +95,23 @@ exec qemu-system-x86_64 \
     `# PAYLOAD= diga con que llenarlo, y se crea solo la primera vez.` \
     -drive file="$DISK",if=none,id=payload,format=raw \
     -device nvme,serial=kornelia,drive=payload \
+    `# La placa de red, que es lo que le falta al agente para dejar de depender` \
+    `# del cordon (D5). Va FORZADA y la MISMA que en aarch64, a proposito.` \
+    `#` \
+    `# Una placa de red no se puede manejar por clase como el NVMe: 01.08.02` \
+    `# quiere decir "cualquier NVMe" y un solo driver los maneja a todos, pero` \
+    `# 02.00.00 solo quiere decir "ethernet" y cada modelo tiene sus propios` \
+    `# registros. O sea que hay que elegir modelo si o si, y elegir el mismo en` \
+    `# las dos maquinas es lo que permite UN solo driver en las dos` \
+    `# arquitecturas, que es la regla que no se rompe (D22).` \
+    `#` \
+    `# Sin esto QEMU pone su placa por defecto, que es distinta en cada maquina:` \
+    `# e1000e en q35 y virtio-net en virt.` \
+    `#` \
+    `# hostfwd: el host puede mandarle datagramas al agente. Es lo que permite` \
+    `# probar el camino de vuelta contra un par de verdad en vez de contra` \
+    `# nosotros mismos. NETPORT= lo cambia, para correr las dos a la vez.` \
+    -nic "user,model=e1000,hostfwd=udp::${NETPORT:-15555}-10.0.2.15:5555" \
     -drive if=pflash,format=raw,unit=0,readonly=on,file="$OVMF_CODE" \
     -drive if=pflash,format=raw,unit=1,file=target/OVMF_VARS-x86_64.fd \
     -drive format=raw,file=fat:rw:target/esp-x86_64 \

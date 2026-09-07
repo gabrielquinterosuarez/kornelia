@@ -251,13 +251,23 @@ comprueba con **dos arranques**: uno graba un programa distinto del que había,
 otro —máquina nueva, sin escribir nada— lo encuentra y lo corre. En un solo
 arranque no se podría distinguir de haberlo dejado en memoria.
 
-**Lo único que falta para que el blob sea útil de verdad es un driver de red.**
-El de NVMe ya existe y anda (escrito con los once verbos, del lado del agente),
-así que el camino disco→memoria→ejecución está entero. Con red, el agente deja
-de depender del cordón para subir cosas — que es lo que D5 dice que tiene que
-pasar. Las placas ya están en la máquina de prueba: `e1000` (`8086:10d3`, clase
-`02.00.00`) en x86_64 y `virtio-net` (`1af4:1000`) en aarch64, y `--lspci` las
-lista.
+**Y la placa de red manda y recibe paquetes** (`--net`), con los once verbos y
+del lado del agente, igual que el NVMe. Se comprueba con un ARP de ida y vuelta
+contra el otro extremo del cable: la respuesta trae una MAC que no teníamos y
+viene dirigida a la nuestra —que la leímos de la placa—, así que no se puede
+fabricar desde este lado.
+
+**Una placa de red no se puede manejar por clase, y eso cambia el diseño.** Al
+NVMe se lo encuentra por lo que *hace*: `01.08.02` quiere decir "cualquier NVMe"
+y un solo driver los maneja a todos. `02.00.00` sólo quiere decir "ethernet", y
+abajo de esa clase cada modelo tiene registros que no se parecen en nada. O sea
+que hay que **elegir modelo**, que es exactamente lo que D20 anticipaba al decir
+que el blob trae "drivers para una lista conocida": la lista existe porque no
+hay forma de no tenerla. Por eso las dos máquinas de prueba llevan ahora la
+**misma** placa forzada —Intel 82540EM (`8086:100e`), la placa real más simple
+que hay— en vez de la que QEMU pone por omisión, que es distinta en cada una
+(`e1000e` en q35, `virtio-net` en virt). Con una sola placa hay **un** driver y
+anda en las dos, que es la regla que no se rompe (D22).
 
 **Ojo: del blob está el mecanismo, no el contenido.** No hay driver de red ni de
 NVMe ni un `blob.bin` en el repo — el único blob que existe es el de prueba que

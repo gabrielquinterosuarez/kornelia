@@ -96,6 +96,15 @@ exec qemu-system-aarch64 \
     `# PAYLOAD= diga con que llenarlo, y se crea solo la primera vez.` \
     -drive file="$DISK",if=none,id=payload,format=raw \
     -device nvme,serial=kornelia,drive=payload \
+    `# La misma placa de red que en x86_64, y por eso mismo: una placa de red no` \
+    `# se puede manejar por clase —02.00.00 solo dice "ethernet"—, asi que hay` \
+    `# que elegir modelo, y elegir el mismo es lo que permite un solo driver en` \
+    `# las dos arquitecturas (D22). Sin esto QEMU pone virtio-net, que no se` \
+    `# parece en nada a la e1000 que pone en q35.` \
+    `#` \
+    `# NETPORT= por si se corren las dos maquinas a la vez: si el puerto del host` \
+    `# esta tomado, QEMU no arranca.` \
+    -nic "user,model=e1000,hostfwd=udp::${NETPORT:-15556}-10.0.2.15:5555" \
     -drive if=pflash,format=raw,unit=0,readonly=on,file="$AAVMF_CODE" \
     -drive if=pflash,format=raw,unit=1,file=target/AAVMF_VARS-aarch64.fd \
     -drive format=raw,file=fat:rw:target/esp-aarch64 \

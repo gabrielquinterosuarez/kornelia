@@ -2509,6 +2509,529 @@ def test_nvme(proc, timeout, arch):
     return 0
 
 
+# --- La placa de red --------------------------------------------------------
+#
+# El segundo driver del agente, y el que D5 estaba esperando: mientras el unico
+# transporte sea el cordon umbilical, subir algo grande es imposible fuera de
+# QEMU. A 115200 baudios el cable da unos 11 KB/s, que es exactamente el
+# problema que D20 quiere evitar.
+#
+# Hay una diferencia con el NVMe que conviene ver **antes** de leer el codigo.
+# Al NVMe se lo encuentra por lo que **hace**: la clase 01.08.02 quiere decir
+# "cualquier NVMe", y un solo driver maneja el de QEMU y el de una maquina de
+# verdad. Con una placa de red eso no existe. La clase 02.00.00 solo quiere
+# decir "ethernet", y abajo de ella cada modelo tiene registros que no se
+# parecen en nada a los del vecino. Asi que aca **hay que elegir modelo**, y no
+# es una comodidad de la prueba: es lo que D20 ya anticipaba al decir que el
+# blob trae "drivers para una lista conocida". La lista existe porque no hay
+# forma de no tenerla.
+#
+# El modelo es la Intel 82540EM (`8086:100e`), que es la placa real mas simple
+# que hay: registros por MMIO, dos anillos de descriptores, y nada mas. Los
+# numeros salen del manual del fabricante, que es publico. Va la misma en las
+# dos maquinas de prueba justamente para que este archivo tenga **un** driver y
+# no dos (D22).
+E1000_ID = 0x100E8086         # dispositivo y fabricante, como vienen juntos
+NET_CLASS = (0x02, 0x00, 0x00)
+
+# Sus registros, dentro de la ventana de memoria que publica el BAR 0.
+E1000_CTRL = 0x0000       # control general: aca se lo resetea
+E1000_STATUS = 0x0008     # estado: aca dice si el cable esta enchufado
+E1000_IMC = 0x00D8        # apagar interrupciones (se escribe 1 para apagar)
+E1000_RCTL = 0x0100       # control de recepcion
+E1000_TCTL = 0x0400       # control de transmision
+E1000_TIPG = 0x0410       # el hueco entre paquetes
+E1000_RDBAL = 0x2800      # donde esta el anillo de recepcion (abajo)
+E1000_RDBAH = 0x2804      # y arriba
+E1000_RDLEN = 0x2808      # cuanto mide, en bytes
+E1000_RDH = 0x2810        # por donde va el aparato
+E1000_RDT = 0x2818        # hasta donde le dejamos escribir
+E1000_TDBAL = 0x3800      # lo mismo para transmision
+E1000_TDBAH = 0x3804
+E1000_TDLEN = 0x3808
+E1000_TDH = 0x3810
+E1000_TDT = 0x3818
+E1000_MTA = 0x5200        # filtro de multicast, 128 palabras
+E1000_RAL = 0x5400        # su direccion MAC, abajo
+E1000_RAH = 0x5404        # y arriba, con el bit de "esta entrada vale"
+
+E1000_CTRL_SLU = 1 << 6       # subir el enlace
+E1000_CTRL_RST = 1 << 26      # resetear
+E1000_STATUS_LU = 1 << 1      # el enlace esta arriba
+E1000_RAH_AV = 1 << 31        # esta entrada de direccion vale
+
+E1000_RCTL_EN = 1 << 1        # recibir
+E1000_RCTL_BAM = 1 << 15      # aceptar broadcast (sin esto no llega un ARP)
+E1000_RCTL_SECRC = 1 << 26    # que la placa saque el CRC del final
+
+E1000_TCTL_EN = 1 << 1        # transmitir
+E1000_TCTL_PSP = 1 << 3       # rellenar los paquetes cortos hasta 60 bytes
+
+# En el descriptor de transmision: fin de paquete, poneme el CRC, y avisame
+# cuando lo hayas mandado.
+E1000_TXD_EOP = 1 << 0
+E1000_TXD_IFCS = 1 << 1
+E1000_TXD_RS = 1 << 3
+E1000_TXD_DD = 1 << 0         # en el estado: "listo"
+E1000_RXD_DD = 1 << 0
+E1000_RXD_EOP = 1 << 1
+
+# Cuantos descriptores tiene cada anillo. Ocho es el minimo util y no es un
+# numero redondo por gusto: el aparato exige que el anillo mida un multiplo de
+# 128 bytes, y un descriptor son 16.
+RING_SLOTS = 8
+DESC_BYTES = 16
+# Lo mas grande que puede entrar en un buffer de recepcion. 2048 es el valor por
+# omision de la placa, y alcanza para un paquete de ethernet entero.
+RX_BUFFER = 2048
+
+
+class E1000:
+    """Le habla a una placa Intel 82540EM usando solo los verbos del kernel.
+
+    Igual que el driver de NVMe: no hay un verbo `red`, hay memoria, permiso de
+    DMA y registros. El kernel no sabe que esta clase existe (D4).
+    """
+
+    def __init__(self, ask_verb, ident):
+        self.ask = ask_verb
+        self.n = ident
+        self.window = None      # el reclamo de su ventana de registros
+        self.claims = []        # todo lo reclamado, para poder devolverlo
+        self.bdf = None
+        self.mac = None
+        self.tx_next = 0        # el proximo descriptor de transmision a usar
+        self.rx_next = 0        # el proximo a mirar por si llego algo
+
+    def _id(self):
+        self.n += 1
+        return self.n
+
+    def reg_read(self, off):
+        # Todos sus registros son de 32 bits y **solo** aceptan accesos de 32
+        # bits. Leerlos de a un byte devuelve ceros en x86_64 y mata el bus en
+        # aarch64: la misma moneda que ya se pago con el NVMe.
+        ok, r = self.ask(self._id(), "mem.read",
+                         {"handle": self.window["handle"], "off": off,
+                          "len": 4, "width": 4})
+        if not ok:
+            return None
+        return int.from_bytes(r["bytes"], "little")
+
+    def reg_write(self, off, value):
+        ok, _ = self.ask(self._id(), "mem.write",
+                         {"handle": self.window["handle"], "off": off,
+                          "bytes": int(value & 0xFFFFFFFF).to_bytes(4, "little"),
+                          "width": 4})
+        return ok
+
+    def shared(self, bytes_wanted):
+        """Memoria que la placa tambien toca: pedida, limpia y declarada.
+
+        Los tres pasos van juntos siempre, por lo mismo que en el NVMe: sin
+        limpiar se leen descriptores viejos que parecen listos, y sin declarar
+        el IOMMU la bloquea — que se ve igual que una placa que no contesta.
+        """
+        ok, claim = self.ask(self._id(), "mem.claim",
+                             {"bytes": bytes_wanted, "align": 4096})
+        if not ok:
+            return None, str(claim)
+        self.claims.append(claim)
+        self.ask(self._id(), "mem.write",
+                 {"handle": claim["handle"], "bytes": bytes(bytes_wanted)})
+        ok, e = self.ask(self._id(), "dma.allow",
+                         {"device": self.bdf, "handle": claim["handle"]})
+        if not ok:
+            return None, f"el IOMMU no la dejo declarar: {e}"
+        return claim, None
+
+    def find(self, ecam):
+        """Busca la placa en el bus y reclama su ventana de registros.
+
+        Se busca por clase **y** por modelo, y las dos cosas hacen falta: la
+        clase descarta todo lo que no sea una placa de red, y el modelo es lo
+        unico que autoriza a escribirle estos registros y no otros.
+        """
+        cfg, devices = pcie_scan(self.ask, self._id(), ecam)
+        if cfg is None:
+            return f"no se pudo mirar el bus: {devices}"
+        mine = [d for d in devices
+                if d["class"] == NET_CLASS and d["id"] == E1000_ID]
+        if not mine:
+            otras = [d for d in devices if d["class"] == NET_CLASS]
+            self.ask(self._id(), "release", {"handle": cfg["handle"]})
+            if otras:
+                # Decir cual es la placa que hay es mucho mas util que "no hay
+                # red": el que lee esto sabe que driver le falta (P4).
+                tiene = ", ".join(f"{d['id'] & 0xFFFF:04x}:{d['id'] >> 16:04x}"
+                                  for d in otras)
+                return (f"hay placa de red pero no es la que este driver sabe"
+                        f" manejar: {tiene}, y este driver es para 8086:100e")
+            return "no hay ninguna placa de red en este bus"
+        dev = mine[0]
+
+        # Que responda a accesos de memoria y que pueda ser maestro del bus: sin
+        # lo segundo no puede leer sus propios anillos, que viven en RAM.
+        self.ask(self._id(), "mem.write",
+                 {"handle": cfg["handle"], "off": dev["off"] + 4,
+                  "bytes": bytes([0x06, 0x00])})
+        self.ask(self._id(), "release", {"handle": cfg["handle"]})
+
+        self.bdf = dev["bdf"]
+        # Su ventana mide 128 KiB. Se reclama entera aunque los registros que
+        # usamos entren en 32: el rango es de la placa, no del driver.
+        ok, win = self.ask(self._id(), "mem.claim",
+                           {"at": dev["window"], "bytes": 0x20000})
+        if not ok:
+            return f"no se pudo alcanzar su ventana: {win}"
+        self.window = win
+        return None
+
+    def reset(self):
+        """La apaga, la resetea y le sube el enlace.
+
+        Resetear primero no es prolijidad: el firmware pudo haberla dejado a
+        medio configurar, y los anillos que le demos despues los lee **una sola
+        vez**, cuando se la enciende.
+        """
+        # Callarle las interrupciones antes que nada: todavia no hay handler, y
+        # una placa que interrumpe sin que nadie la atienda no es un problema
+        # aca, pero una que interrumpe **durante** el reset si.
+        self.reg_write(E1000_IMC, 0xFFFFFFFF)
+        self.reg_write(E1000_CTRL, self.reg_read(E1000_CTRL) | E1000_CTRL_RST)
+
+        # El reset se anuncia solo: el bit se limpia cuando termino. Esperarlo
+        # es mejor que dormir un numero inventado.
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            ctrl = self.reg_read(E1000_CTRL)
+            if ctrl is None:
+                return "la placa dejo de contestar durante el reset"
+            if not (ctrl & E1000_CTRL_RST):
+                break
+        else:
+            return "no termino de resetearse en 2 s"
+
+        # Y otra vez despues del reset: el reset las vuelve a habilitar.
+        self.reg_write(E1000_IMC, 0xFFFFFFFF)
+        self.reg_write(E1000_CTRL, self.reg_read(E1000_CTRL) | E1000_CTRL_SLU)
+
+        # La MAC sale de la propia placa. No se la inventa ni se la hornea: es
+        # un dato de la maquina, y preguntarselo es P4 aplicado a un aparato.
+        low = self.reg_read(E1000_RAL)
+        high = self.reg_read(E1000_RAH)
+        if not (high & E1000_RAH_AV):
+            # Si esa entrada no vale, lo que leimos no es una direccion. Vale la
+            # pena distinguirlo: seis bytes de basura se ven como una MAC.
+            return "la placa no tiene direccion valida en su primera ranura"
+        self.mac = bytes([low & 0xFF, (low >> 8) & 0xFF, (low >> 16) & 0xFF,
+                          (low >> 24) & 0xFF, high & 0xFF, (high >> 8) & 0xFF])
+
+        # El filtro de multicast, vacio. Viene con basura despues del reset en
+        # algunas placas, y una entrada suelta hace entrar trafico ajeno.
+        for i in range(128):
+            self.reg_write(E1000_MTA + i * 4, 0)
+        return None
+
+    def rings(self):
+        """Le arma los dos anillos y la enciende.
+
+        Un anillo es un arreglo de descriptores en RAM: cada uno dice donde esta
+        un buffer y cuanto se uso. La placa y el driver se persiguen por el
+        anillo con dos indices —una cabeza y una cola— y nadie interrumpe a
+        nadie: se avisan moviendo la cola, que es una escritura a un registro.
+        """
+        ring_bytes = RING_SLOTS * DESC_BYTES
+
+        # Los dos anillos, y los buffers de cada lado.
+        self.tx_ring, why = self.shared(4096)
+        if why:
+            return f"sin memoria para el anillo de transmision: {why}"
+        self.rx_ring, why = self.shared(4096)
+        if why:
+            return f"sin memoria para el anillo de recepcion: {why}"
+        self.tx_buf, why = self.shared(4096)
+        if why:
+            return f"sin memoria para el buffer de transmision: {why}"
+        self.rx_buf, why = self.shared(RING_SLOTS * RX_BUFFER)
+        if why:
+            return f"sin memoria para los buffers de recepcion: {why}"
+
+        # Los descriptores de recepcion: cada uno apunta a su buffer y va con el
+        # estado en cero, que es como se dice "este es tuyo".
+        desc = bytearray(ring_bytes)
+        for i in range(RING_SLOTS):
+            addr = self.rx_buf["start"] + i * RX_BUFFER
+            desc[i * DESC_BYTES:i * DESC_BYTES + 8] = addr.to_bytes(8, "little")
+        ok, _ = self.ask(self._id(), "mem.write",
+                         {"handle": self.rx_ring["handle"], "off": 0,
+                          "bytes": bytes(desc)})
+        if not ok:
+            return "no se pudieron escribir los descriptores de recepcion"
+
+        self.reg_write(E1000_RDBAL, self.rx_ring["start"] & 0xFFFFFFFF)
+        self.reg_write(E1000_RDBAH, self.rx_ring["start"] >> 32)
+        self.reg_write(E1000_RDLEN, ring_bytes)
+        self.reg_write(E1000_RDH, 0)
+        # La cola va **una atras** de la cabeza, y por eso se sacrifica una
+        # ranura: cabeza igual a cola quiere decir "no hay lugar", asi que
+        # apuntarla al mismo lado dejaria a la placa sin donde escribir.
+        self.rx_next = 0
+        self.reg_write(E1000_RDT, RING_SLOTS - 1)
+
+        self.reg_write(E1000_TDBAL, self.tx_ring["start"] & 0xFFFFFFFF)
+        self.reg_write(E1000_TDBAH, self.tx_ring["start"] >> 32)
+        self.reg_write(E1000_TDLEN, ring_bytes)
+        self.reg_write(E1000_TDH, 0)
+        self.reg_write(E1000_TDT, 0)
+        self.tx_next = 0
+
+        # El hueco entre paquetes que manda el manual para ethernet de cobre.
+        self.reg_write(E1000_TIPG, 10 | (8 << 10) | (6 << 20))
+        self.reg_write(E1000_TCTL, E1000_TCTL_EN | E1000_TCTL_PSP
+                       | (0x0F << 4) | (0x40 << 12))
+        # BAM es lo que deja entrar el broadcast. Sin ese bit un ARP no llega
+        # nunca, y la falla se ve como "la red no anda" en vez de como un filtro.
+        self.reg_write(E1000_RCTL, E1000_RCTL_EN | E1000_RCTL_BAM
+                       | E1000_RCTL_SECRC)
+        return None
+
+    def link_up(self, timeout_s=3.0):
+        """Espera a que la placa diga que el cable esta enchufado."""
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            status = self.reg_read(E1000_STATUS)
+            if status is None:
+                return "la placa dejo de contestar"
+            if status & E1000_STATUS_LU:
+                return None
+        return "el enlace no subio"
+
+    def send(self, frame):
+        """Manda un paquete y espera a que la placa confirme que salio."""
+        if len(frame) > 4096:
+            return f"{len(frame)} bytes no entran en el buffer de transmision"
+        ok, _ = self.ask(self._id(), "mem.write",
+                         {"handle": self.tx_buf["handle"], "off": 0, "bytes": frame})
+        if not ok:
+            return "no se pudo dejar el paquete en memoria"
+
+        slot = self.tx_next
+        desc = bytearray(DESC_BYTES)
+        desc[0:8] = self.tx_buf["start"].to_bytes(8, "little")
+        desc[8:10] = len(frame).to_bytes(2, "little")
+        desc[11] = E1000_TXD_EOP | E1000_TXD_IFCS | E1000_TXD_RS
+        ok, _ = self.ask(self._id(), "mem.write",
+                         {"handle": self.tx_ring["handle"],
+                          "off": slot * DESC_BYTES, "bytes": bytes(desc)})
+        if not ok:
+            return "no se pudo dejar el descriptor en el anillo"
+
+        # Mover la cola es lo que le avisa. Hasta esta escritura la placa no
+        # miro nada de lo anterior.
+        self.tx_next = (slot + 1) % RING_SLOTS
+        self.reg_write(E1000_TDT, self.tx_next)
+
+        # Y esperar a que lo confirme. Sin esto "se mando" querria decir "se
+        # dejo escrito", que es otra cosa.
+        deadline = time.time() + 3.0
+        while time.time() < deadline:
+            ok, r = self.ask(self._id(), "mem.read",
+                             {"handle": self.tx_ring["handle"],
+                              "off": slot * DESC_BYTES + 12, "len": 1})
+            if ok and (r["bytes"][0] & E1000_TXD_DD):
+                return None
+        return "la placa no confirmo haber mandado el paquete"
+
+    def poll(self, timeout_s=3.0):
+        """Devuelve el proximo paquete que haya llegado, o None si no llego.
+
+        Recibir es al reves de mandar y por el otro anillo: la placa escribe el
+        paquete en el buffer por DMA y marca el descriptor. Nadie avisa nada —
+        aca se mira, que para una prueba alcanza; el transporte de verdad usa el
+        timbre de la placa.
+        """
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            slot = self.rx_next
+            ok, r = self.ask(self._id(), "mem.read",
+                             {"handle": self.rx_ring["handle"],
+                              "off": slot * DESC_BYTES + 8, "len": 8})
+            if not ok:
+                return None, "no se pudo mirar el anillo de recepcion"
+            length = int.from_bytes(r["bytes"][0:2], "little")
+            status = r["bytes"][4]
+            if not (status & E1000_RXD_DD):
+                continue
+            if not (status & E1000_RXD_EOP):
+                return None, "llego un paquete partido, y este driver no los junta"
+
+            ok, r = self.ask(self._id(), "mem.read",
+                             {"handle": self.rx_buf["handle"],
+                              "off": slot * RX_BUFFER, "len": length})
+            if not ok:
+                return None, "no se pudo leer el paquete que llego"
+            frame = r["bytes"]
+
+            # Devolver la ranura: primero se limpia el estado y despues se mueve
+            # la cola. Al reves, la placa podria escribir encima de un
+            # descriptor que todavia dice "listo" y el proximo poll leeria un
+            # largo viejo con un paquete nuevo.
+            self.ask(self._id(), "mem.write",
+                     {"handle": self.rx_ring["handle"],
+                      "off": slot * DESC_BYTES + 8, "bytes": bytes(8)})
+            self.rx_next = (slot + 1) % RING_SLOTS
+            self.reg_write(E1000_RDT, (self.rx_next - 1) % RING_SLOTS)
+            return frame, None
+        return None, None
+
+    def release(self):
+        """Suelta lo reclamado. Lo que el agente toma, el agente devuelve."""
+        # Y antes de soltar, apagarla: si quedara recibiendo, seguiria
+        # escribiendo por DMA en memoria que ya no es nuestra. El IOMMU lo
+        # frenaria —para eso esta— pero dejar a un aparato apuntando a memoria
+        # ajena y confiar en que lo bloqueen es al reves de como se hace.
+        if self.window:
+            self.reg_write(E1000_RCTL, 0)
+            self.reg_write(E1000_TCTL, 0)
+        for claim in self.claims + ([self.window] if self.window else []):
+            self.ask(self._id(), "release", {"handle": claim["handle"]})
+        self.claims = []
+
+
+# La red que QEMU arma del otro lado del cable. No es una eleccion nuestra: son
+# los numeros que usa su red de usuario, y estan aca para poder comprobar contra
+# **algo que no somos nosotros**.
+QEMU_GUEST_IP = bytes([10, 0, 2, 15])     # la direccion que nos toca
+QEMU_GATEWAY_IP = bytes([10, 0, 2, 2])    # el que contesta del otro lado
+BROADCAST = b"\xff" * 6
+ETHERTYPE_ARP = 0x0806
+
+
+def arp_request(mac, target_ip, sender_ip=QEMU_GUEST_IP):
+    """Arma la pregunta "quien tiene esta IP", que es el paquete mas simple util.
+
+    Se elige ARP y no otra cosa porque la respuesta **no se puede fabricar
+    desde aca**: trae una MAC que no conocemos y viene dirigida a la nuestra,
+    que la leimos de la placa. Un paquete que nos contestaramos solos probaria
+    mucho menos.
+    """
+    frame = bytearray()
+    frame += BROADCAST + mac + ETHERTYPE_ARP.to_bytes(2, "big")
+    frame += (1).to_bytes(2, "big")       # sobre ethernet
+    frame += (0x0800).to_bytes(2, "big")  # preguntando por una direccion IPv4
+    frame += bytes([6, 4])                # cuanto mide cada una
+    frame += (1).to_bytes(2, "big")       # es una pregunta
+    frame += mac + sender_ip              # quien pregunta
+    frame += bytes(6) + target_ip         # y por quien
+    # El minimo de ethernet son 60 bytes sin el CRC. La placa rellena sola con
+    # TCTL.PSP, pero se rellena aca igual: asi el largo que se manda es el largo
+    # que se ve del otro lado, y una prueba no deberia depender de eso.
+    frame += bytes(60 - len(frame))
+    return bytes(frame)
+
+
+def parse_arp_reply(frame):
+    """Devuelve (mac, ip) del que contesto, o None si esto no es una respuesta."""
+    if len(frame) < 42:
+        return None
+    if int.from_bytes(frame[12:14], "big") != ETHERTYPE_ARP:
+        return None
+    if int.from_bytes(frame[20:22], "big") != 2:   # 2 = es una respuesta
+        return None
+    return frame[22:28], frame[28:32]
+
+
+def net_bring_up(ask_verb, ident, ecam):
+    """Encuentra la placa, la resetea y la deja andando. Devuelve (placa, motivo)."""
+    nic = E1000(ask_verb, ident)
+    if (why := nic.find(ecam)):
+        return None, why
+    if (why := nic.reset()):
+        nic.release()
+        return None, why
+    if (why := nic.rings()):
+        nic.release()
+        return None, why
+    if (why := nic.link_up()):
+        nic.release()
+        return None, why
+    return nic, None
+
+
+def test_net(proc, timeout, arch):
+    """Le habla a una placa de red de verdad, con los once verbos y nada mas.
+
+    Es lo que le faltaba al agente para dejar de depender del cordon (D5). La
+    prueba es un ARP de ida y vuelta contra el otro extremo del cable: no puede
+    pasar por casualidad, porque la respuesta trae una MAC que no teniamos y
+    viene dirigida a la nuestra, que la leimos de la placa.
+    """
+    def ask_verb(n, verb, args):
+        resp, _ = ask(proc, [n, verb, args], timeout)
+        _, ok, load = resp
+        return ok, load
+
+    ok, d = ask_verb(600, "describe", {"what": ["pcie"]})
+    if not ok or not d["pcie"]:
+        print("  esta maquina no informa PCIe")
+        return 1
+
+    nic, why = net_bring_up(ask_verb, 601, d["pcie"]["base"])
+    if nic is None:
+        print(f"  FALLA: {why}")
+        return 1
+    print(f"  placa encontrada: el bus la llama {nic.bdf:#x}")
+    print(f"  y dice que su direccion es {':'.join(f'{b:02x}' for b in nic.mac)}")
+    print("  reseteada, con sus dos anillos, y el enlace arriba")
+
+    # Y ahora la prueba: preguntar quien tiene la IP del otro extremo.
+    if (why := nic.send(arp_request(nic.mac, QEMU_GATEWAY_IP))):
+        print(f"  FALLA al mandar: {why}")
+        nic.release()
+        return 1
+    print(f"  mandado un ARP preguntando por {'.'.join(str(b) for b in QEMU_GATEWAY_IP)}")
+
+    while True:
+        frame, why = nic.poll()
+        if why:
+            print(f"  FALLA al recibir: {why}")
+            nic.release()
+            return 1
+        if frame is None:
+            print("  FALLA: nadie contesto el ARP")
+            nic.release()
+            return 1
+        answer = parse_arp_reply(frame)
+        if answer:
+            break
+        # Puede entrar cualquier otra cosa antes: la red de QEMU manda lo suyo.
+        # Se descarta y se sigue mirando, que es lo que hace un driver de verdad.
+
+    their_mac, their_ip = answer
+    print(f"  y contesto {'.'.join(str(b) for b in their_ip)}:"
+          f" soy {':'.join(f'{b:02x}' for b in their_mac)}")
+
+    failures = []
+    # Las tres cosas que hacen que esto no pueda pasar por casualidad.
+    if their_ip != QEMU_GATEWAY_IP:
+        failures.append(f"contesto otro: preguntamos por"
+                        f" {QEMU_GATEWAY_IP.hex()} y contesto {their_ip.hex()}")
+    if frame[0:6] != nic.mac:
+        failures.append("la respuesta no venia dirigida a nuestra direccion")
+    if their_mac == nic.mac or their_mac == BROADCAST:
+        failures.append(f"la MAC que contesto no es de nadie: {their_mac.hex()}")
+
+    nic.release()
+    print()
+    if failures:
+        for f in failures:
+            print(f"  FALLA: {f}")
+        return 1
+    print("  red: ok")
+    return 0
+
+
 # El aparato `edu` de QEMU: un motor de DMA que se maneja con cuatro escrituras.
 # Existe para ensenar, y por eso sirve justo para esto — cualquier otra placa
 # con DMA necesitaria un driver entero antes de poder probar nada.
@@ -3244,6 +3767,8 @@ def main():
                     help="graba un programa en el disco y comprueba que quedo")
     ap.add_argument("--nvme", action="store_true",
                     help="le habla al controlador NVMe con los once verbos")
+    ap.add_argument("--net", action="store_true",
+                    help="le habla a la placa de red con los once verbos (D5)")
     ap.add_argument("--lspci", action="store_true",
                     help="lista los aparatos del bus PCIe, que es el primer paso de un driver")
     ap.add_argument("--console", action="store_true",
@@ -3434,6 +3959,9 @@ def main():
         if args.nvme:
             print("\n== un driver de NVMe, escrito con los once verbos ==")
             rc |= test_nvme(proc, args.timeout, args.arch)
+        if args.net:
+            print("\n== un driver de red, escrito con los once verbos (D5) ==")
+            rc |= test_net(proc, args.timeout, args.arch)
         if args.persist or args.persist_check:
             titulo = ("comprobar que lo grabado sobrevivio al reinicio"
                       if args.persist_check else "grabar un programa en el disco")
