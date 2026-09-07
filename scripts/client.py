@@ -3032,6 +3032,252 @@ def test_net(proc, timeout, arch):
     return 0
 
 
+# --- Lo minimo de IP y UDP --------------------------------------------------
+#
+# Esto no es un stack: es lo mas chico que permite que por la placa viaje algo
+# con destinatario. Y es del agente, no del kernel — D5 dice justamente que el
+# kernel nunca necesita stack de red.
+#
+# Se elige UDP y no TCP a proposito. El protocolo del kernel ya es pedido y
+# respuesta con un identificador en cada uno (D6), asi que reintentar es
+# volver a mandar el mismo pedido: todo lo que TCP agrega —ventanas, orden,
+# reensamblado— seria repetir en el transporte algo que el protocolo ya tiene.
+ETHERTYPE_IPV4 = 0x0800
+IP_PROTO_UDP = 17
+# El puerto donde escucha el agente. Es el que las maquinas de prueba mandan
+# adentro con `hostfwd`, asi que del lado del host se llega por otro numero.
+AGENT_PORT = 5555
+
+
+def pick_udp_port():
+    """Un puerto libre del host, para el hostfwd con el que se le habla al agente.
+
+    Se lo pide al sistema en vez de elegir un numero: dos maquinas de prueba a
+    la vez con el mismo puerto hacen que la segunda **no arranque**, y eso no se
+    parece en nada a su causa.
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+    finally:
+        s.close()
+
+
+def ones_complement(data):
+    """La suma con la que se chequean las cabeceras de IP.
+
+    Se suman de a 16 bits, el acarreo vuelve a entrar por abajo, y al final se
+    invierte. Es de 1981 y sigue igual.
+    """
+    if len(data) % 2:
+        data += b"\x00"
+    total = 0
+    for i in range(0, len(data), 2):
+        total += int.from_bytes(data[i:i + 2], "big")
+    while total >> 16:
+        total = (total & 0xFFFF) + (total >> 16)
+    return (~total) & 0xFFFF
+
+
+def udp_frame(src_mac, dst_mac, src_ip, dst_ip, src_port, dst_port, payload):
+    """Un datagrama UDP entero, desde la cabecera de ethernet."""
+    udp = (src_port.to_bytes(2, "big") + dst_port.to_bytes(2, "big")
+           + (8 + len(payload)).to_bytes(2, "big")
+           # El checksum de UDP es opcional sobre IPv4, y cero quiere decir
+           # "no lo calcule". No es pereza: abajo hay ethernet, que ya trae su
+           # propio CRC y lo pone la placa.
+           + bytes(2) + payload)
+
+    ip = bytearray(20)
+    ip[0] = 0x45                                    # IPv4, cabecera de 20 bytes
+    ip[2:4] = (20 + len(udp)).to_bytes(2, "big")    # cuanto mide todo
+    ip[6:8] = (0x4000).to_bytes(2, "big")           # no lo fragmenten
+    ip[8] = 64                                      # cuantos saltos aguanta
+    ip[9] = IP_PROTO_UDP
+    ip[12:16] = src_ip
+    ip[16:20] = dst_ip
+    # El de IP **no** es opcional, y se calcula sobre la cabecera con el campo
+    # del checksum en cero.
+    ip[10:12] = ones_complement(bytes(ip)).to_bytes(2, "big")
+
+    frame = dst_mac + src_mac + ETHERTYPE_IPV4.to_bytes(2, "big") + bytes(ip) + udp
+    # El minimo de ethernet, otra vez.
+    return frame + bytes(max(0, 60 - len(frame)))
+
+
+def parse_udp(frame, our_ip, our_port):
+    """Saca el contenido de un datagrama dirigido a nosotros, o None.
+
+    Devolver None ante cualquier cosa rara es lo correcto para un driver: por
+    el cable entra lo que sea, y nada de lo que entra es de fiar.
+    """
+    if len(frame) < 42 or int.from_bytes(frame[12:14], "big") != ETHERTYPE_IPV4:
+        return None
+    ip = frame[14:]
+    if (ip[0] >> 4) != 4:
+        return None
+    # La cabecera de IP puede traer opciones, asi que su largo se lee, no se
+    # supone. Suponer 20 es el bug clasico de los stacks de juguete.
+    head = (ip[0] & 0xF) * 4
+    if head < 20 or ip[9] != IP_PROTO_UDP or ip[16:20] != our_ip:
+        return None
+    total = int.from_bytes(ip[2:4], "big")
+    udp = ip[head:total]
+    if len(udp) < 8:
+        return None
+    if int.from_bytes(udp[2:4], "big") != our_port:
+        return None
+    length = int.from_bytes(udp[4:6], "big")
+    return {
+        "mac": frame[6:12],
+        "ip": bytes(ip[12:16]),
+        "port": int.from_bytes(udp[0:2], "big"),
+        "payload": bytes(udp[8:length]),
+    }
+
+
+def parse_arp_request(frame, our_ip):
+    """Devuelve (mac, ip) del que pregunta por nuestra IP, o None.
+
+    Hace falta responder esto: el otro extremo no puede entregarnos nada
+    mientras no sepa que direccion tenemos.
+    """
+    if len(frame) < 42 or int.from_bytes(frame[12:14], "big") != ETHERTYPE_ARP:
+        return None
+    if int.from_bytes(frame[20:22], "big") != 1:   # 1 = es una pregunta
+        return None
+    if frame[38:42] != our_ip:
+        return None
+    return frame[22:28], frame[28:32]
+
+
+def arp_reply(our_mac, our_ip, their_mac, their_ip):
+    """La respuesta: "esa IP es mia, y esta es mi direccion"."""
+    frame = bytearray()
+    frame += their_mac + our_mac + ETHERTYPE_ARP.to_bytes(2, "big")
+    frame += (1).to_bytes(2, "big") + (0x0800).to_bytes(2, "big")
+    frame += bytes([6, 4]) + (2).to_bytes(2, "big")   # 2 = es una respuesta
+    frame += our_mac + our_ip
+    frame += their_mac + their_ip
+    return bytes(frame) + bytes(60 - len(frame))
+
+
+def serve_udp(nic, our_ip, our_port, timeout_s):
+    """Mira lo que entra hasta que llegue un datagrama para nosotros.
+
+    Por el camino contesta los ARP que pregunten por nuestra direccion, que es
+    lo que hace que el otro lado pueda entregarnos algo. Todo lo demas se
+    descarta: por una placa de red entra el ruido de toda la red.
+    """
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        frame, why = nic.poll(timeout_s=0.4)
+        if why:
+            return None, why
+        if frame is None:
+            continue
+        if (who := parse_arp_request(frame, our_ip)):
+            nic.send(arp_reply(nic.mac, our_ip, who[0], who[1]))
+            continue
+        if (datagram := parse_udp(frame, our_ip, our_port)):
+            return datagram, None
+    return None, None
+
+
+def test_udp(proc, timeout, arch, port):
+    """Un datagrama del host al agente y la respuesta de vuelta (D5).
+
+    Esta prueba tiene un par de verdad del otro lado: los bytes salen de un
+    socket de esta misma maquina, cruzan la red de QEMU, los levanta el driver
+    del agente **de la placa**, y la respuesta hace el camino inverso hasta el
+    socket. Nada de eso pasa si el driver no anda.
+
+    Y lo que vuelve no es lo que se mando: el agente contesta otra cosa. Un eco
+    podria venir de cualquier lado del camino; una respuesta distinta sólo la
+    puede haber armado el codigo que corre adentro.
+    """
+    def ask_verb(n, verb, args):
+        resp, _ = ask(proc, [n, verb, args], timeout)
+        _, ok, load = resp
+        return ok, load
+
+    ok, d = ask_verb(700, "describe", {"what": ["pcie"]})
+    if not ok or not d["pcie"]:
+        print("  esta maquina no informa PCIe")
+        return 1
+
+    nic, why = net_bring_up(ask_verb, 701, d["pcie"]["base"])
+    if nic is None:
+        print(f"  FALLA: {why}")
+        return 1
+    print(f"  placa lista, direccion {':'.join(f'{b:02x}' for b in nic.mac)}")
+
+    # Un ARP de salida antes que nada. Ademas de comprobar el enlace, le ensena
+    # al otro extremo que direccion tenemos: sin eso, lo primero que nos manden
+    # se pierde mientras nos busca.
+    nic.send(arp_request(nic.mac, QEMU_GATEWAY_IP))
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(1.0)
+    # Un numero distinto en cada corrida: si la respuesta trajera uno viejo,
+    # seria un datagrama que quedo dando vueltas y no el que acabamos de mandar.
+    nonce = os.urandom(4).hex()
+    probe = f"PING {nonce}".encode()
+
+    datagram = None
+    for intento in range(4):
+        sock.sendto(probe, ("127.0.0.1", port))
+        datagram, why = serve_udp(nic, QEMU_GUEST_IP, AGENT_PORT, 4.0)
+        if why:
+            print(f"  FALLA al recibir: {why}")
+            nic.release()
+            return 1
+        if datagram:
+            break
+        print(f"  (no llego nada; reintento {intento + 1})")
+
+    if datagram is None:
+        print("  FALLA: el datagrama del host nunca llego a la placa")
+        nic.release()
+        return 1
+    print(f"  del host llego {datagram['payload']!r}"
+          f" desde {'.'.join(str(b) for b in datagram['ip'])}:{datagram['port']}")
+
+    if datagram["payload"] != probe:
+        print(f"  FALLA: llego algo que no es lo que se mando: {datagram['payload']!r}")
+        nic.release()
+        return 1
+
+    # Y la vuelta. Se contesta al que pregunto, con lo que el diga: la direccion
+    # y el puerto salen del datagrama que llego, no de un numero horneado.
+    answer = f"PONG {nonce}".encode()
+    why = nic.send(udp_frame(nic.mac, datagram["mac"], QEMU_GUEST_IP,
+                             datagram["ip"], AGENT_PORT, datagram["port"], answer))
+    if why:
+        print(f"  FALLA al contestar: {why}")
+        nic.release()
+        return 1
+
+    try:
+        back, _ = sock.recvfrom(2048)
+    except socket.timeout:
+        print("  FALLA: el agente contesto pero la respuesta no llego al host")
+        nic.release()
+        return 1
+    finally:
+        sock.close()
+        nic.release()
+
+    print(f"  y al host le volvio {back!r}")
+    print()
+    if back != answer:
+        print(f"  FALLA: volvio otra cosa que lo que el agente contesto")
+        return 1
+    print("  udp: ok")
+    return 0
+
+
 # El aparato `edu` de QEMU: un motor de DMA que se maneja con cuatro escrituras.
 # Existe para ensenar, y por eso sirve justo para esto — cualquier otra placa
 # con DMA necesitaria un driver entero antes de poder probar nada.
@@ -3769,6 +4015,8 @@ def main():
                     help="le habla al controlador NVMe con los once verbos")
     ap.add_argument("--net", action="store_true",
                     help="le habla a la placa de red con los once verbos (D5)")
+    ap.add_argument("--udp", action="store_true",
+                    help="manda un datagrama del host al agente y espera la vuelta")
     ap.add_argument("--lspci", action="store_true",
                     help="lista los aparatos del bus PCIe, que es el primer paso de un driver")
     ap.add_argument("--console", action="store_true",
@@ -3851,7 +4099,15 @@ def main():
     # Sin ACPI el firmware le pasa al kernel un device tree en su lugar: es el
     # otro dialecto en el que una maquina se describe, y el kernel tiene que
     # poder averiguar lo mismo por los dos (P4).
-    env = dict(os.environ, NO_ACPI="1") if args.no_acpi else None
+    env = dict(os.environ)
+    if args.no_acpi:
+        env["NO_ACPI"] = "1"
+    # Por que puerto del host se le habla a la placa del agente. Se elige uno
+    # libre en vez de horneado para que dos maquinas puedan correr a la vez: si
+    # el puerto estuviera tomado, QEMU no arrancaria — y la falla se veria como
+    # "la maquina no bootea", que no se parece en nada a su causa.
+    netport = int(env.get("NETPORT") or pick_udp_port())
+    env["NETPORT"] = str(netport)
     if args.connect:
         # La maquina ya arranco y ya paso el marcador, asi que no hay banner que
         # leer: se empieza hablando. Si del otro lado no hay nadie, el primer
@@ -3962,6 +4218,10 @@ def main():
         if args.net:
             print("\n== un driver de red, escrito con los once verbos (D5) ==")
             rc |= test_net(proc, args.timeout, args.arch)
+        if args.udp:
+            print(f"\n== un datagrama del host al agente y la vuelta"
+                  f" (puerto {netport}) ==")
+            rc |= test_udp(proc, args.timeout, args.arch, netport)
         if args.persist or args.persist_check:
             titulo = ("comprobar que lo grabado sobrevivio al reinicio"
                       if args.persist_check else "grabar un programa en el disco")
