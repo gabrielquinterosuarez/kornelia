@@ -393,6 +393,16 @@ Están acá para no volver a pagarlos:
   CBOR que ya no venía. Y había un contador de bytes perdidos que **nadie podía
   ver**: ahora se publica en `describe {what:["cable"]}`, y el portón exige que
   sea cero.
+- **Un test unitario en verde no prueba que la función se llame.**
+  `channel::forget` existía, estaba bien escrita y **tenía su test pasando** — y
+  no la llamaba nadie. `release` revocaba con cuidado las otras dos cosas que un
+  reclamo puede repartir (el permiso sin privilegio y lo que se le dejó tocar a
+  un aparato), con comentarios explicando que dejarlas sería "un agujero
+  silencioso", y se olvidaba del buzón: el kernel seguía leyendo **y
+  escribiendo** memoria devuelta, que el próximo `mem.claim` le daba a otro. La
+  regla general que queda: **cada vez que un verbo le entrega algo al kernel,
+  `release` tiene que poder devolverlo**, y eso se comprueba desde afuera — el
+  test que lo agarró pregunta `describe` después de soltar, no mira el código.
 - **Un buffer de transmisión es uno solo, y el paquete anterior sigue ahí.** El
   transporte arma sus respuestas sobre una cabecera fija que se escribe una vez
   al principio. Pero mandar un paquete —el ARP que se manda antes de soltar el

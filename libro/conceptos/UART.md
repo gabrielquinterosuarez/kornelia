@@ -117,7 +117,7 @@ El UART es lentísimo. La decisión no es "el protocolo va por serie": es que el
 
 El núcleo que atiende **duerme** entre pedidos: el UART tiene el bit de "avisá cuando llegue" prendido (`kernel-aarch64/src/uart.rs:85#pub fn enable_rx_interrupt`) y el handler deja los bytes en un anillo, del que el bucle los saca al despertar. Ver [[38-Dormir-en-vez-de-girar]].
 
-Cuántos bytes aguanta ese anillo y **cuántos se perdieron** son estado de la máquina, así que se publican: `describe {what:["cable"]}`, en `kernel-core/src/protocol.rs:1986#fn write_cable`. El portón exige que el contador sea cero.
+Cuántos bytes aguanta ese anillo y **cuántos se perdieron** son estado de la máquina, así que se publican: `describe {what:["cable"]}`, en `kernel-core/src/protocol.rs:1998#fn write_cable`. El portón exige que el contador sea cero.
 
 ## Cómo se ve roto
 

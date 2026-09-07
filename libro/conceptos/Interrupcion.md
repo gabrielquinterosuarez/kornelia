@@ -81,7 +81,7 @@ Y para ver cuánto tiempo se va en handlers: `mpstat -P ALL 1` (columna `%irq`),
 | **Decisiones** | D9 (los handlers los escribe el agente), D17 (el cordón nunca se abandona), D29 (en el núcleo del protocolo manda el kernel) |
 | **Principios** | P3 (el agente es un compilador, no un participante), P4, P6 |
 | **Los verbos** | `irq.install`, `irq.install_raw` |
-| **Dónde vive** | `kernel-core/src/protocol.rs:2067#fn irq_install`, `kernel-x86_64/src/irq.rs:624#const AGENT_VECTOR: u8 = 0x31`, `kernel-aarch64/src/irq.rs:414#const AGENT_PRIORITY: u8 = 0xA0` |
+| **Dónde vive** | `kernel-core/src/protocol.rs:2079#fn irq_install`, `kernel-x86_64/src/irq.rs:624#const AGENT_VECTOR: u8 = 0x31`, `kernel-aarch64/src/irq.rs:414#const AGENT_PRIORITY: u8 = 0xA0` |
 
 **El kernel no le pasa el evento al agente.** No podría: una interrupción se atiende en microsegundos y el agente, que está del otro lado de un cable, contesta en segundos. Así que el agente **escribe el código que corre sin él** y el kernel solo lo pone en la tabla (P3). Cuántos caben es un número chico y explícito: `kernel-core/src/handlers.rs:38#pub const MAX: usize = 8`.
 
