@@ -2935,15 +2935,15 @@ class E1000:
         mine = [d for d in devices
                 if d["class"] == NET_CLASS and d["id"] == E1000_ID]
         if not mine:
-            otras = [d for d in devices if d["class"] == NET_CLASS]
+            others = [d for d in devices if d["class"] == NET_CLASS]
             self.ask(self._id(), "release", {"handle": cfg["handle"]})
-            if otras:
+            if others:
                 # Decir cual es la placa que hay es mucho mas util que "no hay
                 # red": el que lee esto sabe que driver le falta (P4).
-                tiene = ", ".join(f"{d['id'] & 0xFFFF:04x}:{d['id'] >> 16:04x}"
-                                  for d in otras)
+                named = ", ".join(f"{d['id'] & 0xFFFF:04x}:{d['id'] >> 16:04x}"
+                                  for d in others)
                 return (f"hay placa de red pero no es la que este driver sabe"
-                        f" manejar: {tiene}, y este driver es para 8086:100e")
+                        f" manejar: {named}, y este driver es para 8086:100e")
             return "no hay ninguna placa de red en este bus"
         dev = mine[0]
 
@@ -3539,7 +3539,7 @@ def test_udp(proc, timeout, arch, port):
     probe = f"PING {nonce}".encode()
 
     datagram = None
-    for intento in range(4):
+    for attempt in range(4):
         sock.sendto(probe, ("127.0.0.1", port))
         datagram, why = serve_udp(nic, QEMU_GUEST_IP, AGENT_PORT, 4.0)
         if why:
@@ -3548,7 +3548,7 @@ def test_udp(proc, timeout, arch, port):
             return 1
         if datagram:
             break
-        print(f"  (no llego nada; reintento {intento + 1})")
+        print(f"  (no llego nada; reintento {attempt + 1})")
 
     if datagram is None:
         print("  FALLA: el datagrama del host nunca llego a la placa")
@@ -3637,7 +3637,7 @@ TRANSPORT_STOP_AT = 2048
 # la siguiente: si `vistos` es cero el paquete no llego a la placa, si
 # `aceptados` es cero llego pero no era para nosotros, y asi.
 TRANSPORT_COUNTERS_AT = 2064
-TRANSPORT_COUNTERS = ["vueltas", "vistos", "aceptados", "al_buzon", "contestados"]
+TRANSPORT_COUNTERS = ["laps", "seen", "accepted", "to_mailbox", "answered"]
 
 # Los registros que el bucle se guarda de una vuelta a la otra.
 _R_RXOFF, _R_RXBUF, _R_RXIDX, _R_TXOFF, _R_TXIDX = 9, 10, 11, 12, 13
@@ -3653,10 +3653,10 @@ def transport_program(arch, where, bell):
     a = Asm(arch)
     s = {n: n for n in range(9)}   # los registros de descarte, 0..8
 
-    def anotar(cual):
+    def bump(which):
         """Suma uno a un contador. Usa los dos primeros registros de descarte,
         asi que solo se llama donde esos no tienen nada vivo."""
-        a.movi(s[0], where["counters"] + TRANSPORT_COUNTERS.index(cual) * 4)
+        a.movi(s[0], where["counters"] + TRANSPORT_COUNTERS.index(which) * 4)
         a.load(s[1], s[0], 0, 4)
         a.addi(s[1], 1)
         a.store(s[0], 0, s[1], 4)
@@ -3667,14 +3667,14 @@ def transport_program(arch, where, bell):
     a.movi(_R_TXOFF, 0)
     a.movi(_R_TXIDX, 0)
 
-    a.label("vuelta")
-    anotar("vueltas")
+    a.label("loop")
+    bump("laps")
     # ¿Le dijeron que pare? Es lo unico que lo saca del bucle, y existe para que
     # la prueba pueda terminar: un transporte de verdad no para nunca.
     a.movi(s[0], where["stop"])
     a.load(s[1], s[0], 0, 4)
     a.cmpi(s[1], 0)
-    a.bne("listo")
+    a.bne("done")
 
     # --- ¿Llego un paquete? El descriptor lo dice en su byte de estado.
     a.movi(s[0], where["rx_ring"])
@@ -3682,8 +3682,8 @@ def transport_program(arch, where, bell):
     a.load(s[1], s[0], 12, 1)
     a.andi(s[1], 1)                      # el bit de "esto ya esta"
     a.cmpi(s[1], 0)
-    a.beq("respuesta")
-    anotar("vistos")
+    a.beq("reply")
+    bump("seen")
 
     # El paquete lo escribio la placa por DMA: hay que asegurarse de ver los
     # bytes y no lo que hubiera antes.
@@ -3696,17 +3696,17 @@ def transport_program(arch, where, bell):
     # al kernel un CBOR que no lo es.
     a.load(s[1], s[2], 12, 2)            # ¿es IPv4?
     a.cmpi(s[1], ETHERTYPE_IPV4 >> 8 | (ETHERTYPE_IPV4 & 0xFF) << 8)
-    a.bne("soltar")
+    a.bne("drop")
     a.load(s[1], s[2], 26, 4)            # ¿viene de quien esperamos?
     a.movi(s[3], where["peer_ip"])
     a.cmp(s[1], s[3])
-    a.bne("soltar")
+    a.bne("drop")
     a.load(s[1], s[2], 36, 2)            # ¿es para nuestro puerto?
     a.movi(s[3], where["port_be"])
     a.cmp(s[1], s[3])
-    a.bne("soltar")
+    a.bne("drop")
 
-    anotar("aceptados")
+    bump("accepted")
     # Guardarse a quien hay que contestarle. La direccion IP no se copia porque
     # es siempre la misma —y por eso el checksum de la cabecera puede ser
     # constante—, pero la MAC y el puerto salen del paquete que llego.
@@ -3721,15 +3721,15 @@ def transport_program(arch, where, bell):
     # escribir fuera del anillo.
     a.load(s[5], s[2], 42, 2)
     a.cmpi(s[5], TRANSPORT_MAX_REQUEST)
-    a.bhs("soltar")
+    a.bhs("drop")
 
     # --- Del paquete al anillo de pedidos, byte por byte.
     a.movi(s[6], where["mailbox"])
     a.load(s[7], s[6], where["off_req_head"], 4)
     a.movi(s[8], 0)
-    a.label("copia_entra")
+    a.label("copy_in")
     a.cmp(s[8], s[5])
-    a.bhs("copia_entra_fin")
+    a.bhs("copy_in_done")
     a.mov(s[0], s[2])
     a.add(s[0], s[8])
     a.load(s[1], s[0], 44, 1)
@@ -3740,19 +3740,19 @@ def transport_program(arch, where, bell):
     a.add(s[0], s[3])
     a.store(s[0], 0, s[1], 1)
     a.addi(s[8], 1)
-    a.b("copia_entra")
-    a.label("copia_entra_fin")
+    a.b("copy_in")
+    a.label("copy_in_done")
     a.add(s[7], s[5])
     # **Los bytes antes que el indice.** Si el kernel viera el indice nuevo y los
     # bytes viejos leeria basura, y es un nucleo distinto el que mira.
     a.barrier()
     a.store(s[6], where["off_req_head"], s[7], 4)
 
-    anotar("al_buzon")
+    bump("to_mailbox")
     # Y avisarle, que es lo unico que lo despierta.
     a.raw(emit_writes(arch, bell["writes"], con_ret=False))
 
-    a.label("soltar")
+    a.label("drop")
     # Devolver la ranura: primero limpiarla, despues avisar que esta libre.
     a.movi(s[0], where["rx_ring"])
     a.add(s[0], _R_RXOFF)
@@ -3772,32 +3772,32 @@ def transport_program(arch, where, bell):
     a.movi(s[0], where["rdt"])
     a.store(s[0], 0, s[1], 4)
 
-    a.label("respuesta")
+    a.label("reply")
     # --- ¿El kernel dejo algo? Sin interpretarlo: lo que haya, sale.
     a.movi(s[6], where["mailbox"])
     a.load(s[0], s[6], where["off_resp_head"], 4)
     a.load(s[1], s[6], where["off_resp_tail"], 4)
     a.cmp(s[0], s[1])
-    a.beq("vuelta")
+    a.beq("loop")
     a.barrier()
 
     a.mov(s[5], s[0])
     a.sub(s[5], s[1])                    # cuantos bytes hay
     a.trunc32(s[5])                      # ...y los indices dan la vuelta
     a.cmpi(s[5], TRANSPORT_PAYLOAD + 1)
-    a.bhs("recortar")
-    a.b("largo_listo")
-    a.label("recortar")
+    a.bhs("clamp")
+    a.b("length_set")
+    a.label("clamp")
     a.movi(s[5], TRANSPORT_PAYLOAD)      # lo que sobre va en el proximo
-    a.label("largo_listo")
+    a.label("length_set")
 
     a.movi(s[4], where["tx_buf"])
     a.store(s[4], 42, s[5], 2)           # el largo, adelante del contenido
 
     a.movi(s[8], 0)
-    a.label("copia_sale")
+    a.label("copy_out")
     a.cmp(s[8], s[5])
-    a.bhs("copia_sale_fin")
+    a.bhs("copy_out_done")
     a.mov(s[3], s[1])
     a.add(s[3], s[8])
     a.andi(s[3], TRANSPORT_CAP_BITS)
@@ -3808,8 +3808,8 @@ def transport_program(arch, where, bell):
     a.add(s[0], s[8])
     a.store(s[0], 44, s[2], 1)
     a.addi(s[8], 1)
-    a.b("copia_sale")
-    a.label("copia_sale_fin")
+    a.b("copy_out")
+    a.label("copy_out_done")
     a.add(s[1], s[5])
     a.barrier()
     a.store(s[6], where["off_resp_tail"], s[1], 4)
@@ -3831,10 +3831,10 @@ def transport_program(arch, where, bell):
     a.andi(_R_TXIDX, 3)
     a.movi(s[0], where["tdt"])
     a.store(s[0], 0, _R_TXIDX, 4)
-    anotar("contestados")
-    a.b("vuelta")
+    bump("answered")
+    a.b("loop")
 
-    a.label("listo")
+    a.label("done")
     a.ret()
     return a.assemble()
 
@@ -4011,7 +4011,7 @@ def test_transport(proc, timeout, arch, port):
     datagram = bytes([len(request) & 0xFF, len(request) >> 8]) + request
 
     answer, raw_back = None, b""
-    for intento in range(5):
+    for attempt in range(5):
         sock.sendto(datagram, ("127.0.0.1", port))
         deadline = time.time() + 3.0
         while time.time() < deadline:
@@ -4029,7 +4029,7 @@ def test_transport(proc, timeout, arch, port):
                 continue          # todavia no llego entero; viene otro datagrama
         if answer is not None:
             break
-        print(f"  (sin respuesta todavia; reintento {intento + 1})")
+        print(f"  (sin respuesta todavia; reintento {attempt + 1})")
 
     # Lo que el bucle fue anotando. Se lee siempre, no solo cuando falla: es la
     # unica ventana a un codigo que corre en otro nucleo y no habla por el cable.
@@ -4037,10 +4037,10 @@ def test_transport(proc, timeout, arch, port):
                                        "off": TRANSPORT_COUNTERS_AT,
                                        "len": 4 * len(TRANSPORT_COUNTERS)})
     if ok:
-        cuenta = {name: int.from_bytes(r["bytes"][i * 4:i * 4 + 4], "little")
+        counts = {name: int.from_bytes(r["bytes"][i * 4:i * 4 + 4], "little")
                   for i, name in enumerate(TRANSPORT_COUNTERS)}
         print("  lo que anoto el bucle: "
-              + ", ".join(f"{k}={v}" for k, v in cuenta.items()))
+              + ", ".join(f"{k}={v}" for k, v in counts.items()))
 
     if answer is None:
         failures.append("el kernel no contesto por la red")
@@ -4064,15 +4064,15 @@ def test_transport(proc, timeout, arch, port):
     # placa con el bucle todavia girando seria dejarlo escribiendo en memoria
     # que ya no es nuestra: el IOMMU lo frenaria, pero confiar en eso es al
     # reves de como se hace.
-    detenido = False
+    stopped = False
     deadline = time.time() + 5.0
     while time.time() < deadline:
         ok, d = ask_verb(839, "describe", {"what": ["cores"]})
         if ok and any(c["handle"] == core and c["state"] == "idle"
                       for c in (d.get("cores") or [])):
-            detenido = True
+            stopped = True
             break
-    if not detenido:
+    if not stopped:
         failures.append("el transporte no paro cuando se le dijo que parara")
     else:
         print("  y para cuando se le dice: el nucleo volvio a quedar libre")
@@ -4087,6 +4087,17 @@ def test_transport(proc, timeout, arch, port):
     nic.release()
     ask_verb(840, "release", {"handle": mb["handle"]})
     ask_verb(841, "release", {"handle": code_mem["handle"]})
+
+    # Y devolver el buzon tiene que hacer que el kernel **deje de escucharlo**.
+    # No es un detalle: si siguiera adoptado, el kernel estaria leyendo y
+    # escribiendo memoria que ya no es de nadie, y el proximo `mem.claim` se la
+    # daria a otro. Se pregunta por el indice, que es donde el kernel dice si
+    # tiene un segundo canal.
+    ok, d = ask_verb(843, "describe", {})
+    if ok and d.get("channel"):
+        failures.append("solto el buzon y el kernel lo sigue escuchando")
+    elif ok:
+        print("  y al devolver el buzon el kernel dejo de escucharlo")
 
     print()
     if failures:
@@ -4277,7 +4288,7 @@ def test_dma(proc, timeout, arch):
     if got != pattern:
         failures.append("el aparato escribio en memoria que nadie le permitio")
 
-    # Y el intento negado no se pierde: el silicio lo anota, y por eso el agente
+    # Y el attempt negado no se pierde: el silicio lo anota, y por eso el agente
     # puede enterarse de que su driver apunto a donde no debia (P5).
     ok, d = ask_verb(118, "describe", {"what": ["iommu"]})
     if ok and d["iommu"]["faults"]:

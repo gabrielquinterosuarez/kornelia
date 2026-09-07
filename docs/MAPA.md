@@ -30,6 +30,8 @@ Lo verifica `./scripts/check-boundary.sh`, dentro del portón.
 | El segundo canal | `kernel-core/src/channel.rs`. |
 | El reloj | `clock` en el `main.rs` de cada arquitectura. En x86 incluye la calibración contra el contador de ACPI. |
 | El blob de arranque | `boot-uefi/src/lib.rs::load_blob` (traerlo del disco) + `kernel-core/src/lib.rs::run_blob` (ventana de rescate y ejecución) + `protocol.rs::open_blob_gate` (con qué le pide cosas al kernel). |
+| Un driver del agente (NVMe, red) | `scripts/client.py`. **No son del kernel** (D4): usan sólo los once verbos y viven del lado del cliente. Buscar la clase `Nvme` o la clase `E1000`. |
+| El transporte de D5 | `scripts/client.py`: `transport_program` (el bucle, en código máquina) y la clase `Asm` que lo ensambla. El buzón que usa es `kernel-core/src/channel.rs`. |
 | Lo que el agente ve de la máquina | `kernel-core/src/acpi.rs` y `fdt.rs` (los dos dialectos en que una máquina se describe) + `tables.rs::describe` (elegir cuál) + `protocol.rs::describe` (publicar). |
 
 ## El portón

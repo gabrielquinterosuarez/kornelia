@@ -85,7 +85,7 @@ else
         # El payload lleva codigo maquina, asi que es distinto por arquitectura.
         ./scripts/client.py --arch "$arch" --write-payload "$payload_dir/$arch.bin" >/dev/null
         step "arranca $arch y contesta el protocolo"
-        output=$(PAYLOAD="$payload_dir/$arch.bin" timeout 240 ./scripts/client.py --arch "$arch" --smp 4 --what memory,tables,cable --clock --msi --deadline --recover --memory --exec --cores --mailbox --doorbell --handler --during --permission --supervised --on-core --dma --nvme 2>&1 || true)
+        output=$(PAYLOAD="$payload_dir/$arch.bin" timeout 360 ./scripts/client.py --arch "$arch" --smp 4 --what memory,tables,cable --clock --msi --deadline --recover --memory --exec --cores --mailbox --doorbell --handler --during --permission --supervised --on-core --dma --nvme --net --udp --transport 2>&1 || true)
 
         # Lo que tiene que haber dicho en el banner de texto.
         for expected in "architecture: $arch" "memory:" "tables:" \
@@ -183,6 +183,43 @@ else
             || bad "$arch no cargo el payload del disco"
         grep -qFe "y corrio: dejo 0xc0ffee" <<<"$output" \
             || bad "$arch no ejecuto el payload que trajo del disco"
+
+        # Y la placa de red, que es el otro driver escrito con los once verbos.
+        # La prueba no le cree al kernel: se manda un ARP y tiene que volver una
+        # respuesta con una MAC que no teniamos, dirigida a la nuestra —que la
+        # leimos de la placa—, asi que no se puede fabricar de este lado.
+        if ! grep -qFe "red: ok" <<<"$output"; then
+            bad "$arch no pudo manejar la placa de red"
+            printf '%s\n' "$output" | grep -E "FALLA:|placa|ARP" | head -8
+        fi
+        grep -qFe "contesto 10.0.2.2" <<<"$output" \
+            || bad "$arch no recibio la respuesta del otro extremo del cable"
+
+        # Y que por ahi viaje algo con destinatario: un datagrama que sale de un
+        # socket de esta maquina, cruza la red, lo levanta el driver del agente,
+        # y vuelve. Lo que vuelve **no es lo que se mando** —el agente contesta
+        # otra cosa—, porque un eco podria venir de cualquier lado del camino.
+        if ! grep -qFe "udp: ok" <<<"$output"; then
+            bad "$arch no cerro el camino de ida y vuelta con el host"
+            printf '%s\n' "$output" | grep -E "FALLA:|llego|volvio" | head -8
+        fi
+
+        # Y el transporte de D5, que es lo que el proyecto venia prometiendo
+        # desde el primer commit: el kernel contesta el protocolo **por la red**.
+        # El pedido no sale por el cable — sale de un socket, entra por la placa,
+        # y lo mueve al buzon un bucle de codigo maquina del agente en su propio
+        # nucleo. El cable solo arma todo y pregunta despues, que es justo lo que
+        # D17 exige que siga andando.
+        if ! grep -qFe "transporte: ok" <<<"$output"; then
+            bad "$arch no contesta el protocolo por la red"
+            printf '%s\n' "$output" | grep -E "FALLA:|anoto el bucle|por la RED" | head -8
+        fi
+        grep -qFe "por la RED contesto: id=4242" <<<"$output" \
+            || bad "$arch no contesto por la red el pedido que se le hizo por la red"
+        # Y que lo que contesto sea la maquina de verdad y no un eco: el reloj
+        # solo lo sabe el kernel.
+        grep -qE "clock=\{'kind': '(tsc|cntpct)'" <<<"$output" \
+            || bad "$arch contesto por la red algo que no salio del kernel"
 
         # Y que no se haya perdido **ni un byte** del cable. Un pedido al que le
         # falta un byte se ve como una maquina colgada, y sin esto seria un

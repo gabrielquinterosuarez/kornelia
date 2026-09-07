@@ -1403,6 +1403,18 @@ fn release<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, hw: &Hardware) {
         let _ = unsafe { p.set_dma_access(hw, g.device, g.start, g.bytes, false) };
     }
 
+    // Y si esa memoria era el buzon, el kernel deja de escuchar ahi. Es la
+    // misma razon que las dos revocaciones de arriba, y faltaba: un buzon que
+    // sobreviviera al `release` seguiria siendo leido **y escrito** por el
+    // kernel en memoria que ya no es de nadie — y el proximo `mem.claim` se la
+    // daria a otro, que veria sus bytes interpretados como pedidos y sus
+    // paginas pisadas con respuestas. `listen` entrega; `release` devuelve.
+    //
+    // Va por handle y no a ciegas, que es por lo que `forget` lo pide: si el
+    // agente entrego un buzon nuevo sin soltar el viejo, soltar el viejo no
+    // puede llevarse puesto al que esta en uso.
+    channel::forget(handle);
+
     if !claims::release(handle) {
         return reply_failure(p, id, claims::Error::NoSuchHandle);
     }

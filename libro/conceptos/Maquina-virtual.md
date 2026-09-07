@@ -87,7 +87,9 @@ systemd intenta ofrecer SSH por vsock —así se entra a una VM que ni siquiera 
 > [!tip] Por qué esto le importa a este libro
 > Es la forma exacta del problema que plantea **D5**: *el [[UART]] es el cordón umbilical, no el transporte; el agente escribe el transporte rápido.* Un cable serie a 115.200 baudios alcanza para hablar, no para mover un volcado de memoria.
 >
-> vsock es cómo se ve ese transporte rápido **cuando la máquina es virtual**: un aparato de cola en memoria, sin cables, sin protocolo de red, y sin nada que descubrir. Y ahí está lo honesto — **Kornelia no lo tiene**. El transporte rápido que D5 le deja al agente no lo escribió nadie todavía, así que hoy el único camino sigue siendo el cordón umbilical.
+> vsock es cómo se ve ese transporte rápido **cuando la máquina es virtual**: un aparato de cola en memoria, sin cables, sin protocolo de red, y sin nada que descubrir.
+>
+> Kornelia no usa vsock, pero **ya tiene su transporte rápido**: el agente escribió un driver de red y, encima, un bucle de código máquina propio que mueve bytes entre la placa y el buzón que le entregó con `listen`. El kernel contesta el protocolo por ahí sin enterarse de que del otro lado hay una red. Lo que vsock ahorraría es justamente lo que ese driver tuvo que hacer: recorrer el bus, armar anillos, declarar DMA.
 
 ## Cómo lo hace Linux
 
@@ -106,7 +108,7 @@ Kornelia **no virtualiza nada**: es un huésped, no un hipervisor. La VM es dón
 | | |
 |---|---|
 | **Emulado por omisión** | `./scripts/run-x86_64.sh`, `./scripts/run-aarch64.sh` |
-| **Sobre el silicio** | `./scripts/client.py --kvm` — "que el codigo lo ejecute el silicio de verdad, no la emulacion" (`scripts/client.py:3238#que el codigo lo ejecute el silicio`) |
+| **Sobre el silicio** | `./scripts/client.py --kvm` — "que el codigo lo ejecute el silicio de verdad, no la emulacion" (`scripts/client.py:4826#que el codigo lo ejecute el silicio`) |
 | **Por qué las dos** | Emulado, corre aarch64 en una máquina x86 — que es lo que hace posible D22 (las dos arquitecturas en verde desde el primer commit) sin tener dos máquinas. |
 
 Que `--kvm` exista como opción aparte no es un detalle de rendimiento: **es una prueba distinta**. Emulado, el código del agente lo interpreta un programa; con KVM lo ejecuta el procesador de verdad, con su [[Cache|caché]] real, su predicción de saltos y su ejecución fuera de orden. Un kernel que anda emulado y no anda con KVM tiene un bug de verdad, casi siempre de [[42-Ordenamiento-de-memoria|ordenamiento de memoria]].

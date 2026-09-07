@@ -31,7 +31,7 @@ Cada BAR son 4 bytes, y los bits de abajo **no son dirección**: son la declarac
 | 3 | *Prefetchable*: leer no tiene efectos colaterales y las escrituras se pueden combinar. |
 | resto | La dirección base, alineada al tamaño de la región. |
 
-Un BAR de 64 bits que se lee como si fuera de 32 da una dirección **truncada**, que es peor que ninguna: apunta a algún lado. Por eso el recorrido de Kornelia mira esos dos bits antes de seguir: `scripts/client.py:1646#wide = (bar0 & 0x6) == 0x4`.
+Un BAR de 64 bits que se lee como si fuera de 32 da una dirección **truncada**, que es peor que ninguna: apunta a algún lado. Por eso el recorrido de Kornelia mira esos dos bits antes de seguir: `scripts/client.py:1923#wide = (bar0 & 0x6) == 0x4`.
 
 ### Prefetchable no es una optimización menor
 
@@ -85,14 +85,14 @@ pci_set_master(pdev);                           // el bit de bus master, para DM
 |---|---|
 | **Decisiones** | D4 (el agente lee los BARs), D12 (MMIO no cacheable), P1, P4 |
 | **Los verbos** | `mem.read` sobre la ventana ECAM para leer el BAR; `mem.claim {at}` para alcanzar lo que apunta |
-| **Dónde vive** | `scripts/client.py:1616#def pcie_scan` (del lado del agente), `kernel-core/src/protocol.rs:1129#p.map_device` (del lado del kernel) |
+| **Dónde vive** | `scripts/client.py:1893#def pcie_scan` (del lado del agente), `kernel-core/src/protocol.rs:1130#p.map_device` (del lado del kernel) |
 
 El kernel no sabe qué es un BAR. Lo que sabe es entregar un rango que el agente pidió, y para eso el BAR ya está leído: el agente lo lee del espacio de configuración, le enmascara los bits de tipo, y hace `mem.claim {at: esa_dirección}`.
 
 **Lo que devuelve no es `mmio`, es `unreported`.** Un BAR que el firmware no listó en el mapa cae en un hueco, y ahí el kernel entrega el rango **y** la advertencia de que la máquina nunca dijo qué hay: `kernel-core/src/memory.rs:131#Kind::Unreported`. Alcanzarlo no es enterarse (P4). Ver [[18-Lo-que-la-maquina-no-dice]].
 
 > [!warning] El caso real: un BAR más arriba que el mapa
-> En aarch64 los BARs de PCIe caen en **512 GiB**, y el mapa de memoria que da el firmware llega a **257**. El identity map se calcula a partir de ese mapa, así que el rango del controlador [[NVMe]] ni siquiera estaba mapeado: `mem.claim` contestaba `unmapped` y el aparato era **inalcanzable**. O sea, el kernel era la razón por la que no se podía usar un aparato, que es exactamente lo que prohíbe **P1**. La salida no fue agrandar el identity map —512 GiB de tablas por si acaso— sino **mapear y reintentar una vez**: si el reclamo falla por `unmapped` y cae más arriba de lo que las tablas cubren, el kernel mapea ese gigabyte como dispositivo y vuelve a intentar (`kernel-core/src/protocol.rs:1129#p.map_device`, y el registro de lo agregado en `kernel-core/src/paging.rs:73#pub fn note_mapped`). Como dispositivo y no como RAM porque **no se sabe qué hay ahí**; y se sigue entregando como `unreported`, porque haberlo alcanzado no cambia lo que la máquina dijo.
+> En aarch64 los BARs de PCIe caen en **512 GiB**, y el mapa de memoria que da el firmware llega a **257**. El identity map se calcula a partir de ese mapa, así que el rango del controlador [[NVMe]] ni siquiera estaba mapeado: `mem.claim` contestaba `unmapped` y el aparato era **inalcanzable**. O sea, el kernel era la razón por la que no se podía usar un aparato, que es exactamente lo que prohíbe **P1**. La salida no fue agrandar el identity map —512 GiB de tablas por si acaso— sino **mapear y reintentar una vez**: si el reclamo falla por `unmapped` y cae más arriba de lo que las tablas cubren, el kernel mapea ese gigabyte como dispositivo y vuelve a intentar (`kernel-core/src/protocol.rs:1130#p.map_device`, y el registro de lo agregado en `kernel-core/src/paging.rs:73#pub fn note_mapped`). Como dispositivo y no como RAM porque **no se sabe qué hay ahí**; y se sigue entregando como `unreported`, porque haberlo alcanzado no cambia lo que la máquina dijo.
 
 **Qué se quitó:** no hay reasignación de BARs, ni ventanas de puente calculadas por el kernel, ni un asignador de espacio de direcciones. Se acepta lo que dejó el firmware. Si algún día hace falta reasignar, lo hace el agente: tiene `mem.write` sobre la ventana de configuración, que es todo lo que se necesita (P2).
 

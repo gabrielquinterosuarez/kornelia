@@ -81,9 +81,9 @@ Acá la palabra tiene una consecuencia directa, y es de las más fuertes del pro
 
 | Canal | Verbo | Dónde vive |
 |---|---|---|
-| Registros | `mem.claim` + `mem.read`/`mem.write` con `width` | `kernel-core/src/protocol.rs:275#"mem.claim"` |
-| Avisos | `irq.install` | `kernel-core/src/protocol.rs:282#"irq.install"` |
-| DMA | `dma.allow` | `kernel-core/src/protocol.rs:284#"dma.allow"` |
+| Registros | `mem.claim` + `mem.read`/`mem.write` con `width` | `kernel-core/src/protocol.rs:276#"mem.claim"` |
+| Avisos | `irq.install` | `kernel-core/src/protocol.rs:283#"irq.install"` |
+| DMA | `dma.allow` | `kernel-core/src/protocol.rs:285#"dma.allow"` |
 | Descubrimiento | `describe {what:["pcie","tables"]}` | [[Procfs-y-sysfs]] tiene el contraste |
 
 Visto así, **la superficie de once verbos deja de parecer arbitraria**: son los cuatro canales de un aparato, más memoria, más núcleos, más ejecutar código. No hay nada más que un kernel *tenga* que dar.

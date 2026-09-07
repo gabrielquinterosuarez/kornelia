@@ -32,7 +32,7 @@ La respuesta a la pregunta era una línea. Lo que valía era **el concepto que l
 
 Quedó escrito en [[Maquina-virtual]], sección *El canal que no es una red*: qué es un CID, por qué no hay ruteo, y que lo provee un aparato paravirtualizado que no existe en el mundo físico.
 
-Y ahí apareció la conexión que hace que valga la pena: **vsock es la forma exacta del problema que plantea D5.** *El [[UART]] es el cordón umbilical, no el transporte; el agente escribe el transporte rápido.* Un cable serie a 115.200 baudios alcanza para hablar, no para mover un volcado de memoria. vsock es cómo se ve ese transporte rápido cuando la máquina es virtual — y **Kornelia no lo tiene**: el transporte rápido que D5 le deja al agente no lo escribió nadie todavía.
+Y ahí apareció la conexión que hace que valga la pena: **vsock es la forma exacta del problema que plantea D5.** *El [[UART]] es el cordón umbilical, no el transporte; el agente escribe el transporte rápido.* Un cable serie a 115.200 baudios alcanza para hablar, no para mover un volcado de memoria. vsock es cómo se ve ese transporte rápido cuando la máquina es virtual — y Kornelia no lo usa, aunque desde entonces **sí tiene** transporte rápido: por red, con un driver que escribió el agente. Lo que vsock ahorraría es justamente lo que ese driver tuvo que hacer.
 
 También quedó la fila en la tabla de síntomas de [[P00-Armar-la-VM-de-practicas]], y cómo habilitarlo con `-device vhost-vsock-pci,guest-cid=3` para quien quiera verlo andar.
 

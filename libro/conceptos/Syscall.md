@@ -70,7 +70,7 @@ Tres cosas de Linux que vale conocer:
 |---|---|
 | **Decisiones** | D27 (`supervised` necesita una puerta de vuelta), D3 (nada específico de arquitectura en el protocolo), D18 (el blob no necesita puerta) |
 | **Principios** | **P4 — la máquina se describe a sí misma**; P3 |
-| **Dónde vive** | `kernel-x86_64/src/exec.rs:57#pub const WINDOW_VECTOR: usize = 0x80`, `kernel-aarch64/src/exec.rs:45#pub const RETURN_BYTES`, `kernel-core/src/protocol.rs:735#w.bytes(P::EXEC_RETURN)` |
+| **Dónde vive** | `kernel-x86_64/src/exec.rs:57#pub const WINDOW_VECTOR: usize = 0x80`, `kernel-aarch64/src/exec.rs:45#pub const RETURN_BYTES`, `kernel-core/src/protocol.rs:736#w.bytes(P::EXEC_RETURN)` |
 
 Acá no hay tabla de syscalls, porque no hay servicios que pedir desde `exec`: los once verbos llegan por el cable, no por un trap. Lo que hay es **una sola puerta con un solo significado**: *terminé*.
 
@@ -86,7 +86,7 @@ Y acá está lo que hace a esta nota parte de este libro:
 
 Un detalle de x86_64 que es puro sistema: la compuerta es de **interrupción**, no de trap, así que se entra con las [[Interrupcion|interrupciones]] cerradas. Y el CPU cambia solo a la pila de anillo 0 que está en el TSS (`kernel-x86_64/src/gdt.rs:154#tss.rsp[0]`). Sin eso, la ventanilla de vuelta aterrizaría **sobre la pila del agente** — que es justo la que puede estar rota.
 
-Y un contraste que aclara todo el concepto: **el blob no usa ventanilla.** El blob de D18 corre con privilegio completo y en el mismo [[Espacio-de-direcciones|espacio de direcciones]], así que para hablarle al kernel **llama a una función**: recibe su dirección en el segundo registro de argumento y la invoca como a cualquier otra (`kernel-core/src/protocol.rs:195#no le hace falta una ventanilla`). La ventanilla no existe para "hablarle al kernel": existe porque **hay una frontera de privilegio que cruzar**. Sin frontera, no hace falta.
+Y un contraste que aclara todo el concepto: **el blob no usa ventanilla.** El blob de D18 corre con privilegio completo y en el mismo [[Espacio-de-direcciones|espacio de direcciones]], así que para hablarle al kernel **llama a una función**: recibe su dirección en el segundo registro de argumento y la invoca como a cualquier otra (`kernel-core/src/protocol.rs:196#no le hace falta una ventanilla`). La ventanilla no existe para "hablarle al kernel": existe porque **hay una frontera de privilegio que cruzar**. Sin frontera, no hace falta.
 
 ## Cómo se ve roto
 

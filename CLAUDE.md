@@ -269,11 +269,46 @@ que hay— en vez de la que QEMU pone por omisión, que es distinta en cada una
 (`e1000e` en q35, `virtio-net` en virt). Con una sola placa hay **un** driver y
 anda en las dos, que es la regla que no se rompe (D22).
 
-**Ojo: del blob está el mecanismo, no el contenido.** No hay driver de red ni de
-NVMe ni un `blob.bin` en el repo — el único blob que existe es el de prueba que
-genera `client.py`. Los drivers que nombran D19 y D20 son lo que *va* a ir ahí.
-Así que hoy el único transporte es el cordón umbilical: el transporte rápido que
-D5 le deja al agente todavía no lo escribió nadie.
+**Y el kernel contesta el protocolo por la red** (`--transport`), que es lo que
+el proyecto venía prometiendo desde el primer commit y no tenía. Encima del
+driver corre un **bucle de código máquina del agente** en un núcleo que reclamó
+(D29: ahí manda él), que mueve bytes entre la placa y el buzón que le entregó
+con `listen`. El kernel contesta por el buzón sin enterarse de que del otro lado
+hay una red (D4). La prueba no admite interpretación: **el pedido no sale por el
+cable** — sale de un socket del host, cruza la red, y la respuesta vuelve por el
+mismo camino. El cable sólo arma todo y pregunta después, que es justo lo que
+D17 exige que siga andando.
+
+Gira en vez de esperar una interrupción porque esta placa no tiene MSI, y el
+camino viejo pide interpretar AML. Un núcleo que gira es exactamente para lo
+que sirve un núcleo propio.
+
+**Y ahí aparece un hecho del diseño que no estaba dicho: el buzón es un flujo de
+bytes, no una cola de mensajes.** El kernel sabe dónde termina un pedido porque
+escanea el CBOR a medida que entra (`cbor::scan`); del lado del agente hacer lo
+mismo sería un decodificador de CBOR en código máquina. Así que el transporte
+**no interpreta nada** — es un caño: manda los bytes que haya cuando los haya, y
+los mensajes los arman las dos puntas. Un pedido o una respuesta pueden venir
+partidos en varios datagramas, y el cliente los junta hasta que el CBOR cierra.
+
+Los datagramas de vuelta van de **tamaño fijo, con el largo adelante**. No es
+capricho: así la cabecera de IP entera —incluido su checksum, que es lo único
+que este transporte tendría que calcular— es constante, y la arma el cliente una
+vez sola. El bucle sólo copia bytes.
+
+**Y hay un ensamblador chiquito** (`Asm` en `client.py`), porque `emit_writes`
+alcanzaba mientras el código del agente fuera "escribí esto acá". Esto tiene
+bucles, condiciones y dos copias de largo variable. Está verificado instrucción
+por instrucción contra `clang`: en aarch64 los bytes son idénticos, y en x86_64
+significan lo mismo con codificaciones más largas — los saltos van de tamaño
+fijo **a propósito**, para que las etiquetas no se muevan entre las dos pasadas.
+
+**Ojo: del blob sigue estando el mecanismo, no el contenido.** No hay un
+`blob.bin` en el repo — el único blob que existe es el de prueba que genera
+`client.py`. Los dos drivers que nombran D19 y D20 **ya existen** (NVMe y red,
+los dos con los once verbos), pero viven en Python del lado del cliente. Lo que
+falta es mudarlos adentro del blob: la lógica ya está probada de punta a punta y
+lo único que cambia es quién consigue los recursos.
 
 El portón es `./scripts/check.sh`: frontera + idioma + **las citas del libro** +
 los tests + compila las
@@ -289,7 +324,18 @@ otra, ni ninguna deuda abierta** (§7 de `docs/DISENO.md` está entera en resuel
 Las preguntas abiertas siguen en §8. Lo que sigue son cosas que ninguna deuda
 cubría todavía:
 
-1. **Un aparato PCIe ya puede interrumpir al agente** (`irq.install {msi:true}`): los aparatos
+1. **Mudar los dos drivers al blob.** NVMe y red andan y están probados de punta a
+   punta, pero viven en Python del lado del cliente. D19 y D20 los quieren
+   compilados adentro de `blob.bin`, que es lo que haría que una máquina arranque
+   con red **sin que haya nadie del otro lado del cable**. La lógica no cambia:
+   cambia quién consigue los recursos. Es el paso que vuelve útil todo lo demás.
+2. **El buzón entrega bytes, no mensajes, y por ahora eso lo paga el agente.** El
+   transporte no puede saber dónde termina una respuesta sin decodificar CBOR, así
+   que es un caño y quien arma los mensajes son las puntas. Anda, y para el cliente
+   es invisible. Si algún día molesta, la salida no es que el agente decodifique:
+   es que el acuerdo de D28 publique un largo — y eso es cambiarle la superficie al
+   kernel, así que no se hace sin un motivo que hoy no está.
+3. **Un aparato PCIe ya puede interrumpir al agente** (`irq.install {msi:true}`): los aparatos
    de hoy no tienen cable, escriben un dato en una dirección. Lo que **no** está es el camino
    viejo (INTx), y no es olvido: saber qué cable le toca a un aparato pide interpretar AML, un
    lenguaje entero adentro de ACPI. MSI lo hace innecesario.
@@ -347,6 +393,25 @@ Están acá para no volver a pagarlos:
   CBOR que ya no venía. Y había un contador de bytes perdidos que **nadie podía
   ver**: ahora se publica en `describe {what:["cable"]}`, y el portón exige que
   sea cero.
+- **Un buffer de transmisión es uno solo, y el paquete anterior sigue ahí.** El
+  transporte arma sus respuestas sobre una cabecera fija que se escribe una vez
+  al principio. Pero mandar un paquete —el ARP que se manda antes de soltar el
+  bucle, para que el otro extremo aprenda nuestra dirección— **arma ese paquete
+  en el mismo buffer**, así que le pisaba la cabecera entera. El síntoma no se
+  parece a la causa: el bucle contaba respuestas mandadas, la placa las mandaba
+  de verdad, el IOMMU las dejaba pasar, y del otro lado no llegaba nada — porque
+  lo que salía tenía la cabecera de un ARP. Lo separó tener **contadores en
+  memoria**: el bucle no puede imprimir nada, y hacerlo por el cable desde
+  adentro cambiaría los tiempos (eso ya está más abajo en esta lista).
+- **Restar dos índices que dan la vuelta no es restar.** Los índices del buzón
+  son contadores de 32 bits y el kernel los resta con `wrapping_sub`. Leerlos en
+  registros de 64 bits y restarlos ahí da, justo después de la vuelta, un número
+  enorme en vez de una diferencia chica. Pasaría **una vez cada 4 GiB** de
+  tráfico: la clase de bug que no aparece en ninguna prueba y sí en producción.
+  Y en x86_64 no se arregla enmascarando con una constante, porque el inmediato
+  de 32 bits se extiende **con signo** y `0xFFFFFFFF` se vuelve todo unos; se
+  arregla escribiendo la mitad de abajo del registro, que pone la de arriba en
+  cero.
 - **La ABI de C de este kernel en x86_64 no es la de Linux: es la de Windows.**
   El target es `x86_64-unknown-uefi`, y ahí `extern "C"` pasa los argumentos por
   **RCX, RDX, R8, R9** —no RDI/RSI— y además exige que quien llama reserve 32
@@ -481,5 +546,8 @@ SOCKET=/tmp/kornelia.sock ./scripts/run-x86_64.sh &   # el cable sale por un soc
 ./scripts/client.py --kvm --exec    # que el codigo lo corra el silicio, no la emulacion
 ./scripts/client.py --supervised    # D27: correr sin privilegio y ver el fault
 ./scripts/client.py --smp 4 --on-core   # mandar el codigo a otro nucleo
+./scripts/client.py --net           # el driver de red: un ARP de ida y vuelta
+./scripts/client.py --udp           # un datagrama del host al agente y la vuelta
+./scripts/client.py --transport     # D5: el kernel contesta el protocolo por red
 ./scripts/check.sh                  # el porton entero
 ```

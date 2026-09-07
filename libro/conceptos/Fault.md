@@ -79,11 +79,11 @@ Ahí Linux mata la tarea, marca el kernel como contaminado y **la máquina sigue
 |---|---|
 | **Decisiones** | D7 (faults estructurados), D11 (el kernel no deshace, pero cuenta) |
 | **Principios** | **P5 — los faults son datos, no muerte**; P4 (los números crudos viajan sin traducir); P2 |
-| **Dónde vive** | `kernel-core/src/fault.rs:24#pub enum Cause`, `kernel-core/src/fault.rs:73#pub struct Fault`, `kernel-core/src/protocol.rs:1703#fn write_outcome` |
+| **Dónde vive** | `kernel-core/src/fault.rs:24#pub enum Cause`, `kernel-core/src/fault.rs:73#pub struct Fault`, `kernel-core/src/protocol.rs:1704#fn write_outcome` |
 
 El agente **es un generador estocástico de código máquina**: va a estar mal seguido. Si el error se lleva puesta la máquina, el agente no se entera de nada y no puede corregir. Si el error vuelve como un dato, es una iteración más. Toda la nota cabe en esa frase.
 
-Así que un `exec` que falla **contesta**, con `ok: true` — el pedido se atendió; que el código haya fallado es su resultado, no un fallo del pedido (`kernel-core/src/protocol.rs:1664#es su resultado, y va adentro`). La respuesta trae:
+Así que un `exec` que falla **contesta**, con `ok: true` — el pedido se atendió; que el código haya fallado es su resultado, no un fallo del pedido (`kernel-core/src/protocol.rs:1665#es su resultado, y va adentro`). La respuesta trae:
 
 - **`cause`** normalizada a algo que significa lo mismo en toda arquitectura (`page-fault`, `invalid-opcode`, `divide-by-zero`, `protection`…).
 - **`raw` y `detail`** — los números que usó **esta** máquina, sin traducir. Si el kernel no sabe qué significan, la causa es `unknown` y los números viajan igual: no se le inventa significado (P4).
