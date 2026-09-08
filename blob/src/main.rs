@@ -32,6 +32,7 @@
 mod cbor;
 mod gate;
 mod kernel;
+mod nvme;
 
 use core::panic::PanicInfo;
 
@@ -53,6 +54,10 @@ const NO_ANSWER: u64 = 0xBAD5;
 const NO_PCIE: u64 = 0xBADB;
 /// Y lo que deja si recorrio el bus y no habia ningun NVMe.
 const NO_DISK: u64 = 0xBADD;
+/// Lo que deja si el controlador no llego a estar listo.
+const NO_START: u64 = 0xBAD7;
+/// Y si no dijo de que tamano es.
+const NO_SIZE: u64 = 0xBAD6;
 
 /// Como se identifica un controlador NVMe en el bus: **no** por fabricante y
 /// modelo, sino por lo que hace. Los tres bytes son clase, subclase e interfaz
@@ -130,6 +135,21 @@ fn find_nvme(k: &mut kernel::Session, ecam: u64) -> Option<u64> {
     found
 }
 
+/// Donde tiene sus registros el aparato: su primer BAR.
+///
+/// Un BAR de 64 bits ocupa **dos** ranuras —los bits 2:1 en `10` dicen que la
+/// mitad de arriba esta en la siguiente— y leer solo la primera da una direccion
+/// truncada, que es peor que ninguna.
+fn bar0(k: &mut kernel::Session, ecam: u64, bdf: u64) -> Option<u64> {
+    let cfg = k.claim_at(ecam, BUS_WINDOW)?;
+    let at = (bdf >> 3) << 15;
+    let low = k.read_u32(cfg.handle, at + 0x10)?;
+    let wide = (low & 0x6) == 0x4;
+    let high = if wide { k.read_u32(cfg.handle, at + 0x14)? } else { 0 };
+    k.release(cfg.handle);
+    Some(((high as u64) << 32) | ((low & !0xF) as u64))
+}
+
 fn run(base: u64) -> ! {
     // Que la direccion propia haya llegado se comprueba, no se supone: si el
     // acuerdo de entrada se rompiera, todo lo que sigue apuntaria a cualquier
@@ -150,11 +170,28 @@ fn run(base: u64) -> ! {
         gate::finish(NO_DISK);
     };
 
-    // Se devuelve el `bdf` para que se pueda comprobar desde afuera **cual**
-    // encontro, y no solo que encontro algo: en las dos maquinas de prueba el
-    // NVMe esta en un lugar distinto del bus, asi que un numero horneado no
-    // podria dar bien en las dos.
-    gate::finish(OK | (bdf << 16));
+    // Donde estan sus registros. Se vuelve a mirar el bus porque `find_nvme`
+    // devolvio la ventana de configuracion antes de salir: lo que se toma se
+    // devuelve, y despues se pide de nuevo lo que haga falta.
+    let Some(window) = bar0(&mut k, ecam, bdf) else {
+        gate::finish(NO_DISK);
+    };
+
+    let Some(mut disk) = nvme::Nvme::start(&mut k, bdf, window) else {
+        gate::finish(NO_START);
+    };
+
+    let Some(ns) = disk.namespace(&mut k, 1) else {
+        gate::finish(NO_SIZE);
+    };
+
+    // Se devuelve **cuantos bloques tiene el disco**, que es un dato de la
+    // maquina y no del blob: sale de la ficha que el controlador escribio por
+    // DMA. El disco de prueba mide 16 MiB, asi que tienen que ser 32768 de 512
+    // bytes — y eso se puede comprobar contra el `dd` que lo creo, que es un
+    // lugar completamente distinto.
+    let _ = ns.block_bytes;
+    gate::finish(OK | (ns.blocks << 16));
 }
 
 /// Un panic no puede contar nada —no hay por donde—, asi que sale por la misma

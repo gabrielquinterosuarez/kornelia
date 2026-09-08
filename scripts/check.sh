@@ -378,15 +378,20 @@ else
         fi
         output=$(BLOB="target/blob-$arch.bin" timeout 240 ./scripts/client.py \
             --arch "$arch" --what claims 2>&1 || true)
-        # Deja `0xb10b` abajo y **el bdf del NVMe arriba**. Se exige que el bdf
-        # no sea cero, o sea que haya encontrado algo: el aparato cero de
-        # cualquier bus es el puente, nunca un disco.
+        # Deja `0xb10b` abajo y **cuantos bloques tiene el disco** arriba.
         #
-        # Y el numero es distinto en cada arquitectura —0x20 en x86_64, 0x18 en
-        # aarch64, que es donde `--lspci` los ve— asi que no puede estar
-        # horneado: un valor fijo no daria bien en las dos.
-        if ! grep -qE "the blob returned, leaving 0x[0-9a-f]{2,}b10b" <<<"$output"; then
-            bad "$arch: el blob compilado no encontro el disco"
+        # 0x8000 son 32768 bloques de 512 bytes, o sea 16 MiB: exactamente el
+        # disco que crea el `dd` de `run-$arch.sh`. Ese numero el blob no lo
+        # puede saber — sale de la ficha que el controlador escribio por DMA
+        # despues de que el blob lo reseteara y le armara las colas. O sea que
+        # esta linea comprueba el driver entero contra un hecho que vive en otro
+        # archivo.
+        #
+        # Si cambia el tamano del disco de prueba, esto falla: hay que cambiar
+        # el numero aca tambien. Es a proposito — que se entere el porton y no
+        # el proximo que lea un valor que ya no quiere decir nada.
+        if ! grep -qFe "the blob returned, leaving 0x8000b10b" <<<"$output"; then
+            bad "$arch: el blob compilado no manejo el disco (o el disco cambio de tamano)"
             printf '%s\n' "$output" | grep -aE "blob|faulted|leaving" | head -4
         fi
         grep -qFe "ok=True" <<<"$output" \

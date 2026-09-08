@@ -30,7 +30,7 @@ Lo verifica `./scripts/check-boundary.sh`, dentro del portón.
 | IOMMU | `kernel-x86_64/src/iommu.rs` (VT-d) y `kernel-aarch64/src/smmu.rs` (SMMUv3). Hacen lo mismo y no se parecen en nada: empezar por el de x86, que es el más simple. |
 | El segundo canal | `kernel-core/src/channel.rs`. |
 | El reloj | `clock` en el `main.rs` de cada arquitectura. En x86 incluye la calibración contra el contador de ACPI. |
-| Lo que va adentro del blob | `blob/src/main.rs` (qué hace) + `blob/src/gate.rs` (las dos puertas) + `blob/blob.ld` (cómo se arma). Se compila con `./scripts/build-blob.sh <arch>`. |
+| Lo que va adentro del blob | `blob/src/main.rs` (qué hace) + `blob/src/nvme.rs` (el driver de disco) + `blob/src/kernel.rs` (cómo le pide verbos) + `blob/src/gate.rs` (las dos puertas) + `blob/blob.ld` (cómo se arma). Se compila con `./scripts/build-blob.sh <arch>`. |
 | El blob de arranque | `boot-uefi/src/lib.rs::load_blob` (traerlo del disco) + `kernel-core/src/lib.rs::run_blob` (ventana de rescate y ejecución) + `protocol.rs::open_blob_gate` (con qué le pide cosas al kernel). |
 | Un driver del agente (NVMe, red) | `scripts/client.py`. **No son del kernel** (D4): usan sólo los once verbos y viven del lado del cliente. Buscar la clase `Nvme` o la clase `E1000`. |
 | El transporte de D5 | `scripts/client.py`: `transport_program` (el bucle, en código máquina) y la clase `Asm` que lo ensambla. El buzón que usa es `kernel-core/src/channel.rs`. |
@@ -50,7 +50,7 @@ Lo verifica `./scripts/check-boundary.sh`, dentro del portón.
 4. **Los tests** de `kernel-core`.
 5. **Compilan las dos.**
 6. **Arrancan las dos en QEMU y contestan el protocolo**, con `scripts/client.py`.
-7. **El blob compilado** (`blob/`) corre y le pide memoria al kernel, en las dos.
+7. **El blob compilado** (`blob/`) recorre el bus, maneja el disco y dice de qué tamaño es, en las dos.
 8. **El blob se carga, corre, le habla al kernel y se puede cancelar** (D18), en las dos.
 9. **Y aarch64 arranca una vez más sin ACPI**, para que se describa por device
    tree. Ahí se le exige el IOMMU contra un aparato de verdad, que es la prueba

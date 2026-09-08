@@ -11,7 +11,7 @@ use crate::cbor::{Reader, Writer};
 use crate::gate;
 
 /// Cuanto ocupa el pedido mas grande que arma este blob.
-const REQUEST_ROOM: usize = 96;
+const REQUEST_ROOM: usize = 128;
 /// Y cuanto lugar se deja para una respuesta. `describe` puede devolver mucho,
 /// pero este blob solo pide sus secciones chicas.
 const REPLY_ROOM: usize = 512;
@@ -143,12 +143,13 @@ impl Session {
         Some(Claim { handle, start })
     }
 
-    /// Lee cuatro bytes de un reclamo, con accesos de cuatro bytes.
+    /// Lee un registro con el ancho **exacto** que el aparato pide.
     ///
     /// El ancho no es un detalle: un registro de dispositivo que solo acepta
     /// lecturas de 32 bits, leido de a un byte, devuelve ceros en x86_64 y mata
-    /// el bus en aarch64.
-    pub fn read_u32(&mut self, handle: u64, off: u64) -> Option<u32> {
+    /// el bus en aarch64. El mismo pedido: en una arquitectura miente, en la
+    /// otra mata.
+    pub fn read_reg(&mut self, handle: u64, off: u64, width: u64) -> Option<u64> {
         let id = self.id();
         let mut w = Writer::<REQUEST_ROOM>::new();
         w.array(3);
@@ -160,16 +161,70 @@ impl Session {
         w.text("off");
         w.uint(off);
         w.text("len");
-        w.uint(4);
+        w.uint(width);
         w.text("width");
-        w.uint(4);
+        w.uint(width);
         let mut r = self.send(w.done()?)?;
         r.find("bytes")?;
         let got = r.bytes()?;
-        if got.len() < 4 {
+        if got.len() as u64 != width {
             return None;
         }
-        Some(u32::from_le_bytes([got[0], got[1], got[2], got[3]]))
+        let mut value: u64 = 0;
+        // Little-endian, de a un byte: armarlo asi evita depender de que el
+        // largo sea uno de los que `from_le_bytes` sabe.
+        for (i, b) in got.iter().enumerate() {
+            value |= (*b as u64) << (8 * i);
+        }
+        Some(value)
+    }
+
+    /// Atajo para lo mas comun: un registro de 32 bits.
+    pub fn read_u32(&mut self, handle: u64, off: u64) -> Option<u32> {
+        self.read_reg(handle, off, 4).map(|v| v as u32)
+    }
+
+    /// Escribe un registro con el ancho exacto que el aparato pide.
+    ///
+    /// Partir una escritura de 64 bits en dos de 32 no es lo mismo: hay
+    /// registros que solo se toman enteros, y el aparato se queda con media
+    /// direccion sin avisar.
+    pub fn write_reg(&mut self, handle: u64, off: u64, value: u64, width: u64) -> Option<()> {
+        let id = self.id();
+        let mut w = Writer::<REQUEST_ROOM>::new();
+        w.array(3);
+        w.uint(id);
+        w.text("mem.write");
+        w.map(4);
+        w.text("handle");
+        w.uint(handle);
+        w.text("off");
+        w.uint(off);
+        w.text("width");
+        w.uint(width);
+        w.text("bytes");
+        let bytes = value.to_le_bytes();
+        w.blob(&bytes[..width as usize]);
+        self.send(w.done()?).map(|_| ())
+    }
+
+    /// Le declara al IOMMU que ese aparato puede alcanzar esa memoria (D8).
+    ///
+    /// Sin esto el aparato **no llega**: el IOMMU arranca encendido y vacio, y
+    /// un DMA no declarado se ve exactamente igual que un aparato que no
+    /// contesta.
+    pub fn dma_allow(&mut self, device: u64, handle: u64) -> Option<()> {
+        let id = self.id();
+        let mut w = Writer::<REQUEST_ROOM>::new();
+        w.array(3);
+        w.uint(id);
+        w.text("dma.allow");
+        w.map(2);
+        w.text("device");
+        w.uint(device);
+        w.text("handle");
+        w.uint(handle);
+        self.send(w.done()?).map(|_| ())
     }
 
     /// Escribe dos bytes en un reclamo. Alcanza para prender un aparato del bus.
