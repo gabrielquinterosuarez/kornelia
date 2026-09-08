@@ -57,7 +57,7 @@ En RAM, leer dos veces da lo mismo y no cambia nada, así que el compilador pued
 
 Y esta es la que más caro sale. Muchos registros **solo aceptan accesos de su ancho exacto**: un registro de 4 bytes leído de a un byte no devuelve el primer byte, devuelve cualquier cosa — o mata la máquina.
 
-Por eso `mem.read` y `mem.write` de Kornelia toman `width`, y por eso los accesos crudos tienen esa firma: `kernel-x86_64/src/guarded.rs:113#pub unsafe fn read`.
+Por eso `mem.read` y `mem.write` de Kornelia toman `width`, y por eso los accesos crudos tienen esa firma: `kernel-x86_64/src/guarded.rs:137#pub unsafe fn read`.
 
 ## Cómo lo hace Linux
 
@@ -82,7 +82,7 @@ El kernel **no tiene drivers** (D4): quien toca los registros es el agente. Así
 |---|---|
 | **Decisiones** | D4 (el agente escribe sus drivers), D12 (MMIO no cacheable), P1, P4, P5 |
 | **Los verbos** | `mem.claim` para el rango, `mem.read`/`mem.write` con `width`, o `exec` con código propio |
-| **Dónde vive** | `kernel-x86_64/src/paging.rs:68#pub unsafe fn map_device`, `kernel-x86_64/src/guarded.rs:113#pub unsafe fn read` |
+| **Dónde vive** | `kernel-x86_64/src/paging.rs:68#pub unsafe fn map_device`, `kernel-x86_64/src/guarded.rs:137#pub unsafe fn read` |
 
 Tres cosas de este kernel salen directo de que MMIO no es RAM:
 

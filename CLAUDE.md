@@ -421,6 +421,21 @@ cubría todavía:
 Bugs que aparecieron una vez, no se ven venir, y **no se parecen a su causa**.
 Están acá para no volver a pagarlos:
 
+- **El punto de recuperación era uno solo, y anidarlo lo borraba.** `mem.read` y
+  `mem.write` arman el mismo punto de recuperación que usa `exec` para poder
+  volver de un acceso que la máquina rechaza (P5). Pero al terminar lo dejaban
+  **en cero** en vez de devolverlo como estaba — y eso alcanzaba mientras nadie
+  lo anidara. El blob lo anida: corre adentro de un `exec` y pide verbos por la
+  ventanilla, así que su primer `mem.read` le borraba al `exec` el marcador de
+  "hay uno en curso". Dos consecuencias, y ninguna se parece a la causa: la
+  puerta de salida (`int 0x80` / `svc #0`) veía que no había `exec` y **volvía**
+  en vez de terminar, así que el blob caía en el `ud2` que el compilador pone
+  después de algo que no debería volver nunca —el síntoma era `invalid-opcode`—;
+  y de ahí en adelante el blob corría **sin red**, así que un fault suyo mataba
+  la máquina en vez de volver como dato. Se arregla guardando y devolviendo el
+  punto anterior en vez de borrarlo, en las dos arquitecturas. La regla general:
+  **un mecanismo que el kernel usa para sí mismo tiene que poder anidarse el día
+  que el código del agente lo alcance por otro camino.**
 - **El anillo del cable era más chico que el pedido más grande, y perdía en
   silencio.** El protocolo dice aceptar pedidos de 64 KiB; el buzón donde el
   handler del serie deja los bytes tenía 4 KiB. El razonamiento escrito era que

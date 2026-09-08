@@ -20,6 +20,15 @@ core::arch::global_asm!(
 // El bloque de este nucleo sale de TPIDR_EL1, con los offsets de `PerCpu`.
 guarded_access:
     mrs  x9,  tpidr_el1
+    // Guardar el punto de recuperacion que ya hubiera armado. Puede haberlo: el
+    // blob pide verbos desde adentro de un `exec` (D19), y ese `exec` tiene el
+    // suyo. Ver el comentario largo en la version de x86_64.
+    ldr  x11, [x9, #0]
+    ldr  x12, [x9, #8]
+    ldr  x13, [x9, #16]
+    stp  x11, x12, [sp, #-32]!
+    str  x13, [sp, #16]
+
     adrp x10, guarded_recovery
     add  x10, x10, :lo12:guarded_recovery
     str  x10, [x9, #8]                // rip: adonde volver si falla
@@ -75,19 +84,28 @@ guarded_done:
     // entonces mata, que es justo lo que esto viene a evitar.
     dsb sy
     isb
-    mrs  x9,  tpidr_el1
-    str  xzr, [x9, #0]
     mov  x0,  #0
-    ret
+    b    guarded_restore
 
 guarded_recovery:
     // Aca aterriza el `eret` del handler. La pila se recupera del bloque, igual
-    // que hace el punto de recuperacion de `exec`.
+    // que hace el punto de recuperacion de `exec`, y queda apuntando justo a
+    // los tres valores que se guardaron al entrar.
     mrs  x9,  tpidr_el1
     ldr  x10, [x9, #16]
     mov  sp,  x10
-    str  xzr, [x9, #0]
     mov  x0,  #1
+
+guarded_restore:
+    // Devolver el punto de recuperacion anterior tal cual estaba, en vez de
+    // dejarlo en cero. Los dos caminos pasan por aca.
+    mrs  x9,  tpidr_el1
+    ldp  x11, x12, [sp]
+    ldr  x13, [sp, #16]
+    add  sp,  sp, #32
+    str  x11, [x9, #0]
+    str  x12, [x9, #8]
+    str  x13, [x9, #16]
     ret
 "#
 );

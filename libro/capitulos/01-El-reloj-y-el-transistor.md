@@ -86,17 +86,17 @@ Casi la mitad del silicio de un procesador moderno no calcula nada: está ahí p
 
 Los números son aproximados y varían por máquina; lo que importa son los **órdenes de magnitud**. La última columna traduce todo a escala humana, como si un ciclo fuera un segundo.
 
-| Ir a buscar un dato a… | Ciclos | Tiempo real (a 3 GHz) | Si un ciclo fuera 1 segundo |
-|---|---|---|---|
-| Un **registro** | 0 | — | ahora mismo, en tu mano |
-| Caché **L1** | ~4 | 1,3 ns | 4 segundos |
-| Caché **L2** | ~12 | 4 ns | 12 segundos |
-| Caché **L3** (compartida) | ~40 | 13 ns | 40 segundos |
-| **RAM** | ~250 | 80 ns | 4 minutos |
-| Otro núcleo (línea de caché en conflicto) | ~100–400 | 30–130 ns | 2–7 minutos |
-| **[[NVMe]]** (un disco de hoy) | ~250.000 | 80 µs | **3 días** |
-| Disco giratorio | ~30.000.000 | 10 ms | **casi un año** |
-| Un paquete a otro continente | ~450.000.000 | 150 ms | **14 años** |
+| Ir a buscar un dato a…                    | Ciclos       | Tiempo real (a 3 GHz) | Si un ciclo fuera 1 segundo |
+| ----------------------------------------- | ------------ | --------------------- | --------------------------- |
+| Un **registro**                           | 0            | —                     | ahora mismo, en tu mano     |
+| Caché **L1**                              | ~4           | 1,3 ns                | 4 segundos                  |
+| Caché **L2**                              | ~12          | 4 ns                  | 12 segundos                 |
+| Caché **L3** (compartida)                 | ~40          | 13 ns                 | 40 segundos                 |
+| **RAM**                                   | ~250         | 80 ns                 | 4 minutos                   |
+| Otro núcleo (línea de caché en conflicto) | ~100–400     | 30–130 ns             | 2–7 minutos                 |
+| **[[NVMe]]** (un disco de hoy)            | ~250.000     | 80 µs                 | **3 días**                  |
+| Disco giratorio                           | ~30.000.000  | 10 ms                 | **casi un año**             |
+| Un paquete a otro continente              | ~450.000.000 | 150 ms                | **14 años**                 |
 
 Cuatro segundos contra tres días. Esa es la diferencia entre un dato que está en la caché y un dato que está en el disco, y explica de una sola vez por qué:
 

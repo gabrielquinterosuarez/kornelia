@@ -365,11 +365,11 @@ else
     # es lo que D19/D20 quieren adentro de la particion: la unica forma de que
     # ahi entre un driver.
     #
-    # Se exige lo mismo que al otro y por la misma razon: que corra (deja un
-    # numero reconocible) y que **le pida algo al kernel** por la ventanilla. Lo
-    # segundo no se cree por lo que devuelve — se mira el reclamo, que es la
-    # huella de un pedido que nunca paso por el cable.
-    step "el blob compilado corre y le habla al kernel"
+    # Lo que se le exige es que **recorra el bus PCIe y encuentre el disco**,
+    # que necesita cinco verbos andando por la ventanilla (`describe`,
+    # `mem.claim`, `mem.read`, `mem.write` y `release`). Es el primer paso del
+    # cargador de D19.
+    step "el blob compilado recorre el bus y encuentra el disco"
     for arch in x86_64 aarch64; do
         if ! ./scripts/build-blob.sh "$arch" >/dev/null 2>&1; then
             bad "$arch: no se pudo compilar blob/"
@@ -378,12 +378,17 @@ else
         fi
         output=$(BLOB="target/blob-$arch.bin" timeout 240 ./scripts/client.py \
             --arch "$arch" --what claims 2>&1 || true)
-        grep -qFe "the blob returned, leaving 0xb10b" <<<"$output" \
-            || { bad "$arch: el blob compilado no corrio"
-                 printf '%s\n' "$output" | grep -aE "blob|faulted" | head -4; }
-        # 36864 = 0x9000, que lo pide este blob y nadie mas.
-        grep -qFe "'bytes': 36864" <<<"$output" \
-            || bad "$arch: el blob compilado no le pudo pedir memoria al kernel"
+        # Deja `0xb10b` abajo y **el bdf del NVMe arriba**. Se exige que el bdf
+        # no sea cero, o sea que haya encontrado algo: el aparato cero de
+        # cualquier bus es el puente, nunca un disco.
+        #
+        # Y el numero es distinto en cada arquitectura —0x20 en x86_64, 0x18 en
+        # aarch64, que es donde `--lspci` los ve— asi que no puede estar
+        # horneado: un valor fijo no daria bien en las dos.
+        if ! grep -qE "the blob returned, leaving 0x[0-9a-f]{2,}b10b" <<<"$output"; then
+            bad "$arch: el blob compilado no encontro el disco"
+            printf '%s\n' "$output" | grep -aE "blob|faulted|leaving" | head -4
+        fi
         grep -qFe "ok=True" <<<"$output" \
             || bad "$arch: no contesta despues del blob compilado"
     done

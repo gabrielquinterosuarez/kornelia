@@ -33,6 +33,21 @@ core::arch::global_asm!(
 // `extern "sysv64"` del lado de Rust, y el bloque de este nucleo se alcanza por
 // `gs:` con los offsets de `PerCpu`, verificados al compilar.
 guarded_access:
+    // Guardar el punto de recuperacion que ya hubiera armado, porque **puede
+    // haberlo**: el blob pide verbos desde adentro de un `exec` (D19), y ese
+    // `exec` tiene el suyo. Pisarlo y despues borrarlo dejaba al blob sin forma
+    // de volver —su `int 0x80` veia "no hay exec en curso" y hacia `iretq`— y
+    // encima sin red ante un fault, que es P5 roto en el unico lugar donde el
+    // agente no puede mirar. El sintoma no se parece en nada a la causa: una
+    // instruccion invalida, en el `ud2` que el compilador pone despues de algo
+    // que no deberia volver nunca.
+    mov rax, gs:[0]
+    push rax
+    mov rax, gs:[8]
+    push rax
+    mov rax, gs:[16]
+    push rax
+
     lea rax, [rip + guarded_recovery]
     mov gs:[8], rax                    // rip: adonde volver si falla
     mov gs:[16], rsp
@@ -81,16 +96,25 @@ guarded_store4:
     mov [rdi], eax
 
 guarded_done:
-    mov qword ptr gs:[0], 0
     xor rax, rax
-    ret
+    jmp guarded_restore
 
 guarded_recovery:
     // Aca aterriza el `iretq` del handler. La pila se recupera del bloque
-    // porque el acceso pudo haber entrado por una pila de excepcion.
+    // porque el acceso pudo haber entrado por una pila de excepcion, y queda
+    // apuntando justo a los tres valores que se guardaron al entrar.
     mov rsp, gs:[16]
-    mov qword ptr gs:[0], 0
     mov rax, 1
+
+guarded_restore:
+    // Devolver el punto de recuperacion anterior tal cual estaba, en vez de
+    // dejarlo en cero. Los dos caminos pasan por aca.
+    pop rcx
+    mov gs:[16], rcx
+    pop rcx
+    mov gs:[8], rcx
+    pop rcx
+    mov gs:[0], rcx
     ret
 "#
 );

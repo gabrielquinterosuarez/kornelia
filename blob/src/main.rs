@@ -31,6 +31,7 @@
 
 mod cbor;
 mod gate;
+mod kernel;
 
 use core::panic::PanicInfo;
 
@@ -48,20 +49,23 @@ const BAD_REQUEST: u64 = 0xBADC;
 /// Y lo que deja si el kernel no contesto nada.
 const NO_ANSWER: u64 = 0xBAD5;
 
-/// Cuanta memoria le pide al kernel, para demostrar que la ventanilla anda.
+/// Lo que deja si la maquina no informa donde se configura PCIe.
+const NO_PCIE: u64 = 0xBADB;
+/// Y lo que deja si recorrio el bus y no habia ningun NVMe.
+const NO_DISK: u64 = 0xBADD;
+
+/// Como se identifica un controlador NVMe en el bus: **no** por fabricante y
+/// modelo, sino por lo que hace. Los tres bytes son clase, subclase e interfaz
+/// de programacion, y juntos quieren decir "almacenamiento / no volatil / NVMe".
 ///
-/// Es un numero raro **a proposito**, y distinto del que pide el blob de prueba
-/// que arma `client.py`: asi, al mirar los reclamos de la maquina desde afuera,
-/// no hay duda de quien lo pidio. Un reclamo de este tamano solo puede haberlo
-/// hecho este codigo, y no paso por el cable.
-const CLAIM_BYTES: u64 = 0x9000;
+/// Buscar asi es lo que hace que este cargador ande contra cualquier NVMe y no
+/// contra el de QEMU (P4). Con una placa de red no se puede —`02.00.00` solo
+/// dice "ethernet" y cada modelo tiene sus registros—, y por eso D19 pone el
+/// disco primero: el driver de disco es el unico que sirve para todos.
+const NVME_CLASS: u32 = 0x01_08_02;
 
-/// Cuanto lugar deja para la respuesta del kernel.
-const REPLY_ROOM: usize = 256;
-
-/// Con que identifica su pedido. Cualquier numero sirve: el kernel lo devuelve
-/// tal cual para que quien pregunto reconozca la respuesta.
-const REQUEST_ID: u64 = 0x0B10;
+/// Cuanto ocupa la ventana de configuracion de un bus.
+const BUS_WINDOW: u64 = 1 << 20;
 
 /// Por donde entra. Tiene que ser lo primero del binario porque el kernel salta
 /// al byte cero; de eso se encarga `blob.ld`.
@@ -85,6 +89,47 @@ pub extern "C" fn blob_entry(base: u64) -> ! {
     run(base)
 }
 
+/// Recorre el bus y devuelve el `bdf` del primer NVMe que encuentre.
+///
+/// El `bdf` es como el bus lo nombra —bus, dispositivo y funcion, todo junto—, y
+/// es lo que hay que decirle al kernel para declararle DMA.
+fn find_nvme(k: &mut kernel::Session, ecam: u64) -> Option<u64> {
+    let cfg = k.claim_at(ecam, BUS_WINDOW)?;
+    let mut found = None;
+
+    for device in 0..32u64 {
+        let at = device << 15;
+        // Un lugar vacio del bus se lee como todos unos: no hay nadie que
+        // conteste y el bus devuelve eso en vez de fallar.
+        let who = match k.read_u32(cfg.handle, at) {
+            Some(v) => v,
+            None => continue,
+        };
+        if who == 0xFFFF_FFFF || who == 0 {
+            continue;
+        }
+        let class = match k.read_u32(cfg.handle, at + 8) {
+            Some(v) => v,
+            None => continue,
+        };
+        // El byte de abajo es la revision; los tres de arriba, la clase.
+        if (class >> 8) != NVME_CLASS {
+            continue;
+        }
+
+        // Que responda a accesos de memoria y que pueda ser maestro del bus: sin
+        // lo segundo no puede leer sus propias colas, que viven en RAM.
+        k.write_u16(cfg.handle, at + 4, 0x0006);
+        found = Some(device << 3);
+        break;
+    }
+
+    // La ventana de configuracion se devuelve siempre: encontrar o no encontrar
+    // no cambia que se la habia pedido prestada.
+    k.release(cfg.handle);
+    found
+}
+
 fn run(base: u64) -> ! {
     // Que la direccion propia haya llegado se comprueba, no se supone: si el
     // acuerdo de entrada se rompiera, todo lo que sigue apuntaria a cualquier
@@ -93,47 +138,23 @@ fn run(base: u64) -> ! {
         gate::finish(BAD_ENTRY);
     }
 
-    // Los dos buffers van en la **pila**, que sale del final de la memoria que
-    // el kernel reclamo para el blob (D27). No pueden ser estaticos: un binario
-    // plano no trae `.bss`, asi que un estatico mutable arrancaria con lo que
-    // hubiera en esa memoria — y eso se ve como un blob que a veces anda.
-    let mut request = [0u8; 64];
-    // Sin inicializar **a proposito**: lo llena el kernel, y ponerlo en cero
-    // haria que el compilador llame a `memset` — que es una llamada a otro
-    // objeto, o sea una entrada en la GOT, o sea un blob que no anda (ver
-    // `blob.ld`). Lo que el kernel no escriba no se lee: `service` dice cuanto
-    // dejo.
-    let mut reply = core::mem::MaybeUninit::<[u8; REPLY_ROOM]>::uninit();
+    let mut k = kernel::Session::new();
 
-    // El pedido: reclamar memoria. Es el mas simple que deja una huella visible
-    // desde afuera, que es lo que hace que esto se pueda comprobar sin creerle
-    // al blob.
-    let mut w = cbor::Writer::new(&mut request);
-    w.array(3);
-    w.uint(REQUEST_ID);
-    w.text("mem.claim");
-    w.map(2);
-    w.text("bytes");
-    w.uint(CLAIM_BYTES);
-    w.text("align");
-    w.uint(4096);
-    let len = w.done();
-    if len == 0 {
-        gate::finish(BAD_REQUEST);
-    }
-
-    // SAFETY: los dos buffers son suyos y viven hasta que vuelva.
-    let used = unsafe {
-        gate::service(request.as_ptr(), len, reply.as_mut_ptr() as *mut u8, REPLY_ROOM)
+    // Lo primero que necesita cualquier driver: donde preguntarle al bus. El
+    // kernel publica la ventana de configuracion, no lo que hay conectado (D4).
+    let Some(ecam) = k.pcie_base() else {
+        gate::finish(NO_PCIE);
     };
-    if used == 0 {
-        gate::finish(NO_ANSWER);
-    }
 
-    // Que la respuesta diga lo correcto no se comprueba aca: se comprueba desde
-    // afuera, mirando si el reclamo quedo hecho. El blob no es el testigo de si
-    // mismo.
-    gate::finish(OK);
+    let Some(bdf) = find_nvme(&mut k, ecam) else {
+        gate::finish(NO_DISK);
+    };
+
+    // Se devuelve el `bdf` para que se pueda comprobar desde afuera **cual**
+    // encontro, y no solo que encontro algo: en las dos maquinas de prueba el
+    // NVMe esta en un lugar distinto del bus, asi que un numero horneado no
+    // podria dar bien en las dos.
+    gate::finish(OK | (bdf << 16));
 }
 
 /// Un panic no puede contar nada —no hay por donde—, asi que sale por la misma
