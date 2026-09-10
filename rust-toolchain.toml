@@ -1,5 +1,8 @@
 [toolchain]
-channel = "stable"
+# Pineado y no "stable" a proposito: dentro de un ano "stable" es otro
+# compilador, y un tag que no se puede volver a compilar no sirve de mucho.
+# Subirlo es un cambio deliberado, no algo que pase solo.
+channel = "1.98.0"
 targets = [
     "x86_64-unknown-uefi",
     "aarch64-unknown-uefi",

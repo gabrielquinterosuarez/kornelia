@@ -3,9 +3,10 @@
 Kernel experimental mínimo que supone un **agente de IA como usuario** y quita
 todas las capas posibles entre ese agente y el hardware.
 
-El diseño completo está en [`docs/DISENO.md`](docs/DISENO.md) — 29 decisiones
+El diseño completo está en [`docs/DISENO.md`](docs/DISENO.md) — 30 decisiones
 tomadas, cada una con su justificación. Lo ya descartado, con sus motivos, en
-[`docs/DESCARTADO.md`](docs/DESCARTADO.md).
+[`docs/DESCARTADO.md`](docs/DESCARTADO.md). Qué cambió y por qué importa, en
+[`CHANGELOG.md`](CHANGELOG.md).
 
 **Para seguir con Claude Code:** abrí una sesión en esta carpeta (`cd` acá y
 `claude`). El archivo `CLAUDE.md` se carga solo y trae todo el contexto: los
@@ -18,14 +19,58 @@ Arranca por UEFI en **x86_64 y aarch64**, le toma la máquina al firmware
 (`ExitBootServices`) y **habla CBOR por el cordón umbilical** (D6). Corre sobre
 pila y tablas de páginas propias, y captura los faults en vez de reiniciarse.
 
-**Diez de los once verbos andan:** `describe`, `mem.claim`, `mem.read`,
-`mem.write`, `release`, `exec`, `core.claim`, `listen` e **`irq.install`**. Un agente ya puede preguntarle a la máquina
-qué es —memoria, núcleos, controlador de interrupciones, PCIe—, reclamar memoria
-física, subirle código máquina y **correrlo**. Y si ese código falla, el fault
-vuelve como respuesta en vez de matar la máquina: ni siquiera destruyendo el
-puntero de pila, porque las excepciones entran en una pila aparte.
+**Los once verbos andan, y enteros en las dos arquitecturas:**
 
-Falta uno: `dma.allow`, el IOMMU.
+`describe` · `mem.claim` · `mem.read` · `mem.write` · `core.claim` · `exec` ·
+`irq.install` · `irq.install_raw` · `dma.allow` · `release` · `listen`
+
+El único con asterisco es `irq.install_raw`, que en aarch64 devuelve un error
+porque **no hay** un camino más crudo que el que ya se usa — y la máquina lo dice
+en vez de callarlo.
+
+Un agente puede preguntarle a la máquina qué es —memoria, núcleos, controlador
+de interrupciones, PCIe, reloj—, reclamar memoria física, subirle código máquina
+y **correrlo con el privilegio que declara** (D27). Si ese código falla, el fault
+vuelve como respuesta en vez de matar la máquina: ni siquiera destruyendo el
+puntero de pila, porque las excepciones entran en una pila aparte. Y si no
+vuelve, el plazo que el agente declaró lo corta.
+
+La máquina se describe por los **dos dialectos**: ACPI donde hay ACPI, y device
+tree donde no. Cuál usar no lo elige el kernel — es cuál dejó el firmware, y se
+comprueba booteando la misma máquina con `acpi=off`.
+
+El IOMMU arranca **encendido y vacío** (D8), así que sin declarar nada ningún
+aparato llega a la memoria: VT-d en x86_64, SMMUv3 en aarch64. Comprobado en las
+dos con un aparato de verdad que hace DMA.
+
+### Lo que el agente ya escribió encima
+
+Esto **no es el kernel** (D4): son drivers y transporte del lado del agente, que
+usan sólo los once verbos.
+
+- Un **driver de NVMe** que lee y escribe el disco, así que un programa se puede
+  dejar grabado y aparece solo en el próximo arranque.
+- Un **driver de red** (Intel 82540EM) que manda y recibe paquetes, comprobado
+  con un ARP de ida y vuelta contra el otro extremo del cable.
+- **El transporte de D5**: encima del driver de red corre un bucle de código
+  máquina en un núcleo reclamado que mueve bytes entre la placa y el buzón que
+  el agente le entregó con `listen`. **El kernel contesta el protocolo por red**
+  sin enterarse de que del otro lado hay una red. El pedido no sale por el
+  cable: sale de un socket del host, cruza la red, y la respuesta vuelve por el
+  mismo camino.
+
+### Y `blob.bin` (D19/D20)
+
+El firmware trae un blob de la partición y el kernel lo corre antes de escuchar
+el cable, sin privilegio. Antes de saltar **avisa y espera dos segundos**:
+cualquier byte lo cancela, que es lo que hace que un blob roto no deje la máquina
+inútil en cada arranque.
+
+Y el blob **se compila** (`blob/`): un crate `no_std` que sale a binario plano
+para las dos arquitecturas. Adentro tiene un cargador NVMe completo, así que
+**trae del disco un programa que no está en la partición y lo corre** — recorre
+el bus, encuentra el controlador por su clase, lo resetea, le arma las colas, le
+declara el DMA, comprueba la suma y salta.
 
 ## Requisitos
 
@@ -33,6 +78,12 @@ Falta uno: `dma.allow`, el IOMMU.
 rustup target add x86_64-unknown-uefi aarch64-unknown-uefi
 sudo apt install qemu-system-x86 qemu-system-arm ovmf qemu-efi-aarch64
 ```
+
+Para compilar `blob/` hacen falta además los dos targets de bare-metal, pero no
+hay que instalarlos a mano: `build-blob.sh` los agrega solo. **No** están en
+`rust-toolchain.toml` a propósito — ahí rustup resincroniza el toolchain entero
+en vez de agregar un componente, y en una instalación con un conflicto viejo eso
+deja de compilar todo, no sólo el blob.
 
 ## Correr
 
@@ -82,7 +133,24 @@ un agente: arranca QEMU, espera la marca `-- CBOR --` y habla el protocolo.
 ./scripts/client.py --mailbox                # arma el segundo canal y le habla por ahi
 ./scripts/client.py --doorbell               # el agente despierta al kernel
 ./scripts/client.py --handler              # el agente atiende una interrupcion
+./scripts/client.py --dma                 # el IOMMU hace cumplir lo declarado (D8)
+./scripts/client.py --nvme                # un driver de disco con los once verbos
+./scripts/client.py --net                 # un driver de red: un ARP de ida y vuelta
+./scripts/client.py --udp                 # un datagrama del host al agente y la vuelta
+./scripts/client.py --transport           # D5: el kernel contesta el protocolo por red
 ```
+
+Y el blob, que se compila aparte y se le pasa a la máquina:
+
+```bash
+./scripts/build-blob.sh x86_64                        # blob/ -> binario plano
+./scripts/client.py --arch x86_64 --write-payload /tmp/payload.bin
+BLOB=target/blob-x86_64.bin PAYLOAD=/tmp/payload.bin ./scripts/run-x86_64.sh
+#   -> the blob returned, leaving 0xc0ffee
+```
+
+Ese `0xc0ffee` lo deja **el programa que estaba en el disco**, que el blob no
+tiene adentro: para llegar ahí tuvo que manejar el controlador NVMe entero.
 
 Con `--exec` se ve la tesis del proyecto en ocho bytes de código máquina:
 
@@ -174,7 +242,7 @@ grep -ao '[a-z0-9-]*@[0-9a-f]*' virt.dtb | sort -u
 | `kernel-core/src/machine.rs` | Lo que se sabe de la máquina: regiones y dónde están ACPI y el device tree. |
 | `kernel-core/src/tables.rs` | Lee y **verifica** los encabezados de ACPI y del device tree. |
 | `kernel-core/src/cbor.rs` | El formato binario del protocolo (D6), escrito a mano. |
-| `kernel-core/src/protocol.rs` | Los verbos. Hoy diez de los once. |
+| `kernel-core/src/protocol.rs` | Los once verbos, uno por función. |
 | `kernel-core/src/handlers.rs` | Los handlers de interrupción del agente (D9). |
 | `kernel-core/src/channel.rs` | El segundo canal: el buzón que arma el agente (D17, D28). |
 | `kernel-core/src/serial.rs` | El buffer entre el timbre del cable y el bucle. |
@@ -184,34 +252,63 @@ grep -ao '[a-z0-9-]*@[0-9a-f]*' virt.dtb | sort -u
 | `kernel-core/src/cores.rs` | Los núcleos que el agente tiene reclamados (D13). |
 | `kernel-core/src/paging.rs` | El **plan** de mapeo: qué va cacheable y qué no (D12). |
 | `kernel-core/src/stack.rs` | La pila propia del kernel, verificada contra el mapa real. |
-| `kernel-core/src/tests.rs` | 102 tests que corren en la máquina de desarrollo, sin bootear nada. |
+| `kernel-core/src/tests.rs` | 104 tests que corren en la máquina de desarrollo, sin bootear nada. |
+| `kernel-core/src/work.rs` | El buzón por núcleo: cómo se le da trabajo a un núcleo reclamado. |
 | `boot-uefi/` | El entorno de arranque UEFI, compartido por las dos arquitecturas. Sin `asm!`. |
 | `kernel-x86_64/` | Arranque UEFI + UART 16550 en puertos de E/S. |
 | `kernel-aarch64/` | Arranque UEFI + UART PL011 en MMIO. |
+| `blob/` | `blob.bin`: la distribución reemplazable (D20). **No es el kernel** — es código del agente pre-armado, con un cargador NVMe adentro. Sale a binario plano, sin GOT y sin `.bss`. |
 | `scripts/` | Correr en QEMU, `client.py` para hablarle, y `check.sh`, que es el portón que corre CI. |
 | `docs/DISENO.md` | El documento vivo de diseño. |
+
+## Qué NO hay
+
+Esto es un experimento, y la lista de lo que falta es parte de la descripción.
+Nada de esto es un descuido: está acá para que nadie se forme una idea
+equivocada leyendo lo de arriba.
+
+- **Nunca corrió en silicio de verdad.** Todo lo que dice este README está
+  comprobado en QEMU, en las dos arquitecturas. QEMU perdona: los tiempos de una
+  placa emulada no son los de una real, y su modelo de memoria en ARM es más
+  benigno que el del hardware. Es la clase de diferencia que encuentra bugs que
+  ninguna prueba encuentra.
+- **No hay un `blob.bin` versionado en el repo.** Y no debería haberlo: D20 dice
+  que el blob es reemplazable, borrable e ignorable. Se compila con
+  `./scripts/build-blob.sh`.
+- **El driver de red vive del lado del cliente, en Python.** El de NVMe ya está
+  también adentro del blob; el de red todavía no. O sea que **una máquina no
+  arranca con red sola**: para eso hay que mudarlo, que es lo que sigue.
+- **Un solo modelo de placa de red.** El driver es para la Intel 82540EM, porque
+  una placa de red no se puede manejar por clase como un NVMe: `02.00.00` sólo
+  quiere decir "ethernet" y abajo de esa clase cada modelo tiene registros que no
+  se parecen en nada. D20 ya lo anticipaba al hablar de "una lista conocida": la
+  lista existe porque no hay forma de no tenerla.
+- **No hay INTx**, el camino viejo de interrupciones de PCI. Saber qué cable le
+  toca a un aparato pide interpretar AML, que es un lenguaje entero adentro de
+  ACPI. MSI lo hace innecesario y es lo que usan los aparatos de hoy.
+- **En aarch64 no se puede cortar un núcleo que enmascaró las interrupciones.**
+  No es una deuda: este GIC no sabe reconocer una interrupción del Grupo 1, y el
+  diagnóstico está medido y cerrado en `CLAUDE.md`. El kernel **publica hasta
+  dónde llega** (`describe exec` trae `cancel`) en vez de prometer un corte que
+  no llega.
+- **El nombre es provisorio.** Ver `libro/_El-nombre.md`.
 
 ## Lo que sigue
 
 **Los once verbos andan en las dos arquitecturas y no queda ninguna deuda
-abierta** (`docs/DISENO.md` §7 está entera en resuelto). El kernel está
-terminado en el sentido que importa: el agente sube código máquina, lo corre con
-el privilegio que declara, y si falla recibe el fault como dato.
+abierta** (`docs/DISENO.md` §7 está entera en resuelto). El kernel está terminado
+en el sentido que importa: el agente sube código máquina, lo corre con el
+privilegio que declara, y si falla recibe el fault como dato.
 
 Lo que sigue no es el kernel: es **llenar el espacio que el kernel deja vacío**
-(P2). Hoy `blob.bin` tiene el mecanismo —se carga, se ejecuta, se puede cancelar,
-y le puede pedir cosas al kernel— pero no tiene contenido. Los drivers que
-nombran D19 y D20 son lo que *va* a ir ahí:
+(P2).
 
-1. Un **cargador NVMe** en el blob, para que el payload no tenga que entrar en
-   los 256 KiB del blob ni en un archivo FAT32.
-2. Un **driver de red**, que es lo que convierte al UART en lo que D5 dice que
-   es: un cordón umbilical y no el transporte.
-
-Lo que falta y **no se puede** está anotado igual, con el número que lo prueba:
-el segundo escalón para cortar un núcleo en aarch64 no existe porque este GIC no
-sabe reconocer una interrupción del Grupo 1, y el kernel lo publica en vez de
-prometerlo.
+1. **Mudar el driver de red al blob.** El de NVMe ya está adentro y con eso el
+   blob es un cargador: trae del disco un payload tan grande como haga falta. La
+   red va en ese payload, no en el blob. Es lo que haría que una máquina arranque
+   con red **sin que haya nadie del otro lado del cable**.
+2. **Correrlo en una máquina de verdad**, que es lo que va a decir cuánto de todo
+   esto era cierto y cuánto era QEMU siendo amable.
 
 ## Licencia
 
