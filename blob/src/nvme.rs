@@ -98,21 +98,49 @@ unsafe fn zero(at: u64, bytes: u64) {
     }
 }
 
+/// Una cola: dos anillos en RAM y por donde va cada uno.
+#[derive(Clone, Copy)]
+struct Queue {
+    /// Donde el que manda escribe pedidos.
+    sq: Claim,
+    /// Y donde el aparato escribe respuestas.
+    cq: Claim,
+    entries: u64,
+    sq_tail: u64,
+    cq_head: u64,
+    /// El bit que **alterna** en cada vuelta del anillo. Sin el no se puede
+    /// distinguir una respuesta nueva de la de la vuelta anterior, que tambien
+    /// esta escrita.
+    phase: u64,
+}
+
+impl Queue {
+    const fn blank() -> Self {
+        Queue {
+            sq: Claim { handle: 0, start: 0 },
+            cq: Claim { handle: 0, start: 0 },
+            entries: 0,
+            sq_tail: 0,
+            cq_head: 0,
+            phase: 1,
+        }
+    }
+}
+
+/// Cual es cual. La de administracion es siempre la cero, y no lee discos: para
+/// eso hay que crearle una de datos, que es lo primero que hace un cargador.
+const ADMIN: usize = 0;
+const DATA: usize = 1;
+
 /// Un controlador NVMe listo para recibir comandos.
 pub struct Nvme {
     /// Como lo nombra el bus. Es lo que hay que decirle al IOMMU.
     pub bdf: u64,
     /// Su ventana de registros.
     window: Claim,
-    /// La cola de pedidos y la de respuestas, en memoria del agente.
-    sq: Claim,
-    cq: Claim,
     /// Cada cuanto esta el timbre de la cola siguiente. Lo dice el aparato.
     stride: u64,
-    /// Por donde va cada anillo, y con que bit se reconoce lo nuevo.
-    sq_tail: u64,
-    cq_head: u64,
-    phase: u64,
+    queues: [Queue; 2],
     /// Con que se etiqueta cada comando.
     tag: u16,
 }
@@ -160,17 +188,9 @@ impl Nvme {
         k.write_reg(window.handle, CC, CC_ENABLE | (6 << 16) | (4 << 20), 4)?;
         wait_ready(k, &window, 1)?;
 
-        Some(Nvme {
-            bdf,
-            window,
-            sq,
-            cq,
-            stride,
-            sq_tail: 0,
-            cq_head: 0,
-            phase: 1,
-            tag: 1,
-        })
+        let mut queues = [Queue::blank(); 2];
+        queues[ADMIN] = Queue { sq, cq, entries: ENTRIES, sq_tail: 0, cq_head: 0, phase: 1 };
+        Some(Nvme { bdf, window, stride, queues, tag: 1 })
     }
 
     /// Donde esta el timbre de una cola. `which` es 0 para pedidos, 1 para
@@ -213,57 +233,67 @@ fn claim_shared(k: &mut Session, bdf: u64, bytes: u64) -> Option<Claim> {
 }
 
 impl Nvme {
-    /// Manda un comando y espera la respuesta. Necesita el canal para el timbre.
+    /// Manda un comando a una cola y espera su respuesta.
+    ///
+    /// Nadie interrumpe a nadie: se avisa moviendo la cola del anillo, que es
+    /// una escritura a un registro del aparato, y despues se mira hasta que
+    /// aparezca la respuesta.
     pub fn command(
         &mut self,
         k: &mut Session,
+        which: usize,
         opcode: u8,
         nsid: u32,
         prp1: u64,
         cdw10: u32,
+        cdw11: u32,
+        cdw12: u32,
     ) -> Option<()> {
-        let slot = self.sq_tail;
-        let at = self.sq.start + slot * SQ_ENTRY;
-        // SAFETY: la cola es memoria nuestra y el slot cae adentro.
+        // Se saca una copia y se devuelve al final: asi el resto de `self`
+        // —la ventana, el timbre— sigue disponible mientras se usa la cola.
+        let mut q = self.queues[which];
+        if q.entries == 0 {
+            return None;
+        }
+        let at = q.sq.start + q.sq_tail * SQ_ENTRY;
+        // SAFETY: la cola es memoria nuestra y el lugar cae adentro.
         unsafe {
             zero(at, SQ_ENTRY);
             // Los primeros ocho bytes son dos palabras de 32: la primera lleva
             // el opcode abajo y la etiqueta arriba, la segunda el namespace.
-            // Etiquetar cada comando es lo que permite reconocer su respuesta.
             poke64(
                 at,
                 (opcode as u64) | ((self.tag as u64) << 16) | ((nsid as u64) << 32),
             );
-            // A donde escribe lo que devuelva.
+            // A donde escribe (o de donde lee) lo que este comando mueva.
             poke64(at + 24, prp1);
-            poke64(at + 40, cdw10 as u64);
+            poke64(at + 40, (cdw10 as u64) | ((cdw11 as u64) << 32));
+            poke64(at + 48, cdw12 as u64);
         }
 
-        self.sq_tail = (slot + 1) % ENTRIES;
-        let bell = self.bell(0, 0);
-        k.write_reg(self.window.handle, bell, self.sq_tail, 4)?;
+        q.sq_tail = (q.sq_tail + 1) % q.entries;
+        let bell = self.bell(which as u64, 0);
+        k.write_reg(self.window.handle, bell, q.sq_tail, 4)?;
 
-        // Y esperar. La respuesta se reconoce por un bit que **alterna** en cada
-        // vuelta del anillo: no alcanza con mirar si hay algo escrito, porque lo
-        // de la vuelta anterior tambien esta escrito.
-        let entry = self.cq.start + self.cq_head * CQ_ENTRY;
+        let entry = q.cq.start + q.cq_head * CQ_ENTRY;
         let mut spins = 0u32;
         loop {
             // La ultima palabra de la respuesta lleva la etiqueta abajo y el
             // estado arriba; el bit de fase es el de mas abajo del estado.
             // SAFETY: la cola de respuestas es memoria nuestra.
             let status = ((unsafe { peek64(entry + 8) } >> 32) >> 16) & 0xFFFF;
-            if (status & 1) == self.phase {
-                self.cq_head = (self.cq_head + 1) % ENTRIES;
-                if self.cq_head == 0 {
+            if (status & 1) == q.phase {
+                q.cq_head = (q.cq_head + 1) % q.entries;
+                if q.cq_head == 0 {
                     // Dio la vuelta: de aca en adelante el bit vale al reves.
-                    self.phase ^= 1;
+                    q.phase ^= 1;
                 }
-                let bell = self.bell(0, 1);
-                k.write_reg(self.window.handle, bell, self.cq_head, 4)?;
+                let bell = self.bell(which as u64, 1);
+                k.write_reg(self.window.handle, bell, q.cq_head, 4)?;
                 self.tag = self.tag.wrapping_add(1);
-                // Los bits de arriba del estado dicen si lo rechazo.
-                return if (status >> 1) & 0x3FF == 0 { Some(()) } else { None };
+                self.queues[which] = q;
+                // Lo que queda del estado dice si lo rechazo.
+                return if (status >> 1) == 0 { Some(()) } else { None };
             }
             spins += 1;
             if spins >= SPINS {
@@ -272,11 +302,71 @@ impl Nvme {
         }
     }
 
+    /// Le crea una cola de datos. Las de administracion no leen discos.
+    ///
+    /// Son dos comandos y **el orden importa**: primero la de respuestas, porque
+    /// la de pedidos se crea diciendo a cual contesta. Al reves, el controlador
+    /// rechaza el segundo.
+    pub fn data_queue(&mut self, k: &mut Session) -> Option<()> {
+        let size = ((ENTRIES - 1) << 16) as u32 | DATA as u32;
+
+        let cq = claim_shared(k, self.bdf, 4096)?;
+        // Opcode 5 = crear cola de respuestas. El bit 0 de cdw11 dice que la
+        // cola es un bloque contiguo, que es lo que se acaba de reclamar.
+        self.command(k, ADMIN, 0x05, 0, cq.start, size, 1, 0)?;
+
+        let sq = claim_shared(k, self.bdf, 4096)?;
+        // Opcode 1 = crear cola de pedidos. Arriba en cdw11 va a que cola de
+        // respuestas le contesta.
+        self.command(k, ADMIN, 0x01, 0, sq.start, size, ((DATA as u32) << 16) | 1, 0)?;
+
+        self.queues[DATA] = Queue { sq, cq, entries: ENTRIES, sq_tail: 0, cq_head: 0, phase: 1 };
+        Some(())
+    }
+
+    /// Lee bloques del disco **directo a memoria del agente**, por DMA.
+    ///
+    /// Es lo que hace que un cargador tenga sentido: nadie mueve esos bytes a
+    /// mano, y menos por el cable. Con una sola direccion en el comando se llega
+    /// hasta una pagina, asi que se parte de a paginas — una lista de punteros
+    /// permitiria mas por comando y todavia no hace falta.
+    pub fn read_into(
+        &mut self,
+        k: &mut Session,
+        dest: u64,
+        lba: u64,
+        count: u64,
+        ns: &Namespace,
+    ) -> Option<()> {
+        let per_page = 4096 / ns.block_bytes;
+        let mut done = 0;
+        while done < count {
+            let left = count - done;
+            let chunk = if left < per_page { left } else { per_page };
+            let at = dest + done * ns.block_bytes;
+            let block = lba + done;
+            // Opcode 2 = leer. El bloque va partido en dos palabras, y cdw12
+            // lleva **cuantos menos uno**: pedir cero bloques es pedir uno.
+            self.command(
+                k,
+                DATA,
+                0x02,
+                1,
+                at,
+                block as u32,
+                (block >> 32) as u32,
+                (chunk - 1) as u32,
+            )?;
+            done += chunk;
+        }
+        Some(())
+    }
+
     /// Le pregunta al disco cuanto mide y de que tamano son sus bloques.
     pub fn namespace(&mut self, k: &mut Session, nsid: u32) -> Option<Namespace> {
         let buf = claim_shared(k, self.bdf, 4096)?;
         // Opcode 6 = Identify, cdw10 = 0 pide la ficha de un namespace.
-        self.command(k, 0x06, nsid, buf.start, 0)?;
+        self.command(k, ADMIN, 0x06, nsid, buf.start, 0, 0, 0)?;
 
         // SAFETY: el aparato acaba de escribir ahi por DMA, y es memoria nuestra.
         let blocks = unsafe { peek64(buf.start) };
@@ -291,5 +381,99 @@ impl Nvme {
             return None;
         }
         Some(Namespace { blocks, block_bytes: 1 << shift })
+    }
+}
+
+// --- El formato del payload en el disco -------------------------------------
+//
+// D19 dice que el blob es un cargador y que el resto vive "en el bloque tal".
+// Esto es ese acuerdo, y lo escribe `client.py`: una cabecera en el bloque 0 y
+// el payload a continuacion.
+//
+// No hay sistema de archivos, y no es una carencia: un cargador que entiende
+// FAT32 es mucho mas grande que uno que lee bloques por numero, y el payload lo
+// escribe el mismo que escribe el cargador. Nombres de archivo no hacen falta
+// cuando hay una sola cosa que traer.
+
+/// `KORNELIA`, como se lee de a ocho bytes en little-endian.
+const HEADER_MAGIC: u64 = 0x4149_4C45_4E52_4F4B;
+/// La version del acuerdo que este cargador entiende.
+const HEADER_VERSION: u32 = 1;
+/// En que bloque empieza el payload.
+const PAYLOAD_LBA: u64 = 1;
+
+/// Lee un byte de memoria propia.
+///
+/// # Safety
+///
+/// `at` tiene que caer en memoria reclamada y alcanzable.
+unsafe fn peek8(at: u64) -> u8 {
+    core::ptr::read_volatile(at as *const u8)
+}
+
+/// Lo que el cargador trajo del disco.
+pub struct Payload {
+    /// Donde empieza a ejecutar.
+    pub entry: u64,
+    /// Cuanto mide, para poder informarlo.
+    pub bytes: u64,
+}
+
+impl Nvme {
+    /// Trae el payload del disco a memoria. **Esto es el cargador de D19.**
+    ///
+    /// Devuelve donde quedo, listo para saltar ahi.
+    pub fn load(&mut self, k: &mut Session, ns: &Namespace) -> Option<Payload> {
+        // La cabecera vive en el bloque cero.
+        let head = claim_shared(k, self.bdf, 4096)?;
+        self.read_into(k, head.start, 0, 1, ns)?;
+
+        // SAFETY: el aparato acaba de escribir ahi por DMA, y es memoria nuestra.
+        let magic = unsafe { peek64(head.start) };
+        if magic != HEADER_MAGIC {
+            // Un disco sin grabar son ceros, y de ahi no se puede concluir nada:
+            // decir que no hay payload es distinto de decir que fallo.
+            return None;
+        }
+        let version = unsafe { peek32(head.start + 8) };
+        if version != HEADER_VERSION {
+            // Negarse es lo correcto: un formato que no se entiende, leido como
+            // si se entendiera, termina en un salto a cualquier lado.
+            return None;
+        }
+        let size = unsafe { peek64(head.start + 16) };
+        let entry = unsafe { peek64(head.start + 24) };
+        let want = unsafe { peek64(head.start + 32) };
+        if size == 0 || entry >= size {
+            return None;
+        }
+
+        // Memoria para el payload, alcanzable sin privilegio: el blob corre
+        // `supervised` (D29) y lo que cargue corre igual que el. Que este
+        // declarada al IOMMU es lo que permite que el disco escriba ahi solo.
+        let room = (size + 4095) / 4096 * 4096;
+        let where_to = claim_shared(k, self.bdf, room)?;
+
+        let blocks = (size + ns.block_bytes - 1) / ns.block_bytes;
+        self.read_into(k, where_to.start, PAYLOAD_LBA, blocks, ns)?;
+
+        // Y comprobar que llego entero. Sin esto, media lectura se ve como una
+        // lectura buena hasta que el salto termina en cualquier lado.
+        //
+        // Es una suma y no un hash: alcanza para distinguir "se leyo entero" de
+        // "se leyo la mitad", que es lo unico que puede fallar aca. Un disco no
+        // miente a proposito.
+        let mut sum: u64 = 0;
+        let mut i = 0;
+        while i < size {
+            // SAFETY: cae adentro de lo que se reclamo y se acaba de llenar.
+            sum = sum.wrapping_add(unsafe { peek8(where_to.start + i) } as u64);
+            i += 1;
+        }
+        if sum != want {
+            return None;
+        }
+
+        Some(Payload { entry: where_to.start + entry, bytes: size })
     }
 }

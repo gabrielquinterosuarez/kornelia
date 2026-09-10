@@ -58,6 +58,11 @@ const NO_DISK: u64 = 0xBADD;
 const NO_START: u64 = 0xBAD7;
 /// Y si no dijo de que tamano es.
 const NO_SIZE: u64 = 0xBAD6;
+/// Si no se le pudo crear una cola de datos.
+const NO_QUEUE: u64 = 0xBAD4;
+/// Y si el disco no tiene un payload que cargar. **No es una falla**: un disco
+/// sin grabar es un caso legitimo, y D20 dice que el blob es ignorable.
+const NO_PAYLOAD: u64 = 0xB105;
 
 /// Como se identifica un controlador NVMe en el bus: **no** por fabricante y
 /// modelo, sino por lo que hace. Los tres bytes son clase, subclase e interfaz
@@ -185,13 +190,30 @@ fn run(base: u64) -> ! {
         gate::finish(NO_SIZE);
     };
 
-    // Se devuelve **cuantos bloques tiene el disco**, que es un dato de la
-    // maquina y no del blob: sale de la ficha que el controlador escribio por
-    // DMA. El disco de prueba mide 16 MiB, asi que tienen que ser 32768 de 512
-    // bytes — y eso se puede comprobar contra el `dd` que lo creo, que es un
-    // lugar completamente distinto.
-    let _ = ns.block_bytes;
-    gate::finish(OK | (ns.blocks << 16));
+    if disk.data_queue(&mut k).is_none() {
+        gate::finish(NO_QUEUE);
+    }
+
+    // Y aca el blob deja de ser una demostracion y es **el cargador de D19**:
+    // trae del disco un programa que no estaba en la particion, comprueba que
+    // llego entero, y salta.
+    let Some(payload) = disk.load(&mut k, &ns) else {
+        gate::finish(NO_PAYLOAD);
+    };
+
+    // Se lo llama como una funcion y se devuelve lo que deje. Puede volver
+    // porque corre con el mismo privilegio que el blob y en su misma pila: es
+    // codigo del agente llamando a codigo del agente, que es exactamente lo que
+    // D20 dice que es el blob.
+    //
+    // SAFETY: la direccion salio de la cabecera, cae adentro de lo que se
+    // reclamo, y la suma dio bien. Si igual estuviera mal, el fault vuelve como
+    // dato y el arranque sigue (P5).
+    let program: extern "C" fn() -> u64 = unsafe { core::mem::transmute(payload.entry) };
+    let left = program();
+
+    let _ = (ns.block_bytes, payload.bytes);
+    gate::finish(left);
 }
 
 /// Un panic no puede contar nada —no hay por donde—, asi que sale por la misma
