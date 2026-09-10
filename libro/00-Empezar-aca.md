@@ -131,7 +131,7 @@ El libro se lee por capítulos; **se consulta por conceptos**. Cada uno es una f
 
 #### El silicio
 
-[[Flip-flop]] · [[Registro]] · [[Jerarquia-de-memoria]] · [[Cache]] · [[Bus]] · [[Modo-privilegiado]]
+[[Flip-flop]] · [[Ciclo]] · [[Registro]] · [[Ejecucion-fuera-de-orden]] · [[Jerarquia-de-memoria]] · [[Cache]] · [[Bus]] · [[Modo-privilegiado]]
 
 #### Memoria
 
@@ -147,7 +147,7 @@ El libro se lee por capítulos; **se consulta por conceptos**. Cada uno es una f
 
 #### Arranque y descripción de la máquina
 
-[[Firmware]] · [[UEFI]] · [[ACPI]] · [[Device-tree]] · [[ELF-y-PE]]
+[[ABI]] · [[Firmware]] · [[UEFI]] · [[ACPI]] · [[Device-tree]] · [[ELF-y-PE]]
 
 #### Herramientas y entorno
 

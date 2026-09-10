@@ -86,7 +86,16 @@ Y acá está lo que hace a esta nota parte de este libro:
 
 Un detalle de x86_64 que es puro sistema: la compuerta es de **interrupción**, no de trap, así que se entra con las [[Interrupcion|interrupciones]] cerradas. Y el CPU cambia solo a la pila de anillo 0 que está en el TSS (`kernel-x86_64/src/gdt.rs:154#tss.rsp[0]`). Sin eso, la ventanilla de vuelta aterrizaría **sobre la pila del agente** — que es justo la que puede estar rota.
 
-Y un contraste que aclara todo el concepto: **el blob no usa ventanilla.** El blob de D18 corre con privilegio completo y en el mismo [[Espacio-de-direcciones|espacio de direcciones]], así que para hablarle al kernel **llama a una función**: recibe su dirección en el segundo registro de argumento y la invoca como a cualquier otra (`kernel-core/src/protocol.rs:196#no le hace falta una ventanilla`). La ventanilla no existe para "hablarle al kernel": existe porque **hay una frontera de privilegio que cruzar**. Sin frontera, no hace falta.
+Y un contraste que aclara todo el concepto: **el blob usa dos ventanillas distintas, y la diferencia entre ellas es qué pasa después.** El blob de D18 corre `supervised` desde que D29 cerró ese agujero —era el único código que corría con privilegio completo en el núcleo del protocolo—, así que cruza una frontera de verdad y necesita una puerta. Pero necesita dos:
+
+| Puerta | x86_64 | aarch64 | Qué significa |
+|---|---|---|---|
+| **De salida** | `int 0x80` | `svc #0` | "Terminé." No se vuelve. |
+| **De servicio** | `int 0x81` | `svc #1` | "Atendeme esto y devolveme el control." Se vuelve **en la instrucción siguiente**. |
+
+Son dos puertas y no un registro que las distinga por dos razones: el código que vuelve ya usa el primer registro para su resultado, y dos puertas con dos significados **se leen**. Los bytes de las dos los publica `describe {what:["exec"]}`, así que el agente no los tiene horneados (D3, P4).
+
+Al entrar, el blob recibe en el primer registro de argumento **su propia dirección, y nada más** (`blob/src/main.rs:90#pub extern "win64" fn blob_entry`). Con eso alcanza: todo lo demás lo pide por la puerta de servicio, y adentro es el mismo `dispatch` de los once verbos con un origen más.
 
 ## Cómo se ve roto
 

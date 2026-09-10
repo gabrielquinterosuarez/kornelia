@@ -66,7 +66,7 @@ CPU MHz máx.:    1800,0000
 CPU MHz mín.:     400,0000
 ```
 
-**El TSC midió 1,992 GHz y el procesador no pasa de 1,8 GHz.** No es un error de medición: es que en un procesador moderno **el TSC no cuenta ciclos del núcleo**. Cuenta a un ritmo fijo, derivado de un cristal, que no cambia cuando el núcleo sube o baja de frecuencia ni cuando se duerme. Se comprueba así:
+**El TSC midió 1,992 GHz y `lscpu` dice que el máximo es 1,8.** Los dos números son ciertos y ninguno es la velocidad a la que corre el núcleo — que resultó ser **3,41 GHz**, medida en [[P04-Ver-al-procesador-desordenar]]. Son tres cosas distintas: el TSC tictaquea a un ritmo fijo, `lscpu` informa el techo de la *política*, y el silicio llega a 4 GHz (`cpuinfo_max_freq`). Lo que esto prueba es que **el TSC no cuenta ciclos del núcleo**. Cuenta a un ritmo fijo, derivado de un cristal, que no cambia cuando el núcleo sube o baja de frecuencia ni cuando se duerme. Se comprueba así:
 
 ```bash
 grep -o 'constant_tsc\|nonstop_tsc' /proc/cpuinfo | sort -u
