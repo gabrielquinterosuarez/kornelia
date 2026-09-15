@@ -82,16 +82,16 @@ sudo dmesg | grep -i 'firmware'
 | | |
 |---|---|
 | **Decisiones** | D25 (todo se le pide en una ventana), D24 (el entorno de arranque es un eje propio) |
-| **Dónde vive** | `boot-uefi/src/lib.rs:632#unsafe fn normalize`, `boot-uefi/src/lib.rs:662#fn classify`, `boot-uefi/src/lib.rs:497#unsafe fn add_pcie_window` |
+| **Dónde vive** | `boot-uefi/src/lib.rs:671#unsafe fn normalize`, `boot-uefi/src/lib.rs:701#fn classify`, `boot-uefi/src/lib.rs:536#unsafe fn add_pcie_window` |
 
 Todo el trato con el firmware está en un solo crate, `boot-uefi/`, que **no lleva `asm!` ni `target_arch`**: cómo se le pide el mapa de memoria varía por entorno de arranque, no por arquitectura, y el formato del mapa no varía por ninguno de los dos (D24).
 
 Cuatro cosas que hace, y las cuatro son desconfianza aplicada:
 
 1. **Traduce en vez de copiar.** Los quince tipos de memoria de UEFI se pasan a un vocabulario chico y propio (`classify`): libre, del kernel, del firmware, [[MMIO]], rota, tablas de ACPI. El comentario al lado de `BootServicesCode/Data` deja anotado que son libres *porque ya salimos*, y que la pila del arranque sale de ahí.
-2. **La cacheabilidad la toma del atributo, no de la clase.** UEFI informa región por región qué modos de caché soporta, y eso es más preciso que deducirlo (`boot-uefi/src/lib.rs:711#fn caching_of`).
+2. **La cacheabilidad la toma del atributo, no de la clase.** UEFI informa región por región qué modos de caché soporta, y eso es más preciso que deducirlo (`boot-uefi/src/lib.rs:750#fn caching_of`).
 3. **Corrige el mapa donde el firmware calló.** La ventana de configuración de PCIe se agrega al mapa desde la MCFG cuando el firmware no la informó, **antes de que nadie lo lea**. Sin eso, el kernel publicaba una dirección que él mismo hacía inalcanzable —o sea, el kernel era la razón por la que no se podía usar un aparato, que es exactamente lo que prohíbe P1.
-4. **Se reserva lo que necesita, en el mapa.** La página baja por la que pasa el trampolín que arranca los otros núcleos está marcada libre por el firmware (`boot-uefi/src/lib.rs:544#pub unsafe fn reserve_for_kernel`). Se arregla en el mapa y **no** con un chequeo al reclamar, porque un chequeo haría que `describe memory` diga "libre" sobre algo que `mem.claim` rechaza: dos respuestas distintas a la misma pregunta.
+4. **Se reserva lo que necesita, en el mapa.** La página baja por la que pasa el trampolín que arranca los otros núcleos está marcada libre por el firmware (`boot-uefi/src/lib.rs:583#pub unsafe fn reserve_for_kernel`). Se arregla en el mapa y **no** con un chequeo al reclamar, porque un chequeo haría que `describe memory` diga "libre" sobre algo que `mem.claim` rechaza: dos respuestas distintas a la misma pregunta.
 
 Y lo que cae en un hueco del mapa no se disfraza: se entrega con la clase `unreported`, que **no es `mmio`** (`kernel-core/src/memory.rs:131#Kind::Unreported`). El agente se lleva el rango y la advertencia de que la máquina nunca dijo qué hay ahí.
 

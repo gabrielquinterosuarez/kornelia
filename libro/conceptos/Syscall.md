@@ -70,7 +70,7 @@ Tres cosas de Linux que vale conocer:
 |---|---|
 | **Decisiones** | D27 (`supervised` necesita una puerta de vuelta), D3 (nada específico de arquitectura en el protocolo), D18 (el blob no necesita puerta) |
 | **Principios** | **P4 — la máquina se describe a sí misma**; P3 |
-| **Dónde vive** | `kernel-x86_64/src/exec.rs:57#pub const WINDOW_VECTOR: usize = 0x80`, `kernel-aarch64/src/exec.rs:45#pub const RETURN_BYTES`, `kernel-core/src/protocol.rs:736#w.bytes(P::EXEC_RETURN)` |
+| **Dónde vive** | `kernel-x86_64/src/exec.rs:57#pub const WINDOW_VECTOR: usize = 0x80`, `kernel-aarch64/src/exec.rs:45#pub const RETURN_BYTES`, `kernel-core/src/protocol.rs:772#w.bytes(P::EXEC_RETURN)` |
 
 Acá no hay tabla de syscalls, porque no hay servicios que pedir desde `exec`: los once verbos llegan por el cable, no por un trap. Lo que hay es **una sola puerta con un solo significado**: *terminé*.
 

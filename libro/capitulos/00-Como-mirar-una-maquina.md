@@ -126,7 +126,7 @@ Los **grupos** son el concepto que no se ve en QEMU y que cambia cómo se piensa
 | A qué ritmo corre el tiempo | `cat /proc/cpuinfo \| grep MHz` | `describe {what:["clock"]}` |
 | Qué reclamó quién | — *(no existe)* | `describe {what:["claims"]}` |
 
-Las trece secciones que acepta `describe` son `memory`, `tables`, `claims`, `cpus`, `interrupts`, `pcie`, `cores`, `channel`, `handlers`, `exec`, `iommu`, `clock` y `cable` (`kernel-core/src/protocol.rs:347#Some("memory") => q.memory = true`). Y si le pedís una que no conoce, **contesta un error en vez de ignorarla**: contestar solo con lo que reconoció sería mentir por omisión.
+Las trece secciones que acepta `describe` son `memory`, `tables`, `claims`, `cpus`, `interrupts`, `pcie`, `cores`, `channel`, `handlers`, `exec`, `iommu`, `clock` y `cable` (`kernel-core/src/protocol.rs:349#Some("memory") => q.memory = true`). Y si le pedís una que no conoce, **contesta un error en vez de ignorarla**: contestar solo con lo que reconoció sería mentir por omisión.
 
 La última fila es la interesante: en Linux **no hay** una pregunta que devuelva "quién es dueño de qué memoria", porque la respuesta es "el kernel, siempre". En Kornelia es una pregunta legítima porque hay [[23-Asignadores-y-por-que-aca-no-hay|reclamos]] y no asignaciones.
 

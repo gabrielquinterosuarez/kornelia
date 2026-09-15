@@ -316,6 +316,8 @@ struct Sections {
     clock: bool,
     /// El estado del cordon umbilical, incluidos los bytes que se perdieron.
     cable: bool,
+    /// La pantalla, si la maquina tiene una (D5).
+    screen: bool,
     /// Si no vino la clave `what`, se devuelve el indice (D16).
     index: bool,
 }
@@ -357,6 +359,7 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
                     Some("iommu") => q.iommu = true,
                     Some("clock") => q.clock = true,
                     Some("cable") => q.cable = true,
+                    Some("screen") => q.screen = true,
                     // Contestar solo con lo que se reconocio, callado, seria
                     // mentir por omision.
                     Some(_) => return reply_error(p, id, "unknown section in what"),
@@ -391,7 +394,7 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
             sections += 1;
         }
         for extra in [q.cpus, q.interrupts, q.pcie, q.cores, q.channel, q.handlers,
-                      q.exec, q.iommu, q.clock, q.cable] {
+                      q.exec, q.iommu, q.clock, q.cable, q.screen] {
             if extra {
                 sections += 1;
             }
@@ -529,6 +532,33 @@ fn describe<P: Platform>(p: &mut P, id: u64, r: &mut Reader<'_>, m: &Machine, hw
             w.text("channel");
             write_channel(&mut w);
         }
+        if q.screen {
+            // Donde esta la pantalla y como esta armada (D5).
+            //
+            // Se publica porque es **de la maquina**, no del kernel: el agente
+            // puede querer dibujar lo suyo, o simplemente saber que esta maquina
+            // no tiene por donde decir nada si se cae el cable (P4). Que no haya
+            // se dice, en vez de callarlo.
+            w.text("screen");
+            match m.screen {
+                None => w.null(),
+                Some(s) => {
+                    w.map(5);
+                    w.text("base");
+                    w.uint(s.base);
+                    w.text("width");
+                    w.uint(s.width as u64);
+                    w.text("height");
+                    w.uint(s.height as u64);
+                    // Cuantos pixeles hay de una fila a la siguiente. No es lo
+                    // mismo que el ancho, y confundirlos dibuja en diagonal.
+                    w.text("stride");
+                    w.uint(s.stride as u64);
+                    w.text("bytes");
+                    w.uint(s.bytes);
+                }
+            }
+        }
         if q.cable {
             w.text("cable");
             write_cable(&mut w);
@@ -629,13 +659,13 @@ fn write_index(
     arch: &str,
     clock: Option<crate::platform::Clock>,
 ) {
-    w.map(14);
+    w.map(15);
 
     w.text("arch");
     w.text(arch);
 
     w.text("sections");
-    w.array(13);
+    w.array(14);
     w.text("memory");
     w.text("tables");
     w.text("claims");
@@ -649,6 +679,7 @@ fn write_index(
     w.text("iommu");
     w.text("clock");
     w.text("cable");
+    w.text("screen");
 
     w.text("memory");
     w.map(2);
@@ -713,6 +744,11 @@ fn write_index(
         None => w.null(),
         Some(c) => w.uint(c.hz),
     }
+
+    // Si la maquina tiene pantalla. En el indice alcanza con si o no; donde
+    // esta y de que tamano va en la seccion.
+    w.text("screen");
+    w.bool(m.screen.is_some());
 }
 
 /// Con que privilegio puede correr el codigo del agente, y como vuelve (D27).

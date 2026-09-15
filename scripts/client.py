@@ -19,6 +19,7 @@ bien" cuando quiza los dos esten mal de la misma manera.
 import argparse
 import json
 import os
+import re
 import select
 import socket
 import subprocess
@@ -26,6 +27,9 @@ import sys
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Donde van las fotos de pantalla y los sockets de control. `target/` ya esta
+# fuera del control de versiones, asi que no ensucia nada.
+SCRATCH = os.path.join(ROOT, "target")
 
 # Donde sale el cable cuando la maquina corre por su cuenta. Un default para que
 # levantarla y engancharse no pidan ponerse de acuerdo en una ruta.
@@ -4108,6 +4112,215 @@ def test_transport(proc, timeout, arch, port):
     return 0
 
 
+# --- La pantalla ------------------------------------------------------------
+#
+# El kernel escribe en el framebuffer los mismos bytes que manda por el cable
+# (D5), porque una PC moderna no tiene puerto serie y sin eso arranca y no hay
+# forma de enterarse de nada.
+#
+# Comprobarlo desde afuera es la unica forma que vale: se le pide a QEMU que
+# **vuelque la pantalla** por su canal de control, y se lee la imagen. Que el
+# kernel diga que dibujo no prueba que haya dibujado.
+
+
+def qmp_screendump(socket_path, into, timeout=20.0):
+    """Le pide a QEMU una foto de la pantalla. Devuelve el motivo si no se pudo."""
+    deadline = time.time() + timeout
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    while True:
+        try:
+            sock.connect(socket_path)
+            break
+        except OSError as e:
+            if time.time() > deadline:
+                return f"no se pudo abrir el canal de control: {e}"
+            time.sleep(0.2)
+
+    rest = b""
+
+    def answer():
+        """Una linea de JSON. QMP manda una por mensaje."""
+        nonlocal rest
+        while b"\n" not in rest:
+            more = sock.recv(65536)
+            if not more:
+                raise EOFError("el canal de control se cerro")
+            rest += more
+        line, _, rest = rest.partition(b"\n")
+        return json.loads(line)
+
+    try:
+        answer()                                        # el saludo
+        sock.sendall(b'{"execute":"qmp_capabilities"}\n')
+        answer()
+        order = {"execute": "screendump", "arguments": {"filename": into}}
+        sock.sendall(json.dumps(order).encode() + b"\n")
+        # Puede llegar algun evento antes de la respuesta: se saltean.
+        for _ in range(20):
+            reply = answer()
+            if "return" in reply:
+                return None
+            if "error" in reply:
+                return f"QEMU no pudo volcar la pantalla: {reply['error']}"
+        return "QEMU nunca contesto al volcado"
+    except (OSError, EOFError, ValueError) as e:
+        return f"el canal de control fallo: {e}"
+    finally:
+        sock.close()
+
+
+def read_ppm(path):
+    """Lee la imagen que deja QEMU. Devuelve (ancho, alto, pixeles)."""
+    with open(path, "rb") as f:
+        data = f.read()
+    if not data.startswith(b"P6"):
+        raise ValueError("el volcado no es un PPM binario")
+    # Tres numeros —ancho, alto, maximo— separados por espacios, con posibles
+    # comentarios en el medio.
+    fields, at = [], 2
+    while len(fields) < 3:
+        while at < len(data) and data[at:at + 1].isspace():
+            at += 1
+        if data[at:at + 1] == b"#":
+            while at < len(data) and data[at] != 0x0A:
+                at += 1
+            continue
+        start = at
+        while at < len(data) and not data[at:at + 1].isspace():
+            at += 1
+        fields.append(int(data[start:at]))
+    at += 1
+    width, height, _top = fields
+    return width, height, data[at:at + width * height * 3]
+
+
+def load_font(path=None):
+    """Trae los glifos de `kernel-core/src/font.rs`.
+
+    Se lee del mismo archivo que usa el kernel a proposito: si alguien
+    regenerara la tipografia, esta prueba sigue leyendo lo que el kernel dibuja
+    en vez de comparar contra una copia que quedo vieja.
+    """
+    path = path or os.path.join(ROOT, "kernel-core", "src", "font.rs")
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    first = int(re.search(r"pub const FIRST: u8 = (0x[0-9a-f]+)", text).group(1), 16)
+    rows = re.findall(r"^    \[([^\]]*)\],", text[text.index("pub static GLYPHS"):], re.M)
+    font = {}
+    for i, row in enumerate(rows):
+        bits = tuple(int(b, 16) for b in row.split(", "))
+        # Varios codigos pueden dibujarse igual (el espacio y nada); el primero
+        # gana, que para leer texto es lo natural.
+        font.setdefault(bits, chr(first + i))
+    return font
+
+
+def read_screen(path):
+    """Lee la pantalla volcada y devuelve sus renglones de texto.
+
+    Es reconocimiento de caracteres, pero del mas facil que hay: la tipografia
+    es fija, los caracteres caen en una grilla exacta, y los colores son dos.
+    Cada celda se compara contra la misma tabla de glifos que usa el kernel.
+    """
+    width, height, pixels = read_ppm(path)
+    cell_w, cell_h = 8, 16
+    font = load_font()
+
+    # Que solo haya blanco y negro es parte de la prueba: el kernel limpia la
+    # pantalla al tomarla, asi que cualquier otro color seria algo que quedo del
+    # firmware y querria decir que no la tomo.
+    colors = set()
+    for i in range(0, len(pixels), 3):
+        colors.add(pixels[i:i + 3])
+        if len(colors) > 4:
+            break
+
+    lines = []
+    for row in range(height // cell_h):
+        out = []
+        for col in range(width // cell_w):
+            bits = []
+            for y in range(cell_h):
+                value = 0
+                for x in range(cell_w):
+                    at = ((row * cell_h + y) * width + col * cell_w + x) * 3
+                    if pixels[at] > 127:
+                        value |= 0x80 >> x
+                bits.append(value)
+            out.append(font.get(tuple(bits), "?"))
+        lines.append("".join(out).rstrip())
+    return lines, colors
+
+
+def test_screen(proc, timeout, arch, qmp_path):
+    """El kernel escribe en la pantalla los mismos bytes que manda por el cable.
+
+    La prueba no le cree al kernel: se le pide a QEMU una foto de la pantalla y
+    se **lee el texto de la imagen**, comparando cada celda contra la misma
+    tipografia que el kernel tiene adentro.
+
+    Y se busca el ultimo renglon del arranque, no el primero: que ese este
+    quiere decir que la pantalla siguio al kernel hasta el final, no que alcanzo
+    a escribir algo antes de colgarse.
+    """
+    # Lo primero es preguntarle a la maquina si tiene pantalla. Que el kernel lo
+    # publique es lo que permite distinguir "no hay" de "hay y no dibujo", que
+    # desde una foto en negro se ven igual.
+    resp, _ = ask(proc, [800, "describe", {"what": ["screen"]}], timeout)
+    _, ok, load = resp
+    if not ok:
+        print("  la maquina no contesta, asi que no hay nada que mirar")
+        return 1
+    where = load.get("screen")
+    if not where:
+        # Caso legitimo: la maquina no tiene por donde mostrar nada. Se dice y no
+        # se falla — pero tampoco se declara la prueba pasada, asi que el porton
+        # se entera igual si una maquina que tenia pantalla deja de tenerla.
+        print("  esta maquina no informa pantalla, asi que no hay nada que comprobar")
+        return 0
+    print(f"  la maquina dice tener {where['width']}x{where['height']}"
+          f" en {where['base']:#x}")
+
+    shot = os.path.join(SCRATCH, f"screen-{arch}.ppm")
+    if (why := qmp_screendump(qmp_path, shot)):
+        print(f"  FALLA: {why}")
+        return 1
+
+    lines, colors = read_screen(shot)
+    written = [l for l in lines if l]
+    print(f"  la pantalla tiene {len(lines)} renglones, {len(written)} escritos")
+    for line in written[:3]:
+        print(f"    | {line}")
+    if len(written) > 4:
+        print(f"    | ... ({len(written) - 4} mas)")
+    if written:
+        print(f"    | {written[-1]}")
+
+    failures = []
+    if not written:
+        failures.append("la pantalla quedo en blanco: el kernel no dibujo nada")
+    # Dos colores y nada mas: el kernel la limpio y escribe en blanco sobre
+    # negro. Si hubiera mas, seria el logo del firmware abajo del texto.
+    if len(colors) > 2:
+        failures.append(f"hay {len(colors)} colores en pantalla: no la limpio")
+    # Y el ultimo renglon del arranque. Si esta, la pantalla acompano al kernel
+    # hasta que empezo a hablar el protocolo.
+    if not any("-- CBOR --" in l for l in written):
+        failures.append("la pantalla no llego hasta el final del arranque")
+    # Y algo que solo puede venir de esta maquina.
+    if not any(f"architecture: {arch}" in l for l in written):
+        failures.append(f"la pantalla no dice de que arquitectura es")
+
+    print()
+    if failures:
+        for f in failures:
+            print(f"  FALLA: {f}")
+        return 1
+    print("  pantalla: ok")
+    return 0
+
+
 # El aparato `edu` de QEMU: un motor de DMA que se maneja con cuatro escrituras.
 # Existe para ensenar, y por eso sirve justo para esto — cualquier otra placa
 # con DMA necesitaria un driver entero antes de poder probar nada.
@@ -4843,6 +5056,8 @@ def main():
                     help="graba un programa en el disco y comprueba que quedo")
     ap.add_argument("--nvme", action="store_true",
                     help="le habla al controlador NVMe con los once verbos")
+    ap.add_argument("--screen", action="store_true",
+                    help="comprueba que el kernel dibuje en la pantalla, leyendo la imagen")
     ap.add_argument("--net", action="store_true",
                     help="le habla a la placa de red con los once verbos (D5)")
     ap.add_argument("--udp", action="store_true",
@@ -4940,6 +5155,9 @@ def main():
     # "la maquina no bootea", que no se parece en nada a su causa.
     netport = int(env.get("NETPORT") or pick_udp_port())
     env["NETPORT"] = str(netport)
+    # Y por donde se le pide a QEMU la foto de la pantalla.
+    qmp_path = env.get("QMP") or os.path.join(SCRATCH, f"qmp-{args.arch}-{os.getpid()}.sock")
+    env["QMP"] = qmp_path
     if args.connect:
         # La maquina ya arranco y ya paso el marcador, asi que no hay banner que
         # leer: se empieza hablando. Si del otro lado no hay nadie, el primer
@@ -5047,6 +5265,9 @@ def main():
         if args.nvme:
             print("\n== un driver de NVMe, escrito con los once verbos ==")
             rc |= test_nvme(proc, args.timeout, args.arch)
+        if args.screen:
+            print("\n== el kernel escribe en la pantalla (D5) ==")
+            rc |= test_screen(proc, args.timeout, args.arch, qmp_path)
         if args.net:
             print("\n== un driver de red, escrito con los once verbos (D5) ==")
             rc |= test_net(proc, args.timeout, args.arch)

@@ -85,7 +85,7 @@ else
         # El payload lleva codigo maquina, asi que es distinto por arquitectura.
         ./scripts/client.py --arch "$arch" --write-payload "$payload_dir/$arch.bin" >/dev/null
         step "arranca $arch y contesta el protocolo"
-        output=$(PAYLOAD="$payload_dir/$arch.bin" timeout 360 ./scripts/client.py --arch "$arch" --smp 4 --what memory,tables,cable --clock --msi --deadline --recover --memory --exec --cores --mailbox --doorbell --handler --during --permission --supervised --on-core --dma --nvme --net --udp --transport 2>&1 || true)
+        output=$(PAYLOAD="$payload_dir/$arch.bin" timeout 360 ./scripts/client.py --arch "$arch" --smp 4 --what memory,tables,cable --clock --msi --deadline --recover --memory --exec --cores --mailbox --doorbell --handler --during --permission --supervised --on-core --dma --nvme --net --udp --transport --screen 2>&1 || true)
 
         # Lo que tiene que haber dicho en el banner de texto.
         for expected in "architecture: $arch" "memory:" "tables:" \
@@ -220,6 +220,19 @@ else
         # solo lo sabe el kernel.
         grep -qE "clock=\{'kind': '(tsc|cntpct)'" <<<"$output" \
             || bad "$arch contesto por la red algo que no salio del kernel"
+
+        # Y la pantalla: el segundo cable del cordon (D5). La prueba no le cree
+        # al kernel — se le pide a QEMU una foto y se **lee el texto de la
+        # imagen**, comparando cada celda contra la misma tipografia que el
+        # kernel tiene adentro. Que aparezca el ultimo renglon del arranque
+        # quiere decir que la pantalla lo acompano hasta el final.
+        #
+        # Importa en hierro de verdad: una PC moderna no tiene puerto serie, asi
+        # que sin esto arranca y no hay forma de enterarse de nada.
+        if ! grep -qFe "pantalla: ok" <<<"$output"; then
+            bad "$arch no escribe en la pantalla"
+            printf '%s\n' "$output" | grep -aE "FALLA:|pantalla|screen" | head -6
+        fi
 
         # Y que no se haya perdido **ni un byte** del cable. Un pedido al que le
         # falta un byte se ve como una maquina colgada, y sin esto seria un

@@ -670,6 +670,13 @@ impl<'a, P: Platform> Write for Umbilical<'a, P> {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         for b in s.as_bytes() {
             self.p.uart_write_byte(*b);
+            // Y lo mismo en la pantalla, si la maquina tiene uno (D5).
+            //
+            // Va **aca adentro** y no en cada lugar que escribe, a proposito: asi
+            // no hay forma de que el kernel diga algo por un cable y no por el
+            // otro. Es la misma linea, dibujada en vez de enviada. Si no hay
+            // pantalla, esto no hace nada.
+            crate::screen::put(*b);
         }
         Ok(())
     }

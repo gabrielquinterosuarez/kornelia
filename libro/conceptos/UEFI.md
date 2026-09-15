@@ -78,7 +78,7 @@ Ese último comando es el más didáctico de la lista: dice `PE32+`, o sea Windo
 | | |
 |---|---|
 | **Decisiones** | D25 (todo antes de salir, una sola vez), D24 (UEFI es un eje propio de la frontera), D18/D19/D20 (el blob) |
-| **Dónde vive** | `boot-uefi/src/lib.rs:385#pub unsafe fn take_machine`, `boot-uefi/src/lib.rs:452#exit_boot_services`, `boot-uefi/src/lib.rs:737#unsafe fn load_blob` |
+| **Dónde vive** | `boot-uefi/src/lib.rs:414#pub unsafe fn take_machine`, `boot-uefi/src/lib.rs:490#exit_boot_services`, `boot-uefi/src/lib.rs:776#unsafe fn load_blob` |
 
 Todo UEFI vive en un crate solo, `boot-uefi/`, **compartido por las dos arquitecturas**: UEFI de 64 bits tiene exactamente la misma forma en x86_64 y en aarch64, así que se escribe una vez (D24). Ese crate no puede llevar `asm!` ni `target_arch`, y lo verifica `scripts/check-boundary.sh`.
 
@@ -86,13 +86,13 @@ Las estructuras están transcriptas a mano de la especificación —regla 5: sin
 
 ### D25: la ventana, y por qué el blob se carga tan temprano
 
-`take_machine` hace, en este orden y sin nada en el medio: buscar las tablas (`boot-uefi/src/lib.rs:590#unsafe fn find_tables`), **cargar el blob**, pedir el mapa, salir. El blob va **antes** del mapa, y eso es lo que más cuesta entender:
+`take_machine` hace, en este orden y sin nada en el medio: buscar las tablas (`boot-uefi/src/lib.rs:629#unsafe fn find_tables`), **cargar el blob**, pedir el mapa, salir. El blob va **antes** del mapa, y eso es lo que más cuesta entender:
 
 > El blob se ejecuta **al final del arranque**, mucho después. Se carga **al principio**, porque lo único que sabe leer FAT32 es el firmware.
 
 O sea que el orden no lo decide la lógica del kernel sino la lógica de la ventana: abrir un archivo puede mover la memoria, y la llave que `ExitBootServices` exige tiene que ser la del mapa más reciente. Si el blob se cargara después de pedir el mapa, la llave quedaría vieja y la salida fallaría. Sin esto, D18 y D19 serían imposibles: no hay segunda oportunidad para leer un archivo.
 
-Del mismo problema sale una decisión que parece rara: el blob se lee a un **arreglo estático** de 256 KiB y no a memoria pedida al firmware (`boot-uefi/src/lib.rs:347#const MAX_BLOB`). Por dos razones que van juntas — pedir memoria mueve el mapa, y un estático vive adentro de la imagen, que el mapa informa como memoria del kernel, así que `mem.claim` no se lo puede entregar al agente por accidente.
+Del mismo problema sale una decisión que parece rara: el blob se lee a un **arreglo estático** de 256 KiB y no a memoria pedida al firmware (`boot-uefi/src/lib.rs:376#const MAX_BLOB`). Por dos razones que van juntas — pedir memoria mueve el mapa, y un estático vive adentro de la imagen, que el mapa informa como memoria del kernel, así que `mem.claim` no se lo puede entregar al agente por accidente.
 
 Y si el archivo no entra, no se ejecuta nada. Se pregunta si quedó archivo afuera en vez de suponer: **medio cargador es peor que ninguno**, porque salta a código cortado en la mitad de una instrucción.
 

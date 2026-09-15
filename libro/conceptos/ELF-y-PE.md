@@ -134,7 +134,7 @@ Y esta es la parte que da vuelta el concepto. El código que sube el agente **no
 | Cabecera con arquitectura | Ya la dijo `describe`: el agente compiló **para esta máquina** (P4). |
 | Segmentos con permisos | `mem.claim` y `exec {mode}`: el agente declara privilegio, no el archivo (D27). |
 | Entry point | `exec {handle, off}`: el reclamo más un desplazamiento. |
-| Reubicaciones | Nada. El kernel le pasa al código **su propia dirección** en el primer registro de argumento (`kernel-core/src/protocol.rs:1490#recibe en el primer registro de argumento su propia direccion`). |
+| Reubicaciones | Nada. El kernel le pasa al código **su propia dirección** en el primer registro de argumento (`kernel-core/src/protocol.rs:1526#recibe en el primer registro de argumento su propia direccion`). |
 | Símbolos y enlazador | El agente. Ya enlazó él. |
 
 Lo último es P3 en una línea: **el agente es el compilador**. Un formato ejecutable existe porque el que produce el código y el que lo carga son dos programas distintos que se tienen que poner de acuerdo por escrito. Acá el que produce el código sabe la dirección de destino **antes** de compilar, porque la pidió con `mem.claim`. El acuerdo por escrito sobra.

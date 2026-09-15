@@ -68,6 +68,20 @@ fi
 # mensaje en silencio.
 #
 # El costo es que Ctrl-A X no sale. Se sale con Ctrl-C.
+
+# QMP=<ruta> abre el canal de control de QEMU por un socket. Sirve para una
+# sola cosa y vale la pena: **volcar la pantalla desde afuera**. Es la unica
+# forma de comprobar que el kernel dibuja de verdad sin creerle al kernel, que
+# es como se prueba todo lo demas en este proyecto.
+#
+# No es el monitor de texto sobre el serie (D26): es un canal aparte, asi que el
+# cordon umbilical sigue crudo y nadie se come el 0x01.
+QMP_ARGS=()
+if [ -n "${QMP:-}" ]; then
+    rm -f "$QMP"
+    QMP_ARGS=(-qmp "unix:$QMP,server=on,wait=off")
+fi
+
 if [ -n "${SOCKET:-}" ]; then
     rm -f "$SOCKET"
     SERIAL=(-chardev "socket,id=cord,path=$SOCKET,server=on,wait=off" -serial chardev:cord)
@@ -115,4 +129,4 @@ exec qemu-system-x86_64 \
     -drive if=pflash,format=raw,unit=0,readonly=on,file="$OVMF_CODE" \
     -drive if=pflash,format=raw,unit=1,file=target/OVMF_VARS-x86_64.fd \
     -drive format=raw,file=fat:rw:target/esp-x86_64 \
-    "${SERIAL[@]}" -display none -no-reboot "$@"
+    "${SERIAL[@]}" "${QMP_ARGS[@]}" -display none -no-reboot "$@"

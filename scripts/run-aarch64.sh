@@ -76,6 +76,20 @@ fi
 # mensaje en silencio.
 #
 # El costo es que Ctrl-A X no sale. Se sale con Ctrl-C.
+
+# QMP=<ruta> abre el canal de control de QEMU por un socket. Sirve para una
+# sola cosa y vale la pena: **volcar la pantalla desde afuera**. Es la unica
+# forma de comprobar que el kernel dibuja de verdad sin creerle al kernel, que
+# es como se prueba todo lo demas en este proyecto.
+#
+# No es el monitor de texto sobre el serie (D26): es un canal aparte, asi que el
+# cordon umbilical sigue crudo y nadie se come el 0x01.
+QMP_ARGS=()
+if [ -n "${QMP:-}" ]; then
+    rm -f "$QMP"
+    QMP_ARGS=(-qmp "unix:$QMP,server=on,wait=off")
+fi
+
 if [ -n "${SOCKET:-}" ]; then
     rm -f "$SOCKET"
     SERIAL=(-chardev "socket,id=cord,path=$SOCKET,server=on,wait=off" -serial chardev:cord)
@@ -105,7 +119,15 @@ exec qemu-system-aarch64 \
     `# NETPORT= por si se corren las dos maquinas a la vez: si el puerto del host` \
     `# esta tomado, QEMU no arranca.` \
     -nic "user,model=e1000,hostfwd=udp::${NETPORT:-15556}-10.0.2.15:5555" \
+    `# Una pantalla. La maquina 'virt' no trae ninguna por omision —a diferencia` \
+    `# de q35, que trae VGA— asi que sin esto el firmware no informa framebuffer` \
+    `# y el kernel se queda sin su segundo cable (D5).` \
+    `#` \
+    `# 'ramfb' es lo mas parecido a lo que hay en una placa de verdad para este` \
+    `# proposito: un framebuffer que arma el firmware y entrega como una` \
+    `# direccion, sin que haga falta ningun driver del lado del kernel.` \
+    -device ramfb \
     -drive if=pflash,format=raw,unit=0,readonly=on,file="$AAVMF_CODE" \
     -drive if=pflash,format=raw,unit=1,file=target/AAVMF_VARS-aarch64.fd \
     -drive format=raw,file=fat:rw:target/esp-aarch64 \
-    "${SERIAL[@]}" -display none -no-reboot "$@"
+    "${SERIAL[@]}" "${QMP_ARGS[@]}" -display none -no-reboot "$@"

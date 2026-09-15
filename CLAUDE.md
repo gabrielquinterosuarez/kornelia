@@ -282,6 +282,42 @@ comprueba con **dos arranques**: uno graba un programa distinto del que había,
 otro —máquina nueva, sin escribir nada— lo encuentra y lo corre. En un solo
 arranque no se podría distinguir de haberlo dejado en memoria.
 
+**Y el kernel escribe en la pantalla** (D5). Una PC moderna **no tiene puerto
+serie**, así que sin esto arranca en hierro de verdad y no hay forma de
+enterarse de nada. El firmware entrega el framebuffer dentro de la ventana de
+D25 —preguntar dónde está es un Boot Service— y lo que queda vivo es memoria
+común, que sigue ahí después de `ExitBootServices`.
+
+No contradice D4 y conviene ver por qué: no es un driver. El firmware da una
+dirección, un tamaño y un formato, y escribir ahí es poner píxeles — sin
+interrupciones, sin DMA, sin programar nada. Es la misma pregunta que el kernel
+le hace a la máquina para todo lo demás (P4), con otra respuesta.
+
+**La regla que lo mantiene chico: escribe exactamente los mismos bytes que salen
+por el cable.** Va enganchado adentro de `Umbilical`, así que no hay forma de
+que el kernel diga algo por un cable y no por el otro — es la misma línea,
+dibujada en vez de enviada. Y el CBOR del protocolo **no** pasa por ahí: `emit`
+escribe directo al UART, así que la pantalla muestra lo que el kernel *dice*, no
+el tráfico. Eso sale gratis de cómo ya estaba escrito.
+
+Es **sólo salida**, a propósito. Un teclado USB es un stack entero, pero el
+argumento de fondo es otro: el operador que este kernel supone no es una persona
+(P3, D1), y por el canal viaja CBOR binario. La entrada del agente sigue siendo
+el cable o el transporte que él mismo escribe (D17).
+
+Se adopta **antes que nada**, incluso antes de instalar las tablas de páginas:
+eso es lo más probable que cuelgue en una máquina real, y adoptarla después
+dejaría ciego justo ese tramo. Se puede tocar ya porque hasta entonces siguen
+puestas las tablas del firmware, y las nuestras la cubren igual (D12).
+
+Y la prueba no le cree al kernel: se le pide a QEMU **una foto de la pantalla**
+por su canal de control y se **lee el texto de la imagen**, comparando cada
+celda contra la misma tipografía que el kernel tiene adentro. Que aparezca el
+último renglón del arranque quiere decir que la pantalla lo acompañó hasta el
+final. La tipografía sale de la `misc-fixed` de X11, que es dominio público, y
+la extrae `./scripts/make-font.py` — se corre a mano y la salida está
+commiteada, para que el kernel no dependa de que haya una fuente instalada.
+
 **Y la placa de red manda y recibe paquetes** (`--net`), con los once verbos y
 del lado del agente, igual que el NVMe. Se comprueba con un ARP de ida y vuelta
 contra el otro extremo del cable: la respuesta trae una MAC que no teníamos y

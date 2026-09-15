@@ -91,17 +91,17 @@ Las dos máquinas de prueba están en `scripts/run-x86_64.sh` y `scripts/run-aar
 
 | Bandera | Por qué está |
 |---|---|
-| `scripts/run-x86_64.sh:79#-cpu max` | El default `qemu64` **no tiene páginas de 1 GiB**, que es lo que D12 usa para el identity map. El default de QEMU es más austero que el hardware real, no al revés. |
-| `scripts/run-x86_64.sh:86#-device intel-iommu` y `scripts/run-aarch64.sh:40#MACHINE=virt,iommu=smmuv3` | D8: el IOMMU va encendido. Sin él, `dma.allow` no se puede probar contra nada. Los dos hacen lo mismo y no se parecen: ver [[IOMMU]]. |
-| `scripts/run-x86_64.sh:92#-device edu,dma_mask=0xffffffffffff` | `edu` es un **motor de DMA que se maneja con cuatro escrituras**: es el aparato que hace el DMA que el IOMMU tiene que bloquear. El `dma_mask` no es opcional — ver abajo. |
-| `scripts/run-x86_64.sh:97#-device nvme,serial=kornelia,drive=payload` | Un disco NVMe de verdad: es de donde D19 dice que el cargador se trae el resto, y es el aparato contra el que se prueba [[PCIe]] entero, BARs incluidos. Ver [[NVMe]]. |
-| `scripts/run-aarch64.sh:89#-cpu cortex-a57 -m 512` | Un modelo concreto de ARM, con RAM explícita: en `virt` el default no alcanza. |
+| `scripts/run-x86_64.sh:93#-cpu max` | El default `qemu64` **no tiene páginas de 1 GiB**, que es lo que D12 usa para el identity map. El default de QEMU es más austero que el hardware real, no al revés. |
+| `scripts/run-x86_64.sh:100#-device intel-iommu` y `scripts/run-aarch64.sh:40#MACHINE=virt,iommu=smmuv3` | D8: el IOMMU va encendido. Sin él, `dma.allow` no se puede probar contra nada. Los dos hacen lo mismo y no se parecen: ver [[IOMMU]]. |
+| `scripts/run-x86_64.sh:106#-device edu,dma_mask=0xffffffffffff` | `edu` es un **motor de DMA que se maneja con cuatro escrituras**: es el aparato que hace el DMA que el IOMMU tiene que bloquear. El `dma_mask` no es opcional — ver abajo. |
+| `scripts/run-x86_64.sh:111#-device nvme,serial=kornelia,drive=payload` | Un disco NVMe de verdad: es de donde D19 dice que el cargador se trae el resto, y es el aparato contra el que se prueba [[PCIe]] entero, BARs incluidos. Ver [[NVMe]]. |
+| `scripts/run-aarch64.sh:103#-cpu cortex-a57 -m 512` | Un modelo concreto de ARM, con RAM explícita: en `virt` el default no alcanza. |
 | `NO_ACPI=1` → `virt,...,acpi=off` | Arranca **sin tablas de [[ACPI]]**, así el firmware deja un [[Device-tree|device tree]] en su lugar. Es la única forma de ejercitar el otro dialecto, y el portón lo exige. Ver [[Device-tree]]. |
 | `"$@"` al final de las dos | Todo lo que le pases al script se le pasa a QEMU. Ahí van `-smp 4`, `-s -S`, `-monitor telnet:...`. |
 
 ### D26: el serie va crudo
 
-`scripts/run-x86_64.sh:75#SERIAL=(-serial stdio)` — **sin** el prefijo `mon:`, y no es un olvido.
+`scripts/run-x86_64.sh:89#SERIAL=(-serial stdio)` — **sin** el prefijo `mon:`, y no es un olvido.
 
 Con `mon:stdio`, QEMU multiplexa su monitor sobre la misma terminal, y ese multiplexor **se come el byte `0x01`** (Ctrl-A) como escape junto con el que le sigue. Por ese puerto viaja CBOR (D6) y, más adelante, código máquina: ahí `0x01` es un byte tan legítimo como cualquier otro, y perderlo **corrompe el mensaje en silencio**.
 

@@ -97,16 +97,16 @@ Ahí se ve qué era esencial del mecanismo y qué era el envase. Lo esencial es 
 
 ### El agente declara el privilegio, y es obligatorio
 
-`mode` no tiene valor por omisión, y eso es a propósito: `kernel-core/src/protocol.rs:1503#exec needs mode: supervised or raw`. **Un valor por omisión sería el kernel eligiendo**, y elegir es del agente (P6).
+`mode` no tiene valor por omisión, y eso es a propósito: `kernel-core/src/protocol.rs:1539#exec needs mode: supervised or raw`. **Un valor por omisión sería el kernel eligiendo**, y elegir es del agente (P6).
 
-- `supervised` — anillo 3 en x86_64, EL0 en aarch64. No puede colgar la máquina. La memoria tiene que estar reclamada como alcanzable por el agente (`kernel-core/src/protocol.rs:1549#exec supervised needs memory claimed with user`), y para volver hay que pasar por una ventanilla cuyos bytes **publica `describe`**, así el agente no los tiene horneados (P4).
+- `supervised` — anillo 3 en x86_64, EL0 en aarch64. No puede colgar la máquina. La memoria tiene que estar reclamada como alcanzable por el agente (`kernel-core/src/protocol.rs:1585#exec supervised needs memory claimed with user`), y para volver hay que pasar por una ventanilla cuyos bytes **publica `describe`**, así el agente no los tiene horneados (P4).
 - `raw` — privilegio completo, como un módulo de Linux.
 
-Y hay un lugar donde `raw` no se ofrece: el núcleo que atiende el protocolo. `kernel-core/src/protocol.rs:1527#the protocol core only runs supervised`. Ahí manda el kernel (D29), y para que eso sea verdad el agente no puede *poder* enmascarar las interrupciones. Si quiere el privilegio entero, que reclame un núcleo. El kernel lo **publica** en `describe exec` (`kernel-core/src/protocol.rs:722#fn write_exec`) en vez de dejar que se descubra chocándose.
+Y hay un lugar donde `raw` no se ofrece: el núcleo que atiende el protocolo. `kernel-core/src/protocol.rs:1563#the protocol core only runs supervised`. Ahí manda el kernel (D29), y para que eso sea verdad el agente no puede *poder* enmascarar las interrupciones. Si quiere el privilegio entero, que reclame un núcleo. El kernel lo **publica** en `describe exec` (`kernel-core/src/protocol.rs:758#fn write_exec`) en vez de dejar que se descubra chocándose.
 
 ### Y declara cuánto puede tardar
 
-`exec {deadline_ms}` corta el código que no vuelve: `kernel-core/src/protocol.rs:1016#deadline_ms: Option<u64>,`. La respuesta trae `cancelled` como campo aparte de `faulted` (`kernel-core/src/protocol.rs:1700#w.text("cancelled");`) porque el código no hizo nada mal: **se lo cortaron**, y para el que depura eso es información distinta.
+`exec {deadline_ms}` corta el código que no vuelve: `kernel-core/src/protocol.rs:1052#deadline_ms: Option<u64>,`. La respuesta trae `cancelled` como campo aparte de `faulted` (`kernel-core/src/protocol.rs:1736#w.text("cancelled");`) porque el código no hizo nada mal: **se lo cortaron**, y para el que depura eso es información distinta.
 
 Un módulo colgado, no. No hay `deadline_ms` en `insmod`.
 
@@ -126,7 +126,7 @@ Un módulo colgado, no. No hay `deadline_ms` en `insmod`.
 
 D27 **solo cubre `exec`**. Un [[Handler|handler]] instalado con `irq.install` corre **siempre privilegiado**, y no por comodidad: el hardware no sabe entregar una interrupción a un nivel sin privilegio. En x86_64 la entrada de la IDT exige anillo 0; en aarch64 la excepción entra en EL1. Un handler del agente es, en este sentido, tan `raw` como un módulo.
 
-Y el blob de arranque (D18, `kernel-core/src/lib.rs:230#fn run_blob`) es lo más parecido que hay a un módulo cargado al arrancar: corre privilegiado, en el mismo espacio de direcciones, antes de que exista el protocolo. Con el mismo riesgo — y por eso hay algo que Linux no tiene: **antes de saltar, avisa y espera dos segundos, y cualquier byte lo cancela** (`kernel-core/src/lib.rs:291#cancelled: someone is on the other side`). Sin esa ventana, un blob malo dejaría la máquina inútil en cada arranque y habría que sacarle el disco. La respuesta de Linux a un módulo que cuelga al arrancar es reiniciar en modo rescate; la de Kornelia es una ventana en **cada** arranque.
+Y el blob de arranque (D18, `kernel-core/src/lib.rs:243#fn run_blob`) es lo más parecido que hay a un módulo cargado al arrancar: corre privilegiado, en el mismo espacio de direcciones, antes de que exista el protocolo. Con el mismo riesgo — y por eso hay algo que Linux no tiene: **antes de saltar, avisa y espera dos segundos, y cualquier byte lo cancela** (`kernel-core/src/lib.rs:304#cancelled: someone is on the other side`). Sin esa ventana, un blob malo dejaría la máquina inútil en cada arranque y habría que sacarle el disco. La respuesta de Linux a un módulo que cuelga al arrancar es reiniciar en modo rescate; la de Kornelia es una ventana en **cada** arranque.
 
 ## Cómo se ve roto
 

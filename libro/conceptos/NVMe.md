@@ -85,7 +85,7 @@ Un **namespace** es la división del disco que hace el propio controlador: `/dev
 
 ## Cómo lo hace Kornelia
 
-**Acá está la demostración concreta de D4.** El kernel no tiene driver de NVMe; el driver lo escribió el agente, y usa **los verbos y nada más**. Vive en `scripts/client.py:2008#class Nvme`.
+**Acá está la demostración concreta de D4.** El kernel no tiene driver de NVMe; el driver lo escribió el agente, y usa **los verbos y nada más**. Vive en `scripts/client.py:2012#class Nvme`.
 
 | | |
 |---|---|
@@ -102,14 +102,14 @@ Qué hace cada verbo en el driver:
 - **`dma.allow`** por cada página que el aparato va a tocar. Con el IOMMU encendido y vacío (D8), una cola no declarada simplemente no existe para el controlador.
 - **`release`** al final. Lo que el agente toma, el agente devuelve.
 
-Hay una función que junta tres pasos a propósito, `scripts/client.py:2099#def shared_page`: reclamar, **limpiar** y declarar. Van juntos siempre porque olvidarse de cualquiera de los dos últimos produce el mismo síntoma —el aparato "no contesta"— por causas opuestas.
+Hay una función que junta tres pasos a propósito, `scripts/client.py:2103#def shared_page`: reclamar, **limpiar** y declarar. Van juntos siempre porque olvidarse de cualquiera de los dos últimos produce el mismo síntoma —el aparato "no contesta"— por causas opuestas.
 
 **Qué se quitó.** No hay capa de bloques, ni planificador de I/O, ni `blk-mq`, ni `/dev/nvme0n1`, ni sistema de archivos ([[53-Sin-sistema-de-archivos]]). Lo que en Linux son cinco capas entre `read()` y el silicio, acá es el agente escribiendo un comando de 64 bytes en una página que reclamó. La capa no se reemplazó: se dejó vacía (P2).
 
-**Y llega hasta el final:** el driver lee el bloque 0, comprueba una cabecera, trae el payload **directo a un reclamo del agente por DMA** (`scripts/client.py:2392#def read_into`, sin que los bytes pasen por el cable), verifica una suma, reclama un núcleo y salta ahí con `exec`. Eso es D19 de punta a punta. El portón lo corre en las dos arquitecturas contra un `-device nvme` de verdad.
+**Y llega hasta el final:** el driver lee el bloque 0, comprueba una cabecera, trae el payload **directo a un reclamo del agente por DMA** (`scripts/client.py:2396#def read_into`, sin que los bytes pasen por el cable), verifica una suma, reclama un núcleo y salta ahí con `exec`. Eso es D19 de punta a punta. El portón lo corre en las dos arquitecturas contra un `-device nvme` de verdad.
 
 > [!info] Se busca por clase, no por modelo
-> El controlador se encuentra por sus tres bytes de clase —`scripts/client.py:1890#NVME_CLASS = (0x01, 0x08, 0x02)`, o sea "almacenamiento / no volátil / NVMe"— y no por fabricante y modelo. Es P4 aplicado al bus: el aparato dice **qué hace**, y por eso el mismo driver anda contra cualquier NVMe y no solo contra el de QEMU.
+> El controlador se encuentra por sus tres bytes de clase —`scripts/client.py:1894#NVME_CLASS = (0x01, 0x08, 0x02)`, o sea "almacenamiento / no volátil / NVMe"— y no por fabricante y modelo. Es P4 aplicado al bus: el aparato dice **qué hace**, y por eso el mismo driver anda contra cualquier NVMe y no solo contra el de QEMU.
 
 ## Cómo se ve roto
 

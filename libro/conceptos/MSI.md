@@ -82,7 +82,7 @@ Fijate en `/proc/interrupts`: las filas con nombre `nvme0q1`, `nvme0q2`… son *
 | **El verbo** | `irq.install {msi: true}` |
 | **Dónde vive** | `kernel-x86_64/src/irq.rs:733#const MSI_BASE: u64 = 0xFEE0_0000`, `kernel-aarch64/src/irq.rs:432#pub unsafe fn install_msi` |
 
-**Con `msi`, el número lo elige el kernel.** Es la única excepción a que el agente diga qué quiere, y tiene una razón: el número es un recurso de la máquina y el agente no tiene cómo saber cuál está libre (`kernel-core/src/protocol.rs:2095#let by_write = a.msi.unwrap_or(false)`). Como la ranura se reserva **antes** de saber el número, hay que corregirla apenas la arquitectura lo devuelve — si no, el reparto no encontraría nunca ese handler (`kernel-core/src/protocol.rs:2132#handlers::set_interrupt(slot, interrupt)`).
+**Con `msi`, el número lo elige el kernel.** Es la única excepción a que el agente diga qué quiere, y tiene una razón: el número es un recurso de la máquina y el agente no tiene cómo saber cuál está libre (`kernel-core/src/protocol.rs:2131#let by_write = a.msi.unwrap_or(false)`). Como la ranura se reserva **antes** de saber el número, hay que corregirla apenas la arquitectura lo devuelve — si no, el reparto no encontraría nunca ese handler (`kernel-core/src/protocol.rs:2168#handlers::set_interrupt(slot, interrupt)`).
 
 Y la respuesta trae **la escritura que la dispara**, ahí mismo. No es un lujo: con MSI eso es exactamente lo que el agente necesita **para configurar su aparato** (la dirección y el dato que le va a poner en su registro de MSI). Mandarlo a buscarlo a `describe` sería un viaje de ida y vuelta por un dato que ese mismo pedido acaba de decidir.
 

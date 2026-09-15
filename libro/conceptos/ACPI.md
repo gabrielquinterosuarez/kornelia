@@ -101,7 +101,7 @@ El recorrido entero es un `match` sobre cuatro letras (`kernel-core/src/acpi.rs:
 Tres cosas que salen directo de P4:
 
 1. **El cable se muda.** El kernel arranca con la dirección del [[UART]] horneada, porque hay que poder hablar antes de leer nada. Apenas la SPCR dice dónde está la consola de verdad, se muda ahí. Es P4 aplicado a lo más básico que tiene el kernel.
-2. **Se publican las firmas de todas las tablas, se lean o no** (`kernel-core/src/protocol.rs:887#acpi_signatures`). Que exista en la máquina algo que este kernel todavía no sabe leer **es más útil que callarlo**: el agente ve la lista y decide.
+2. **Se publican las firmas de todas las tablas, se lean o no** (`kernel-core/src/protocol.rs:923#acpi_signatures`). Que exista en la máquina algo que este kernel todavía no sabe leer **es más útil que callarlo**: el agente ve la lista y decide.
 3. **Lo que no se interpreta se dice.** SMBIOS se informa con su dirección y nada más: inventarle campos sería peor que admitir que no se leyó.
 
 **Qué se quitó, y es enorme: no hay intérprete de AML.** El DSDT no se ejecuta ni se lee. Sin ACPICA no hay gestión de energía, no hay enumeración de aparatos que no estén en el bus PCIe, y no hay forma de averiguar qué cable INTx le toca a un aparato — que es justamente el camino viejo de interrupciones que este kernel **no** implementa. La salida no es una carencia disfrazada: es [[MSI]], donde el aparato escribe un dato en vez de tener cable. Y lo poco de energía que hace falta —arrancar un núcleo en ARM— sale de un campo de datos de la FADT (PSCI), no de un método.

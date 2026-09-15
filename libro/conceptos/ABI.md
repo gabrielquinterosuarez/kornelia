@@ -125,7 +125,7 @@ Que la ABI interna **no** sea estable es una decisión, no un descuido: mantener
 
 Acá el problema es más agudo que en un sistema normal, porque el código que corre lo **compiló otra máquina**: el agente es un compilador externo (P3) que emite bytes y los sube. Cuando el kernel salta a esos bytes le tiene que pasar algo —al menos la dirección donde los cargó—, y ahí hay una ABI aunque nadie la haya nombrado.
 
-La respuesta del proyecto es la de siempre: **publicarla en vez de que se deduzca.** `describe {what:["exec"]}` devuelve el campo `arguments` con **los nombres de los registros de esta máquina**, en orden (`kernel-core/src/protocol.rs:776#for i in P::ARGUMENTS`). Son nombres y no índices porque un nombre es lo que el agente puede pedir (D3): el protocolo no dice `RCX` en ninguna parte de su definición, lo dice la máquina cuando se le pregunta.
+La respuesta del proyecto es la de siempre: **publicarla en vez de que se deduzca.** `describe {what:["exec"]}` devuelve el campo `arguments` con **los nombres de los registros de esta máquina**, en orden (`kernel-core/src/protocol.rs:812#for i in P::ARGUMENTS`). Son nombres y no índices porque un nombre es lo que el agente puede pedir (D3): el protocolo no dice `RCX` en ninguna parte de su definición, lo dice la máquina cuando se le pregunta.
 
 Y mirá los dos valores de la tabla de arriba: `&[2, 3]` en x86_64 y `&[0, 1]` en aarch64. Son índices sobre la lista `REGISTERS` que cada arquitectura publica, y **en x86_64 no son los dos primeros**. Ese `2, 3` es el bug fosilizado: apunta a `rcx` y `rdx` porque el target es UEFI. Si el kernel hubiera hecho la deducción "estamos en x86_64, entonces RDI/RSI", ese constante diría `&[5, 4]` y todo se rompería en silencio.
 

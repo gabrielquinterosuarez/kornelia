@@ -18,6 +18,17 @@ pub struct Machine {
     pub failure: Option<&'static str>,
     /// Que paso al buscar el blob en el disco (D18).
     pub blob: Blob,
+    /// La pantalla, si la maquina tiene una y el firmware dijo donde.
+    ///
+    /// Es **el segundo cable del cordon umbilical** (D5), y existe por una razon
+    /// muy concreta: una PC moderna no tiene puerto serie, asi que sin esto
+    /// arranca y no hay forma de enterarse de nada.
+    ///
+    /// Solo salida, y a proposito. La entrada del agente sigue siendo el cable o
+    /// el transporte que el mismo escribe (D17), porque el operador que este
+    /// kernel supone **no es una persona** (P3): un driver de teclado seria
+    /// trabajo grande para servir a alguien que no esta.
+    pub screen: Option<Screen>,
 }
 
 /// El blob que el entorno de arranque trajo del disco (D18).
@@ -67,6 +78,30 @@ pub struct Tables {
     pub smbios: Option<u64>,
 }
 
+/// Donde esta la pantalla y como esta armada.
+///
+/// El firmware la entrega como cuatro numeros y nada mas. Escribir ahi es poner
+/// pixeles en memoria: sin interrupciones, sin DMA, sin programar un aparato.
+/// Por eso no es un driver y no contradice D4 — es la misma pregunta que el
+/// kernel le hace a la maquina para todo lo demas (P4), con otra respuesta.
+#[derive(Clone, Copy, Default)]
+#[cfg_attr(test, derive(Debug))]
+pub struct Screen {
+    /// Donde empieza el framebuffer, en fisicas. Es memoria comun: sigue viva
+    /// despues de `ExitBootServices`, que es lo que la hace util.
+    pub base: u64,
+    /// Cuantos pixeles se ven de ancho y de alto.
+    pub width: u32,
+    pub height: u32,
+    /// Cuantos pixeles hay **de una fila a la siguiente**. No es lo mismo que el
+    /// ancho: la fila puede traer relleno al final, y confundirlos dibuja todo
+    /// en diagonal.
+    pub stride: u32,
+    /// Cuanto ocupa en total, para no escribir fuera.
+    pub bytes: u64,
+}
+
+
 impl Machine {
     /// Maquina sobre la que no se pudo averiguar nada.
     pub const fn mute(reason: &'static str) -> Self {
@@ -75,6 +110,7 @@ impl Machine {
             tables: Tables { acpi: None, device_tree: None, smbios: None },
             failure: Some(reason),
             blob: Blob::Absent,
+            screen: None,
         }
     }
 

@@ -97,7 +97,7 @@ En x86 casi siempre **no hay rastro**, que es el punto de la sección anterior.
 | | |
 |---|---|
 | **Decisiones** | D4 (el kernel no tiene drivers), D12 (MMIO no cacheable), P1, P4, P5 |
-| **Dónde vive** | `kernel-core/src/memory.rs:109#Unreported,` y `kernel-core/src/protocol.rs:1259#access-refused` |
+| **Dónde vive** | `kernel-core/src/memory.rs:109#Unreported,` y `kernel-core/src/protocol.rs:1295#access-refused` |
 
 El kernel **no enumera aparatos ni asigna BARs**: eso es trabajo de driver, y los drivers los escribe el agente (D4). Lo que hace es lo que el agente no puede hacer solo:
 

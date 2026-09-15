@@ -134,7 +134,7 @@ qemu-system-x86_64 \
 
 | Pedazo | Para qué |
 |---|---|
-| `-machine q35` | **Obligatorio acá.** Es la [[Maquina-virtual|máquina virtual]] que [[QEMU]] emula: por omisión usa `pc` (el chipset i440fx de 1996), y ahí el IOMMU de Intel **no existe**. Sin esto QEMU se niega a arrancar. Es lo mismo que hace `scripts/run-x86_64.sh` (`scripts/run-x86_64.sh:78#-machine q35`). |
+| `-machine q35` | **Obligatorio acá.** Es la [[Maquina-virtual|máquina virtual]] que [[QEMU]] emula: por omisión usa `pc` (el chipset i440fx de 1996), y ahí el IOMMU de Intel **no existe**. Sin esto QEMU se niega a arrancar. Es lo mismo que hace `scripts/run-x86_64.sh` (`scripts/run-x86_64.sh:92#-machine q35`). |
 | `-enable-kvm -cpu host` | Que el silicio corra el código en vez de emularlo. Sin esto va diez veces más lento, y no verías las capacidades reales de tu procesador. |
 | `-smp 2` | Dos núcleos: hace falta para todo lo de la **Parte IX**. |
 | `-device intel-iommu` | Un IOMMU emulado, para las prácticas de [[IOMMU]]. Igual que hacen los `scripts/run-*.sh` de Kornelia. |

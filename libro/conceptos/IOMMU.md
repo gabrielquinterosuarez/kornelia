@@ -82,7 +82,7 @@ El código vive en `drivers/iommu/intel/iommu.c` y `drivers/iommu/arm/arm-smmu-v
 |---|---|
 | **Decisiones** | D8 (IOMMU encendido por defecto), D22 (las dos arquitecturas desde el primer commit) |
 | **El verbo** | `dma.allow {device, handle}`; el estado se mira con `describe {what:["iommu"]}` |
-| **Dónde vive** | `kernel-x86_64/src/iommu.rs:213#pub unsafe fn install` · `kernel-aarch64/src/smmu.rs:460#pub unsafe fn install` · `kernel-core/src/protocol.rs:540#if q.iommu` |
+| **Dónde vive** | `kernel-x86_64/src/iommu.rs:213#pub unsafe fn install` · `kernel-aarch64/src/smmu.rs:460#pub unsafe fn install` · `kernel-core/src/protocol.rs:570#if q.iommu` |
 
 **Arranca encendido y vacío.** Vacío quiere decir que cada entrada dice "no presente" y que **ningún aparato llega a ninguna parte**. Es el punto de partida contra el cual `dma.allow` significa algo: si el estado inicial fuera "todo pasa", declarar no agregaría información.
 

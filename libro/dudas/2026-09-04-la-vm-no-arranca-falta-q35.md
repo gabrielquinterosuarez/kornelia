@@ -31,7 +31,7 @@ Y volvió el prompt. **No arrancó nada**: [[QEMU]] se negó a empezar. Eso no s
 
 Faltaba **`-machine q35`**. Por omisión `qemu-system-x86_64` emula la máquina `pc`, que es el chipset i440fx de 1996, y ahí el [[IOMMU]] de Intel **no existe**: no es que no funcione, es que el [[Aparato|aparato]] no se puede ni instanciar.
 
-La práctica estaba mal escrita: copié el `-device intel-iommu` de `scripts/run-x86_64.sh` **sin copiar el `-machine q35` que está tres líneas más arriba en ese mismo script** (`scripts/run-x86_64.sh:78#-machine q35`). El script del kernel siempre lo tuvo.
+La práctica estaba mal escrita: copié el `-device intel-iommu` de `scripts/run-x86_64.sh` **sin copiar el `-machine q35` que está tres líneas más arriba en ese mismo script** (`scripts/run-x86_64.sh:92#-machine q35`). El script del kernel siempre lo tuvo.
 
 Verificado con los archivos del autor y `-snapshot` para no escribirle al disco: con q35 arranca hasta el login. Y de paso el arranque confirmó otra cosa del libro — `tsc: Detected 1991.992 MHz processor`, los mismos 1,992 GHz que había medido [[P02-Medir-el-reloj-y-las-latencias]].
 

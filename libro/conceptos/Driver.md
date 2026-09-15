@@ -106,15 +106,15 @@ Lo que el kernel ofrece en vez del modelo son los **once verbos**, y resulta que
 
 ### La demostración concreta: [[NVMe]]
 
-No es una promesa de diseño. Hay un driver de NVMe **escrito con los once verbos y nada más**, en `scripts/client.py:2008#class Nvme`, que arranca un controlador de verdad, le crea colas, lee el bloque 0, trae el resto por DMA directo a un reclamo del agente y salta ahí con `exec`. El portón lo corre en las dos arquitecturas contra un `-device nvme`.
+No es una promesa de diseño. Hay un driver de NVMe **escrito con los once verbos y nada más**, en `scripts/client.py:2012#class Nvme`, que arranca un controlador de verdad, le crea colas, lee el bloque 0, trae el resto por DMA directo a un reclamo del agente y salta ahí con `exec`. El portón lo corre en las dos arquitecturas contra un `-device nvme`.
 
-Busca el aparato por su **clase** —`scripts/client.py:1890#NVME_CLASS = (0x01, 0x08, 0x02)`— y no por fabricante y modelo, que es P4 aplicado al bus: el aparato dice *qué hace*, y por eso el mismo driver anda contra cualquier NVMe.
+Busca el aparato por su **clase** —`scripts/client.py:1894#NVME_CLASS = (0x01, 0x08, 0x02)`— y no por fabricante y modelo, que es P4 aplicado al bus: el aparato dice *qué hace*, y por eso el mismo driver anda contra cualquier NVMe.
 
 ### Dónde corre ese driver, y por qué eso todavía va a cambiar
 
 Hoy corre **del otro lado del cable**: es Python en la máquina del agente, mandando verbos. Eso es cómodo para escribirlo y lentísimo para usarlo — cada lectura de un registro es un viaje de ida y vuelta por el [[UART|cordón umbilical]].
 
-P3 dice qué falta: *el agente no es un participante en tiempo de ejecución, es un **compilador***. El final del camino es que el agente **emita el driver como código máquina** y lo suba con `exec`, para que corra sin él. El cargador de D19 ya hace el último paso — reclama un núcleo y salta ahí— y ya evita el cable donde importa: `scripts/client.py:2392#def read_into` trae los bloques **directo a un reclamo por DMA**, sin que los bytes pasen por el serie.
+P3 dice qué falta: *el agente no es un participante en tiempo de ejecución, es un **compilador***. El final del camino es que el agente **emita el driver como código máquina** y lo suba con `exec`, para que corra sin él. El cargador de D19 ya hace el último paso — reclama un núcleo y salta ahí— y ya evita el cable donde importa: `scripts/client.py:2396#def read_into` trae los bloques **directo a un reclamo por DMA**, sin que los bytes pasen por el serie.
 
 ### Qué se quitó
 

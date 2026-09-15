@@ -292,7 +292,7 @@ fn only_what_is_free_counts_as_free() {
         Region::new(12288, 4096, Kind::Free),
         Region::new(16384, 1 << 30, Kind::Mmio),
     ];
-    let m = Machine { regions: &REGIONS, tables: Tables::default(), failure: None, blob: crate::machine::Blob::Absent };
+    let m = Machine { regions: &REGIONS, tables: Tables::default(), failure: None, blob: crate::machine::Blob::Absent, screen: None };
 
     // 8 KiB: las dos regiones libres. Ni el firmware ni el MMIO cuentan, por
     // mas que el MMIO sea 1 GiB de espacio direccionable.
@@ -600,7 +600,7 @@ static MAP: [Region; 4] = [
 ];
 
 fn machine() -> Machine {
-    Machine { regions: &MAP, tables: Tables::default(), failure: None, blob: crate::machine::Blob::Absent }
+    Machine { regions: &MAP, tables: Tables::default(), failure: None, blob: crate::machine::Blob::Absent, screen: None }
 }
 
 #[test]
@@ -651,7 +651,7 @@ fn without_a_map_nothing_is_ours() {
 // ---------------------------------------------------------------------------
 
 fn from_regions(regions: &'static [Region]) -> Machine {
-    Machine { regions: regions, tables: Tables::default(), failure: None, blob: crate::machine::Blob::Absent }
+    Machine { regions: regions, tables: Tables::default(), failure: None, blob: crate::machine::Blob::Absent, screen: None }
 }
 
 #[test]
@@ -849,7 +849,7 @@ static SAMPLE_MAP: [Region; 3] = [
 ];
 
 fn sample_machine() -> Machine {
-    Machine { regions: &SAMPLE_MAP, tables: Tables::default(), failure: None, blob: crate::machine::Blob::Absent }
+    Machine { regions: &SAMPLE_MAP, tables: Tables::default(), failure: None, blob: crate::machine::Blob::Absent, screen: None }
 }
 
 fn request_of(bytes: u64) -> Request {
@@ -1730,7 +1730,7 @@ fn which_chunks_have_kernel_inside_is_recognized() {
         Region::new(0x1000, 0x1000, Kind::Kernel),
         Region::new(GIB, GIB, Kind::Free),
     ];
-    let m = Machine { regions: &MAP, tables: Tables::default(), failure: None, blob: crate::machine::Blob::Absent };
+    let m = Machine { regions: &MAP, tables: Tables::default(), failure: None, blob: crate::machine::Blob::Absent, screen: None };
 
     assert!(paging_touches(&m, 0x1000, 0x2000), "el rango del kernel mismo");
     assert!(paging_touches(&m, 0, 0x2000), "un rango que lo incluye");
@@ -1752,7 +1752,7 @@ fn a_chunk_with_only_devices_is_not_split() {
         Region::new(0, 0x1000, Kind::Kernel),
         Region::new(3 * GIB, GIB, Kind::Mmio),
     ];
-    let m = Machine { regions: &MAP, tables: Tables::default(), failure: None, blob: crate::machine::Blob::Absent };
+    let m = Machine { regions: &MAP, tables: Tables::default(), failure: None, blob: crate::machine::Blob::Absent, screen: None };
     assert!(crate::paging::needs_split(&m, 0), "el del kernel si");
     assert!(!crate::paging::needs_split(&m, 3), "el de puro mmio no");
     assert!(!crate::paging::needs_split(&m, 2), "y uno vacio tampoco");
@@ -1770,7 +1770,7 @@ fn fine_grain_drags_along_what_is_next_to_it() {
         Region::new(0x1000, 0x1000, Kind::Kernel),
         Region::new(0x2000, 0x1000, Kind::Free),
     ];
-    let m = Machine { regions: &MAP, tables: Tables::default(), failure: None, blob: crate::machine::Blob::Absent };
+    let m = Machine { regions: &MAP, tables: Tables::default(), failure: None, blob: crate::machine::Blob::Absent, screen: None };
 
     // Las dos caen en el mismo bloque de 2 MiB, asi que el bloque entero queda
     // fuera del alcance del agente aunque una de las dos sea libre.
@@ -1982,12 +1982,12 @@ fn what_the_machine_said_beats_what_can_be_deduced() {
     use crate::memory::Caching;
     static MAP: [Region; 1] =
         [Region { start: 0, bytes: GIB, kind: Kind::Reserved, caching: Caching::WriteBack }];
-    let m = Machine { regions: &MAP, tables: Tables::default(), failure: None, blob: crate::machine::Blob::Absent };
+    let m = Machine { regions: &MAP, tables: Tables::default(), failure: None, blob: crate::machine::Blob::Absent, screen: None };
     assert_eq!(crate::paging::attr_of(&m, 0), crate::paging::Attr::Memory);
 
     // Y la misma region sin el dato cae en la deduccion de siempre.
     static NO_DATA: [Region; 1] = [Region::new(0, GIB, Kind::Reserved)];
-    let m = Machine { regions: &NO_DATA, tables: Tables::default(), failure: None, blob: crate::machine::Blob::Absent };
+    let m = Machine { regions: &NO_DATA, tables: Tables::default(), failure: None, blob: crate::machine::Blob::Absent, screen: None };
     assert_eq!(crate::paging::attr_of(&m, 0), crate::paging::Attr::Device);
 }
 
@@ -2010,6 +2010,7 @@ fn one_uncacheable_piece_decides_for_the_whole_page() {
         tables: Tables::default(),
         failure: None,
         blob: crate::machine::Blob::Absent,
+        screen: None,
     };
     assert_eq!(crate::paging::attr_of(&m, 0), crate::paging::Attr::Device);
 }
@@ -2030,5 +2031,5 @@ fn both_ways() -> Machine {
     // `boot-uefi`, que es quien habla UEFI (D24).
     static MAP: [Region; 1] =
         [Region { start: 0, bytes: GIB, kind: Kind::Free, caching: Caching::WriteBack }];
-    Machine { regions: &MAP, tables: Tables::default(), failure: None, blob: crate::machine::Blob::Absent }
+    Machine { regions: &MAP, tables: Tables::default(), failure: None, blob: crate::machine::Blob::Absent, screen: None }
 }

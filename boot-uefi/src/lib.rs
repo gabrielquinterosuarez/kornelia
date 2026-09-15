@@ -34,7 +34,7 @@
 
 use core::ffi::c_void;
 use core::mem::{offset_of, size_of};
-use kernel_core::machine::{Blob, Machine, Tables};
+use kernel_core::machine::{Blob, Machine, Screen, Tables};
 use kernel_core::memory::{Caching, Kind, Region};
 
 // ---------------------------------------------------------------------------
@@ -149,6 +149,32 @@ struct BootServices {
     unload_image: *mut c_void,
     /// El apreton de manos: despues de esto la maquina es nuestra.
     exit_boot_services: unsafe extern "efiapi" fn(image: *mut c_void, key: usize) -> Status,
+
+    // Varios
+    get_next_monotonic_count: *mut c_void,
+    stall: *mut c_void,
+    set_watchdog_timer: *mut c_void,
+
+    // Controladores
+    connect_controller: *mut c_void,
+    disconnect_controller: *mut c_void,
+
+    // Abrir y cerrar protocolos
+    open_protocol: *mut c_void,
+    close_protocol: *mut c_void,
+    open_protocol_information: *mut c_void,
+
+    // Biblioteca
+    protocols_per_handle: *mut c_void,
+    locate_handle_buffer: *mut c_void,
+    /// Busca **el primero que haya** que ofrezca un protocolo, sin que haya que
+    /// nombrar un handle. Es como se llega a la pantalla: no se sabe de antemano
+    /// que aparato la maneja, y tampoco hace falta (P4).
+    locate_protocol: unsafe extern "efiapi" fn(
+        guid: *const Guid,
+        registration: *mut c_void,
+        interface: *mut *mut c_void,
+    ) -> Status,
     // De aca en adelante hay mas servicios que todavia no se usan.
 }
 
@@ -241,6 +267,9 @@ const _: () = assert!(size_of::<Guid>() == 16);
 const _: () = assert!(offset_of!(ConfigEntry, table) == 16);
 const _: () = assert!(size_of::<ConfigEntry>() == 24);
 const _: () = assert!(offset_of!(BootServices, handle_protocol) == 152);
+// 0x140 en la especificacion. Es el que esta mas lejos del principio, asi que
+// es el que mas campos opacos tiene delante y el mas facil de correr.
+const _: () = assert!(offset_of!(BootServices, locate_protocol) == 320);
 const _: () = assert!(offset_of!(LoadedImage, device_handle) == 24);
 const _: () = assert!(offset_of!(FileSystem, open_volume) == 8);
 const _: () = assert!(offset_of!(File, read) == 32);
@@ -413,6 +442,15 @@ pub unsafe fn take_machine(image: *mut c_void, systab: *mut SystemTable) -> Mach
     // vieja y la salida fallaria.
     let blob = load_blob(image, bs);
 
+    // Y la pantalla, por la misma razon y en el mismo momento (D25): preguntar
+    // donde esta es un Boot Service, asi que despues de salir ya no se puede.
+    // Lo que queda vivo es el framebuffer, que es memoria comun.
+    //
+    // Va antes del mapa de memoria porque `locate_protocol` puede hacer que el
+    // firmware asigne memoria, y eso invalidaria la llave que `ExitBootServices`
+    // exige. Es la misma trampa que ya obliga a cargar el blob aca arriba.
+    let screen = find_screen(&*bs);
+
     let buffer = &raw mut BUFFER as *mut u8;
 
     // Sin valor inicial: el unico camino que sale del bucle de abajo es el que
@@ -473,6 +511,7 @@ pub unsafe fn take_machine(image: *mut c_void, systab: *mut SystemTable) -> Mach
         tables,
         failure: None,
         blob,
+        screen,
     }
 }
 
@@ -790,4 +829,100 @@ unsafe fn load_blob(image: *mut c_void, bs: *mut BootServices) -> Blob {
         return Blob::Failed("blob.bin is empty");
     }
     Blob::Loaded(core::slice::from_raw_parts(dest, size))
+}
+
+// --- La pantalla ------------------------------------------------------------
+//
+// En una maquina sin puerto serie, esto es lo unico que el kernel tiene para
+// decir algo. No es un driver y no contradice D4: el firmware entrega una
+// direccion, un tamano y un formato, y escribir ahi es poner pixeles en memoria
+// — sin interrupciones, sin DMA, sin programar nada.
+//
+// Y tiene que pedirse **dentro de la ventana de D25**, junto con el mapa de
+// memoria y el blob: `locate_protocol` es un Boot Service y despues de
+// `ExitBootServices` no existe. Lo que queda vivo es el framebuffer, que es
+// memoria comun y sigue ahi.
+
+/// `EFI_GRAPHICS_OUTPUT_PROTOCOL`.
+const GRAPHICS_OUTPUT: Guid = Guid(
+    0x9042_a9de,
+    0x23dc,
+    0x4a38,
+    [0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a],
+);
+
+/// Como esta armado un pixel. Solo interesan los dos que son de 32 bits.
+const PIXEL_RGB: u32 = 0;
+const PIXEL_BGR: u32 = 1;
+
+#[repr(C)]
+struct GraphicsOutput {
+    query_mode: *mut c_void,
+    set_mode: *mut c_void,
+    blt: *mut c_void,
+    mode: *mut GraphicsMode,
+}
+
+#[repr(C)]
+struct GraphicsMode {
+    max_mode: u32,
+    mode: u32,
+    info: *mut ModeInfo,
+    info_size: usize,
+    framebuffer_base: u64,
+    framebuffer_size: usize,
+}
+
+#[repr(C)]
+struct ModeInfo {
+    version: u32,
+    width: u32,
+    height: u32,
+    pixel_format: u32,
+    pixel_bitmask: [u32; 4],
+    /// Cuantos pixeles hay de una fila a la siguiente. **No es lo mismo que el
+    /// ancho**: la fila puede venir con relleno al final, y suponer que son
+    /// iguales dibuja todo en diagonal.
+    stride: u32,
+}
+
+/// Le pregunta al firmware si hay pantalla, y donde.
+///
+/// # Safety
+///
+/// `boot` tiene que ser la tabla de Boot Services todavia viva.
+unsafe fn find_screen(boot: &BootServices) -> Option<Screen> {
+    let mut found: *mut c_void = core::ptr::null_mut();
+    let status = (boot.locate_protocol)(&GRAPHICS_OUTPUT, core::ptr::null_mut(), &mut found);
+    if status != 0 || found.is_null() {
+        return None;
+    }
+    let gop = &*(found as *const GraphicsOutput);
+    if gop.mode.is_null() {
+        return None;
+    }
+    let mode = &*gop.mode;
+    if mode.info.is_null() {
+        return None;
+    }
+    let info = &*mode.info;
+
+    // Hay un formato que **no** tiene framebuffer: el aparato solo acepta que le
+    // pidan copias de bloques, y esas las hace el firmware, que despues de
+    // `ExitBootServices` ya no esta. Decir que no hay pantalla es mejor que
+    // entregar una direccion que no se puede tocar (P4).
+    if info.pixel_format != PIXEL_RGB && info.pixel_format != PIXEL_BGR {
+        return None;
+    }
+    if mode.framebuffer_base == 0 || info.width == 0 || info.height == 0 {
+        return None;
+    }
+
+    Some(Screen {
+        base: mode.framebuffer_base,
+        width: info.width,
+        height: info.height,
+        stride: info.stride,
+        bytes: mode.framebuffer_size as u64,
+    })
 }

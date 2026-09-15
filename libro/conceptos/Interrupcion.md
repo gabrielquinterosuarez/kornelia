@@ -81,7 +81,7 @@ Y para ver cuánto tiempo se va en handlers: `mpstat -P ALL 1` (columna `%irq`),
 | **Decisiones** | D9 (los handlers los escribe el agente), D17 (el cordón nunca se abandona), D29 (en el núcleo del protocolo manda el kernel) |
 | **Principios** | P3 (el agente es un compilador, no un participante), P4, P6 |
 | **Los verbos** | `irq.install`, `irq.install_raw` |
-| **Dónde vive** | `kernel-core/src/protocol.rs:2079#fn irq_install`, `kernel-x86_64/src/irq.rs:624#const AGENT_VECTOR: u8 = 0x31`, `kernel-aarch64/src/irq.rs:414#const AGENT_PRIORITY: u8 = 0xA0` |
+| **Dónde vive** | `kernel-core/src/protocol.rs:2115#fn irq_install`, `kernel-x86_64/src/irq.rs:624#const AGENT_VECTOR: u8 = 0x31`, `kernel-aarch64/src/irq.rs:414#const AGENT_PRIORITY: u8 = 0xA0` |
 
 **El kernel no le pasa el evento al agente.** No podría: una interrupción se atiende en microsegundos y el agente, que está del otro lado de un cable, contesta en segundos. Así que el agente **escribe el código que corre sin él** y el kernel solo lo pone en la tabla (P3). Cuántos caben es un número chico y explícito: `kernel-core/src/handlers.rs:38#pub const MAX: usize = 8`.
 
@@ -91,7 +91,7 @@ Tres decisiones que se ven acá:
 2. **Las del agente van abajo del cable, a propósito.** En x86_64 el serie está en el vector `0x40` y las del agente arrancan en `0x31`, que es un grupo más abajo; en aarch64 el serie tiene prioridad `0x00` (la más alta del GIC) y las del agente `0xA0`. Un aparato del agente que se vuelva loco **no puede tapar el cordón** (D17, P6).
 3. **El cable serie no se entrega.** Pedir la interrupción del [[UART]] devuelve `is-kernel-interrupt`: sería quedarse sin cordón umbilical.
 
-**Y el cable tiene timbre.** Antes el núcleo que atiende el protocolo giraba preguntándole al UART si había llegado un byte; ahora el UART levanta la mano y el núcleo **duerme** entre pedidos: `kernel-x86_64/src/irq.rs:532#pub fn sleep()` y `kernel-aarch64/src/irq.rs:220#pub fn sleep()`. El kernel lo anuncia al arrancar (`kernel-core/src/lib.rs:438#the core sleeps between requests`).
+**Y el cable tiene timbre.** Antes el núcleo que atiende el protocolo giraba preguntándole al UART si había llegado un byte; ahora el UART levanta la mano y el núcleo **duerme** entre pedidos: `kernel-x86_64/src/irq.rs:532#pub fn sleep()` y `kernel-aarch64/src/irq.rs:220#pub fn sleep()`. El kernel lo anuncia al arrancar (`kernel-core/src/lib.rs:451#the core sleeps between requests`).
 
 > [!important] El orden de dos instrucciones es todo el mecanismo
 > En x86 se hace `sti; hlt` **pegados y en ese orden**. El bucle corre con el timbre apagado, así que si un byte llegó justo antes, su interrupción quedó pendiente y el `hlt` vuelve enseguida. Al revés —dormir y después habilitar— se pierde ese despertador y la máquina se duerme para siempre con el pedido esperando.

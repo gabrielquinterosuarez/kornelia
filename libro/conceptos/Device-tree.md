@@ -107,7 +107,7 @@ La elección entre los dos dialectos está escrita **en un solo lugar** (`kernel
 
 ### Y se comprueba, que es lo que lo hace distinto de una intención
 
-El portón bootea aarch64 **una segunda vez, sin ACPI** (`scripts/run-aarch64.sh:42#acpi=off`): entonces el firmware pasa un device tree en su lugar. Y no se conforma con que arranque — le exige llegar hasta el IOMMU contra un [[Aparato|aparato]] que hace [[DMA]] de verdad (`scripts/check.sh:452#--no-acpi`).
+El portón bootea aarch64 **una segunda vez, sin ACPI** (`scripts/run-aarch64.sh:42#acpi=off`): entonces el firmware pasa un device tree en su lugar. Y no se conforma con que arranque — le exige llegar hasta el IOMMU contra un [[Aparato|aparato]] que hace [[DMA]] de verdad (`scripts/check.sh:465#--no-acpi`).
 
 Está elegido así a propósito: **el DMA es la prueba que usa todo lo que sale de la descripción junto** —los núcleos, el controlador de interrupciones, dónde se configura PCIe y dónde está el IOMMU—, y encima contra hardware. Si algo saliera mal del árbol, eso no cierra. Es D23 aplicado: una regla que no se comprueba es una intención.
 

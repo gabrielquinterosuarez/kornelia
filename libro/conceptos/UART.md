@@ -99,7 +99,7 @@ earlyprintk=serial,ttyS0,115200   # la version vieja de x86, con la direccion ho
 
 Acá está la aplicación más limpia de P4 que tiene el proyecto. Hay una dirección escrita a mano porque **hay que poder hablar antes de leer ninguna tabla**: si el arranque se cuelga leyendo [[ACPI]], lo único que queda para contarlo es el cable.
 
-Pero es el punto de partida, no la respuesta. Apenas la tabla SPCR (`kernel-core/src/acpi.rs:579#unsafe fn read_spcr`) dice dónde tiene la máquina su consola, el kernel **se muda** ahí: `kernel-aarch64/src/uart.rs:49#pub unsafe fn move_to`. La mudanza va temprano y con la menor cantidad posible de cosas ya hechas (`kernel-core/src/lib.rs:74#move_to_reported_serial(p, &machine, &hw);`), porque si la dirección nueva fuera mala el cordón se pierde ahí mismo.
+Pero es el punto de partida, no la respuesta. Apenas la tabla SPCR (`kernel-core/src/acpi.rs:579#unsafe fn read_spcr`) dice dónde tiene la máquina su consola, el kernel **se muda** ahí: `kernel-aarch64/src/uart.rs:49#pub unsafe fn move_to`. La mudanza va temprano y con la menor cantidad posible de cosas ya hechas (`kernel-core/src/lib.rs:87#move_to_reported_serial(p, &machine, &hw);`), porque si la dirección nueva fuera mala el cordón se pierde ahí mismo.
 
 Y **si se mudó o no se publica**: `kernel-aarch64/src/uart.rs:35#pub fn from_machine`. Es la diferencia entre "anda" y "anda **porque la máquina dijo dónde**", que es lo único que hace que ande en otra placa.
 
@@ -110,14 +110,14 @@ El UART es lentísimo. La decisión no es "el protocolo va por serie": es que el
 ### Qué sale por ahí
 
 - **ASCII puro** (regla 4 del proyecto). El kernel manda **bytes**, no texto: los acentos salen rotos porque nadie del otro lado acordó una codificación.
-- **Y en inglés**: `kernel-core/src/lib.rs:463#== agent-centric kernel ==`. Lo que el kernel *dice* es parte del protocolo, y el operador que este proyecto supone es un agente (D1).
-- **Hasta la marca.** `kernel-core/src/lib.rs:111#u.line(protocol::MARKER);` es lo último legible: de ahí en adelante lo que sale es CBOR (D6), y cualquier texto posterior es basura para el cliente.
+- **Y en inglés**: `kernel-core/src/lib.rs:476#== agent-centric kernel ==`. Lo que el kernel *dice* es parte del protocolo, y el operador que este proyecto supone es un agente (D1).
+- **Hasta la marca.** `kernel-core/src/lib.rs:124#u.line(protocol::MARKER);` es lo último legible: de ahí en adelante lo que sale es CBOR (D6), y cualquier texto posterior es basura para el cliente.
 
 ### El timbre y el buzón
 
 El núcleo que atiende **duerme** entre pedidos: el UART tiene el bit de "avisá cuando llegue" prendido (`kernel-aarch64/src/uart.rs:85#pub fn enable_rx_interrupt`) y el handler deja los bytes en un anillo, del que el bucle los saca al despertar. Ver [[38-Dormir-en-vez-de-girar]].
 
-Cuántos bytes aguanta ese anillo y **cuántos se perdieron** son estado de la máquina, así que se publican: `describe {what:["cable"]}`, en `kernel-core/src/protocol.rs:1998#fn write_cable`. El portón exige que el contador sea cero.
+Cuántos bytes aguanta ese anillo y **cuántos se perdieron** son estado de la máquina, así que se publican: `describe {what:["cable"]}`, en `kernel-core/src/protocol.rs:2034#fn write_cable`. El portón exige que el contador sea cero.
 
 ## Cómo se ve roto
 

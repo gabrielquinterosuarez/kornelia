@@ -29,6 +29,7 @@ Lo verifica `./scripts/check-boundary.sh`, dentro del portón.
 | Interrupciones | `irq.rs` de cada arquitectura + `kernel-core/src/handlers.rs`. |
 | IOMMU | `kernel-x86_64/src/iommu.rs` (VT-d) y `kernel-aarch64/src/smmu.rs` (SMMUv3). Hacen lo mismo y no se parecen en nada: empezar por el de x86, que es el más simple. |
 | El segundo canal | `kernel-core/src/channel.rs`. |
+| La pantalla (D5) | `kernel-core/src/screen.rs` (dibujar) + `boot-uefi/src/lib.rs::find_screen` (dónde está) + `kernel-core/src/font.rs`, que **se genera** con `./scripts/make-font.py`. |
 | El reloj | `clock` en el `main.rs` de cada arquitectura. En x86 incluye la calibración contra el contador de ACPI. |
 | Lo que va adentro del blob | `blob/src/main.rs` (qué hace) + `blob/src/nvme.rs` (el driver de disco) + `blob/src/kernel.rs` (cómo le pide verbos) + `blob/src/gate.rs` (las dos puertas) + `blob/blob.ld` (cómo se arma). Se compila con `./scripts/build-blob.sh <arch>`. |
 | El blob de arranque | `boot-uefi/src/lib.rs::load_blob` (traerlo del disco) + `kernel-core/src/lib.rs::run_blob` (ventana de rescate y ejecución) + `protocol.rs::open_blob_gate` (con qué le pide cosas al kernel). |
@@ -67,6 +68,7 @@ SKIP_QEMU=1 ./scripts/check.sh       # sin bootear, para iterar rápido
 ./scripts/client.py --arch aarch64 --no-acpi --dma   # el otro dialecto
 ./scripts/client.py --console                        # hablarle a mano
 ./scripts/client.py --net --udp --transport          # la placa, y D5 entero
+./scripts/client.py --screen                         # que dibuje, leido de una foto
 NETPORT=15555 ./scripts/run-x86_64.sh                # fijar el puerto del host
 ./scripts/client.py --arch x86_64 --write-blob /tmp/blob.bin
 BLOB=/tmp/blob.bin ./scripts/run-x86_64.sh           # con blob (D18)

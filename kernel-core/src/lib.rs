@@ -18,6 +18,7 @@ pub mod cores;
 pub mod dma;
 pub mod fault;
 pub mod fdt;
+pub mod font;
 pub mod handlers;
 pub mod handles;
 pub mod machine;
@@ -25,6 +26,7 @@ pub mod memory;
 pub mod paging;
 pub mod platform;
 pub mod protocol;
+pub mod screen;
 pub mod serial;
 pub mod stack;
 pub mod tables;
@@ -43,6 +45,17 @@ pub fn main<P: Platform>(p: &mut P) -> ! {
     // Se pide antes de tomar el cordón: `Umbilical` toma prestado `p` en
     // exclusiva.
     let machine = p.machine();
+
+    // La pantalla, **antes que nada** (D5). Es el segundo cable del cordón, y
+    // tiene que estar puesto antes de lo primero que pueda colgarse: en una
+    // máquina sin puerto serie, lo que no salga por acá no salió por ningún
+    // lado. Instalar las tablas de páginas es justo lo más probable que cuelgue
+    // en hierro de verdad, así que adoptarla después dejaría ciego ese tramo.
+    //
+    // Se puede tocar ya: hasta que se instalen las nuestras siguen puestas las
+    // del firmware, que mapea todo lo que informó — y las nuestras la cubren
+    // igual, porque el identity map alcanza todo el espacio físico (D12).
+    adopt_screen(p, &machine);
 
     greet(p, &machine);
 
@@ -711,4 +724,48 @@ fn report_bell<P: Platform>(p: &mut P, r: Result<channel::Doorbell, &'static str
             u.line("  a request arriving only there waits for the cable.");
         }
     }
+}
+
+
+/// Toma la pantalla, si la hay, y cuenta que encontro.
+///
+/// El mapa de memoria del firmware puede no cubrir el framebuffer —es MMIO, y no
+/// todos los firmwares lo listan—, asi que si no esta en el mapa se lo mapea
+/// como dispositivo antes de tocarlo. Es lo mismo que hace `mem.claim` con un
+/// BAR que cae fuera del mapa: el kernel nunca es la razon por la que no se
+/// puede usar un aparato (P1).
+fn adopt_screen<P: Platform>(p: &mut P, m: &Machine) {
+    use core::fmt::Write;
+
+    let Some(where_it_is) = m.screen else {
+        // Decirlo importa: en una maquina sin puerto serie, no tener pantalla
+        // quiere decir que este mensaje es lo ultimo que se ve de ella.
+        let mut u = Umbilical::new(p);
+        u.line("screen: none reported by the firmware");
+        return;
+    };
+
+    if m.region_containing(where_it_is.base).is_none() {
+        // SAFETY: es el rango que informo el firmware, y se mapea como
+        // dispositivo porque eso es lo que es.
+        if unsafe { p.map_device(where_it_is.base, where_it_is.bytes) }.is_err() {
+            let mut u = Umbilical::new(p);
+            u.line("screen: reported but could not be mapped");
+            return;
+        }
+    }
+
+    // SAFETY: el framebuffer ya esta mapeado, por el identity map o por la
+    // linea de arriba.
+    unsafe { screen::adopt(where_it_is) };
+
+    let mut u = Umbilical::new(p);
+    let _ = write!(
+        u,
+        "screen: {}x{} at {:#x}, {} columns\r\n",
+        where_it_is.width,
+        where_it_is.height,
+        where_it_is.base,
+        where_it_is.width / font::WIDTH as u32
+    );
 }
