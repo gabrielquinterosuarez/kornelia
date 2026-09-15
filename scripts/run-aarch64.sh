@@ -84,6 +84,18 @@ fi
 #
 # No es el monitor de texto sobre el serie (D26): es un canal aparte, asi que el
 # cordon umbilical sigue crudo y nadie se come el 0x01.
+# SHOW=1 abre una ventana de verdad en vez de correr a ciegas. Sirve para ver
+# con los ojos lo que el kernel escribe en la pantalla (D5) — que es lo que se
+# va a ver en una PC de verdad sin puerto serie.
+#
+# Por omision va apagada porque el porton corre sin nadie mirando, y una ventana
+# que se abre sola en cada prueba es una molestia.
+if [ "${SHOW:-0}" = "1" ]; then
+    DISPLAY_ARGS=(-display gtk)
+else
+    DISPLAY_ARGS=(-display none)
+fi
+
 QMP_ARGS=()
 if [ -n "${QMP:-}" ]; then
     rm -f "$QMP"
@@ -130,4 +142,4 @@ exec qemu-system-aarch64 \
     -drive if=pflash,format=raw,unit=0,readonly=on,file="$AAVMF_CODE" \
     -drive if=pflash,format=raw,unit=1,file=target/AAVMF_VARS-aarch64.fd \
     -drive format=raw,file=fat:rw:target/esp-aarch64 \
-    "${SERIAL[@]}" "${QMP_ARGS[@]}" -display none -no-reboot "$@"
+    "${SERIAL[@]}" "${QMP_ARGS[@]}" "${DISPLAY_ARGS[@]}" -no-reboot "$@"
