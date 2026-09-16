@@ -13,6 +13,46 @@ tomadas, cada una con su justificación. Lo ya descartado, con sus motivos, en
 principios, las decisiones cerradas, las reglas de código y lo que sigue. No hace
 falta volver a explicar nada.
 
+## Para estudiantes de Computación II
+
+Si llegaste acá por la convocatoria, empezá por estas tres cosas.
+
+**Qué es.** Un sistema operativo mínimo, escrito desde cero, que se pregunta algo
+que todavía nadie probó en serio: los sistemas que usamos —Linux, Windows,
+macOS— fueron diseñados suponiendo que del otro lado hay una persona. Procesos,
+archivos, usuarios, permisos: todas esas ideas existen porque un humano necesita
+organizarse así. ¿Y si el que opera la máquina es un agente de IA, que puede
+escribir código y decir de antemano qué va a hacer? ¿Cuánto de todo eso sigue
+haciendo falta?
+
+Este kernel es el experimento que intenta responderlo. Tiene **once operaciones**
+y nada más: ni procesos, ni sistema de archivos, ni drivers. Los drivers los
+escribe el agente, usando solo esas once. Ya andan uno de disco y uno de red,
+escritos así.
+
+**Qué vas a aprender.** Lo que en la materia vemos como concepto, acá se toca:
+qué hace realmente el hardware cuando arranca, cómo se habla con un dispositivo
+sin que haya un sistema operativo en el medio, por qué existe la memoria virtual,
+qué pasa de verdad cuando un programa falla. Vas a leer y escribir código que
+corre sin nada debajo.
+
+**Qué hace falta saber.** Computación II cursada o en curso. No hace falta saber
+Rust, ni haber tocado un kernel antes: eso se aprende acá. Lo que sí hace falta
+es aguante para leer documentación técnica y ganas de entender cómo funciona algo
+por dentro.
+
+**Por dónde entrar.** Cloná el repo, seguí *Requisitos* y corré
+`./scripts/run-x86_64.sh`. Vas a ver un sistema operativo arrancando desde cero
+en tu propia máquina. Después probá `./scripts/client.py --exec`: ahí se ve la
+tesis del proyecto en ocho bytes de código máquina.
+
+El diseño completo, con las treinta decisiones y por qué se tomó cada una, está
+en [`docs/DISENO.md`](docs/DISENO.md). Lo que se descartó, y por qué, en
+[`docs/DESCARTADO.md`](docs/DESCARTADO.md) — ese archivo es probablemente el más
+útil para entender cómo se piensa un sistema.
+
+---
+
 ## Estado
 
 Arranca por UEFI en **x86_64 y aarch64**, le toma la máquina al firmware
